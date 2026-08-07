@@ -43,9 +43,20 @@ function readJson<T>(path: string, what: string): T {
   }
 }
 
-function vitestArgs(base: string | null, outDir: string): string[] {
+/**
+ * 外部サービス（DB・ネットワーク・実ファイルシステム）を要するテストの命名規約。
+ *
+ * `turn` はこれを除外する。開発者の手元に DB が無いだけで毎ターン赤になると、
+ * ゲートが環境によって答えを変えることになる（flaky）。`pr` では走らせる。
+ *
+ * 設定項目にはしない。リポジトリごとに表現を変えられるようにすると、
+ * 「速いループが外部サービスを要さない」という性質が repo ごとに違う意味を持つ。
+ */
+export const INTEGRATION_TEST_GLOB = "**/*.integration.test.*";
+
+export function vitestArgs(base: string | null, outDir: string): string[] {
   const args = ["vitest", "run", "--coverage", "--coverage.provider=v8", "--coverage.reporter=json"];
-  if (base !== null) args.push(`--changed=${base}`);
+  if (base !== null) args.push(`--changed=${base}`, `--exclude=${INTEGRATION_TEST_GLOB}`);
   args.push(`--coverage.reportsDirectory=${join(outDir, "coverage")}`);
   args.push("--reporter=json", `--outputFile=${join(outDir, "result.json")}`);
   return args;
