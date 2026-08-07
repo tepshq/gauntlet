@@ -122,6 +122,22 @@ describe("init", () => {
     ]);
   });
 
+  // init は測る範囲を直すたびに叩かれる。積み上げると毎ターン何度も gauntlet が走る。
+  it("二度実行してもフックが増えない", () => {
+    init(root);
+    const once = read(".claude/settings.json");
+    init(root);
+    expect(read(".claude/settings.json")).toBe(once);
+  });
+
+  it("二度実行してもフックは各 1 つ", () => {
+    init(root);
+    init(root);
+    init(root);
+    expect(settings().hooks.Stop).toHaveLength(1);
+    expect(settings().hooks.PreToolUse).toHaveLength(1);
+  });
+
   // 他の用途で使っている設定を壊すと、導入そのものが敬遠される。
   it("既にある settings.json を壊さない", () => {
     mkdirSync(join(root, ".claude"), { recursive: true });

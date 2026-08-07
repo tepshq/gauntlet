@@ -138,12 +138,19 @@ export function mergeGitignore(existing: string | null): string {
 
 type Settings = { hooks?: Record<string, unknown[]> };
 
-/** 既にあるフックを消さずに足す。他の用途で使っている設定を壊さない。 */
-function mergeSettings(existing: string | null): string {
+/**
+ * 既にあるフックを消さずに足す。他の用途で使っている設定を壊さない。
+ *
+ * **同じものは二度足さない。** `init` は測る範囲を直すたびに叩かれるので、
+ * 積み上げるとフックが多重に登録され、毎ターン gauntlet が何度も走ることになる。
+ */
+export function mergeSettings(existing: string | null): string {
   const settings: Settings = existing === null ? {} : (JSON.parse(existing) as Settings);
   const hooks = settings.hooks ?? {};
   for (const [event, entries] of Object.entries(HOOKS)) {
-    hooks[event] = [...(hooks[event] ?? []), ...entries];
+    const current = hooks[event] ?? [];
+    const known = new Set(current.map((entry) => JSON.stringify(entry)));
+    hooks[event] = [...current, ...entries.filter((entry) => !known.has(JSON.stringify(entry)))];
   }
   return `${JSON.stringify({ ...settings, hooks }, null, 2)}\n`;
 }

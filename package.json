@@ -1,6 +1,6 @@
 {
   "name": "@tepshq/gauntlet",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "エージェントが書いたコードを、人間がコードを読まずに機械的な制約で縛るチーム共用の品質ゲート",
   "type": "module",
   "engines": {
