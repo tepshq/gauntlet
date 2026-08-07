@@ -1,0 +1,11 @@
+{
+  "$schema": "./schema/gauntlet.config.schema.json",
+  "schemaVersion": 1,
+  "adapter": "typescript",
+  "runner": "vitest",
+  "defaultBranch": "main",
+  "source": {
+    "include": ["src/**/*.ts"],
+    "exclude": ["src/**/*.test.ts"]
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "@teps/gauntlet",
+  "version": "0.0.0",
+  "description": "エージェントが書いたコードを、人間がコードを読まずに機械的な制約で縛るチーム共用の品質ゲート",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "gauntlet": "./dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "schema"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "istanbul-lib-coverage": "^3.2.2",
+    "oxc-parser": "^0.143.0",
+    "typescript": "^7.0.2"
+  },
+  "devDependencies": {
+    "@types/istanbul-lib-coverage": "^2.0.6",
+    "@types/node": "^24.3.0",
+    "@vitest/coverage-v8": "^4.1.10",
+    "vitest": "^4.1.10"
+  }
+}
