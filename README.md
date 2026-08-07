@@ -1,30 +1,119 @@
 # gauntlet
 
-エージェントが書いたコードを、人間がコードを読まずに機械的な制約で縛る、チーム共用の品質ゲート。
+エージェントが書いたコードを、**人間がコードを読まずに機械的な制約で縛る**ための品質ゲート。
 
-`turn` は Claude Code の `Stop` フックから毎ターン走り、exit 2 でエージェントを差し戻す。
-「done と言う前に緑」が機械的に強制される。`pr` は CI から走り、PR をブロックする。
+Robert C. Martin が 2026 年 7 月に「自分はもうエージェントのコードを読まない。代わりにテスト・
+カバレッジ・複雑度・mutation testing で囲む」と述べた方針を、社内の複数リポジトリに適用できる形に
+したものです。
 
-| tier | 起動点 | 中身 | 実測（hue） |
-| --- | --- | --- | --- |
-| `turn` | `Stop` フック | 型チェック + 関連テスト + CRAP | 5.5 秒 |
-| `pr` | CI | 全テスト + ラチェット + lint + mutation | 142 秒 |
+人間がコードを読む速度がボトルネックになるなら、読まずに済ませる。ただし「読まない」を成立させる
+だけの機械的な保証を敷く、というのが考え方です。
 
-## 何を測るか
+## 入れると何が変わるか
 
-- **CRAP** — `CC² × (1 − coverage)³ + CC`。閾値 **8**。触った関数に絶対、リポジトリ全体は baseline ラチェット。
-  網羅率 0% なら CC 2 まで、50% で 4、80% で 7、100% で 8。テストすれば複雑さを許す。
-- **mutation** — コードを 1 箇所ずつ壊してテストが気づくか見る。**テストを増やすだけでは通せない**唯一のゲート。
-- **lint** — ルールは各リポジトリが持つ。gauntlet は件数を増やさせないだけ。
+**2 か所で止まるようになります。**
 
-**既存リポジトリを導入初日に赤で埋めない。** 導入時点の違反数は `gauntlet.baseline.json` に記録され、
-以後それを増やせない（減れば自動で締まる）。baseline は `PreToolUse` フックでエージェントの編集から守られる。
+| | いつ | 何が起きる |
+| --- | --- | --- |
+| `turn` | Claude Code が応答を終えるたび | 赤ならエージェントが**終了できず**、そのまま直しにいく |
+| `pr` | CI | 赤なら**マージできない** |
+
+`turn` が効くのが一番の違いです。人間が「テスト通してね」と言わなくても、エージェントは
+緑になるまで終われません。数秒で終わるように作ってあります（実測: 5.5〜20 秒）。
+
+## 何を見るか
+
+### CRAP — 複雑さと網羅率をひとつの数にする
+
+`CRAP = 複雑度² × (1 − 網羅率)³ + 複雑度`。**閾値は 8。** 意味はこの表が分かりやすいです。
+
+| その関数の網羅率 | 許される複雑度 |
+| --- | --- |
+| 100% | 8 |
+| 80% | 7 |
+| 50% | 4 |
+| 0% | **2** |
+
+**テストすれば複雑さを許す**という自己調整が組み込まれています。単純な関数はテストが無くても通り、
+複雑な関数はテストが無いと通りません。ノブがひとつで済むので、全社で同じ数字を使えます。
+
+### mutation testing — テストが本当に効いているか
+
+コードを 1 か所ずつ機械的に壊し、テストが気づくか見ます。気づかなければ「その壊し方は誰も
+見ていない」ということです。
+
+**カバレッジ 100% でも起きます** — コードは実行されているが結果を誰も確かめていない、という状態を
+捕まえます。gauntlet の中で唯一、**テストを増やすだけでは通せない**ゲートです。
+
+### lint と型チェック
+
+ルールは各リポジトリが持ちます。gauntlet は件数を増やさせないだけで、どのルールを有効にするかには
+口を出しません。
+
+## 既存のリポジトリが赤で埋まらないか
+
+**埋まりません。** 導入時点の違反数を `gauntlet.baseline.json` に記録し、**それを増やさないこと
+だけ**を要求します。減れば自動で締まります。
+
+- **触った関数** — 絶対的に CRAP ≤ 8 を要求（これから書くコードには厳しい）
+- **触っていない箇所** — 現状維持でよい
+
+「初日から全部直せ」にはなりません。触ったところから良くなっていきます。
+
+`gauntlet.baseline.json` はエージェントが編集できないよう `PreToolUse` フックで守られます。
+赤を消す最短経路が「基準を緩める」になってしまうためです。人間は編集できます。
+
+## 導入
+
+### 1. パッケージのアクセス許可（リポジトリごとに一度だけ）
+
+gauntlet は private パッケージなので、消費側リポジトリの `secrets.GITHUB_TOKEN` は既定では読めません。
+
+[パッケージ設定](https://github.com/orgs/tepshq/packages/npm/gauntlet/settings) →
+**Manage Actions access** → 導入先リポジトリを **Read** で追加。
+
+飛ばすと CI の `npm ci` が `403 permission_denied: read_package` で落ちます。
+
+> `Internal` 可視性ならこの手順は要りませんが、Team プランでは使えません。
+
+### 2. 入れる
+
+`.npmrc` に scope の指定が要ります（無いと npmjs.com を見て 404 になります）。
+
+```
+@tepshq:registry=https://npm.pkg.github.com
+```
+
+```bash
+npm i -D @tepshq/gauntlet @vitest/coverage-v8 @stryker-mutator/core @stryker-mutator/vitest-runner
+```
+
+### 3. 測る範囲を決める
+
+**Claude Code で `.claude/skills/gauntlet` を使ってください。** 推測で入れると測る範囲が
+狭いまま緑になり、それが一番気づけない失敗になります。
+
+エージェントがリポジトリを読み、理由つきで範囲を提案し、合意してから `init` を叩く流れです。
+`tsconfig.json` の `include` は当てになりません（生成物・設定ファイル・e2e が混ざります）。
+
+```bash
+npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/**/*.test.ts'
+```
+
+`init` が置くのは薄いファイルだけです。ロジックは全てパッケージ側にあるので、更新は npm の
+バージョンを上げるだけで済みます。何度叩いても結果は同じです。
+
+- `.claude/settings.json` — `Stop` と `PreToolUse` のフック（既存の設定は壊しません）
+- `gauntlet.config.json` — このリポジトリの事実。閾値は入りません
+- `.github/workflows/gauntlet.yml`
+- `.claude/skills/gauntlet/SKILL.md`
+- `.gitignore` — 足りない行だけ追記
 
 ## 規約: 外部サービスを要するテストは `integration` project に置く
 
-DB・ネットワーク・実ファイルシステムに触れるテストは、vitest の `projects` で
-`integration` という名前の project にまとめる。gauntlet は **`turn` でこれを除外し、
-`pr` でのみ走らせる**（`--project=!integration`）。設定項目は無い。
+DB・ネットワーク・実ファイルシステムに触れるテストは、vitest の `projects` で `integration` と
+いう名前の project にまとめてください。gauntlet は **`turn` でこれを除外し、`pr` でのみ
+走らせます**。設定項目はありません。
 
 ```ts
 projects: [
@@ -34,73 +123,48 @@ projects: [
 ]
 ```
 
-`projects` を使っていないリポジトリでは `--project=!integration` は無害なので、
-統合テストが増えるまで何もしなくてよい。
+**手元に DB が無いだけで毎ターン赤になると、ゲートが環境によって答えを変えます。** それが数回
+起きると、緑の意味が信じられなくなって誰も見なくなります。mutation も同じで、変異ごとに DB
+テストを走らせると実行不能になります。
 
-手元に DB が無いだけで毎ターン赤になると、ゲートが環境によって答えを変える。
-mutation も同じで、変異ごとに DB テストを走らせると実行不能になる。
+`projects` を使っていないリポジトリでは何もしなくて構いません（統合テストが増えるまで無害です）。
 
-JS/TS にはこれといった標準が無い（Java の `*IT.java`、Go のビルドタグ、pytest のマーカーに
-相当するものが無い）。ファイル名の接尾辞で除外する案は**動かない** — vitest の `--exclude` は
-`projects` に伝わらず、project を使うリポジトリで黙って無効になる。project 名なら
-使っていないリポジトリでも無害なので、1 つの仕組みで両方に効く。
-
-**誰も強制しない。** project に入れ忘れた DB テストは `turn` に入り、
-DB を持たない人の環境でだけ落ちる。そのときは project を直す。
-
-## 導入
-
-### 1. パッケージのアクセス許可（リポジトリごとに一度だけ）
-
-gauntlet は private パッケージなので、消費側リポジトリの `secrets.GITHUB_TOKEN` は既定では読めない。
-
-[パッケージ設定](https://github.com/orgs/tepshq/packages/npm/gauntlet/settings) →
-**Manage Actions access** → 導入先リポジトリを **Read** で追加。
-
-これを飛ばすと CI の `npm ci` が `403 permission_denied: read_package` で落ちる。
-
-> `Internal` 可視性ならこの手順は要らないが、Team プランでは使えない。
-
-### 2. 入れる
-
-```bash
-npm i -D @tepshq/gauntlet @stryker-mutator/core @stryker-mutator/vitest-runner
-```
-
-`.npmrc` に `@tepshq:registry=https://npm.pkg.github.com` が要る。
-
-### 3. 測る範囲を決める
-
-Claude Code で `.claude/skills/gauntlet` を使う。**推測で入れない** — エージェントがリポジトリを読み、
-理由つきで範囲を提案し、合意してから `init` を叩く。`tsconfig.json` の `include` は当てにならない
-（生成物・設定ファイル・e2e が混ざる）。
-
-```bash
-npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/**/*.test.ts'
-```
-
-`init` は薄いファイルだけ置く。ロジックは全てパッケージ側にあるので、更新は npm のバージョンを上げるだけ。
-
-- `.claude/settings.json` — `Stop` と `PreToolUse` のフック（既存の設定は壊さない）
-- `gauntlet.config.json` — このリポジトリの事実。閾値は入らない
-- `.github/workflows/gauntlet.yml`
-- `.claude/skills/gauntlet/SKILL.md`
-- `.gitignore` — 足りない行だけ追記
-
-何度叩いても結果は同じ（冪等）。
+> JS/TS にはこれといった標準がありません（Java の `*IT.java`、Go のビルドタグ、pytest の
+> マーカーに相当するものが無い）。ファイル名だけで除外する案は**動きません** — vitest の
+> `--exclude` は `projects` に伝わらず、project を使うリポジトリで黙って無効になります。
+>
+> **誰も強制しません。** project に入れ忘れた DB テストは `turn` に入り、DB を持たない人の
+> 環境でだけ落ちます。そのときは project を直してください。
 
 ## 使う
 
 ```bash
-npx gauntlet run --tier=turn   # 通れば exit 0、違反または gauntlet 自身が走れなければ exit 2
+npx gauntlet run --tier=turn
 npx gauntlet run --tier=pr
 ```
 
+通れば exit 0、違反または gauntlet 自身が走れなければ exit 2 です。**「走れなかった」を緑に
+しません** — 走らないゲートが緑に見えると、緑の意味が実行ごとに変わってしまうためです。
+
 ## 要件
 
-- Node >= 22 / vitest / 単一パッケージ（workspaces 未対応）
-- TypeScript のバージョンに下限は無い。gauntlet がパースできれば良い
+- Node >= 22
+- vitest
+- 単一パッケージ（workspaces は未対応）
+- TypeScript のバージョンに下限はありません。gauntlet がパースできれば構いません
+
+## 実測
+
+| repo | テスト数 | `turn` | `pr` |
+| --- | --- | --- | --- |
+| gauntlet 自身 | 241 | 1.0 秒 | 12 秒 |
+| hue | 412 | 5.5 秒 | 24 秒（CI） |
+| teps | 3822 | 10.4 秒 | 199 秒（CI） |
+| duct | 3770 | 20 秒 | 未計測 |
+
+`turn` は差分に関係するテストだけを走らせるので、変更したファイルによって前後します。
 
 ## 設計
 
-判断とその理由は [DESIGN.md](DESIGN.md)、実装の経緯と実測は [PLAN.md](PLAN.md)。
+判断とその理由、**何を意図的に入れていないか**は [DESIGN.md](DESIGN.md)。
+実装の経緯と実測は [PLAN.md](PLAN.md)。
