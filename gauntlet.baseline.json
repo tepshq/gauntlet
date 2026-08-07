@@ -24,6 +24,6 @@
   },
   "lint": {
     "src/cli.ts": 1,
-    "src/run.ts": 1
+    "src/run.ts": 0
   }
 }

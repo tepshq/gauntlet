@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, countByFile, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapViolations, formatResult, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, countByFile, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, formatResult, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
 describe("parseTier", () => {
@@ -44,6 +44,7 @@ function check(name: CheckResult["name"], status: CheckResult["status"], message
     status,
     durationMs: 12,
     violations: message === undefined ? [] : [{ message }],
+    scope: "対象 1 件",
   };
 }
 
@@ -236,8 +237,15 @@ describe("mutationTargets", () => {
 describe("testsCheck", () => {
   const green = { passed: true, failed: 0, total: 5, failedFiles: [] };
 
-  it("通っていれば pass", () => {
-    expect(testsCheck(green, 100)).toEqual({ name: "tests", status: "pass", durationMs: 100, violations: [] });
+  // 0 件で緑なら、テストが 1 つも選ばれていないということ。件数を出さないと区別できない。
+  it("通っていれば pass、走った件数を添える", () => {
+    expect(testsCheck(green, 100)).toEqual({
+      name: "tests",
+      status: "pass",
+      durationMs: 100,
+      violations: [],
+      scope: "5 件",
+    });
   });
 
   it("落ちていれば fail にして件数と失敗ファイルを出す", () => {
@@ -247,6 +255,7 @@ describe("testsCheck", () => {
       status: "fail",
       durationMs: 100,
       violations: [{ message: "2 / 5 件が失敗: a.test.ts, b.test.ts" }],
+      scope: "5 件",
     });
   });
 
@@ -261,13 +270,15 @@ describe("formatResult", () => {
   // 部分一致で見ると、改行やインデントが崩れても気づかない。
   it("落ちたチェックとその理由を出す", () => {
     expect(formatResult(result([check("crap", "fail", "CRAP 30.0  a.ts:10 f")]))).toBe(
-      ["gauntlet turn: fail (34ms)", "  ✗ crap (12ms)", "    CRAP 30.0  a.ts:10 f"].join("\n"),
+      ["gauntlet turn: fail (34ms)", "  ✗ crap (12ms)  対象 1 件", "    CRAP 30.0  a.ts:10 f"].join("\n"),
     );
   });
 
-  it("通ったチェックも出す", () => {
-    expect(formatResult(result([check("typecheck", "pass")]))).toBe(
-      ["gauntlet turn: fail (34ms)", "  ✓ typecheck (12ms)"].join("\n"),
+  // 「対象 0 件で緑」と「見て問題なし」は、違反が無いという結果だけでは区別できない。
+  it("通ったチェックも、何を見たかを添えて出す", () => {
+    const scoped: CheckResult = { ...check("mutation", "pass"), scope: "変異対象 0 ファイル" };
+    expect(formatResult(result([scoped]))).toBe(
+      ["gauntlet turn: fail (34ms)", "  ✓ mutation (12ms)  変異対象 0 ファイル"].join("\n"),
     );
   });
 
@@ -278,15 +289,35 @@ describe("formatResult", () => {
 
   // 違反が 1 件しか無いと、連結のしかたが間違っていても表に出ない。
   it("違反が複数あれば 1 行ずつ並べる", () => {
-    const many: CheckResult = {
-      name: "crap",
-      status: "fail",
-      durationMs: 12,
-      violations: [{ message: "一つ目" }, { message: "二つ目" }],
-    };
+    const many: CheckResult = { ...check("crap", "fail"), violations: [{ message: "一つ目" }, { message: "二つ目" }] };
     expect(formatResult(result([many]))).toBe(
-      ["gauntlet turn: fail (34ms)", "  ✗ crap (12ms)", "    一つ目", "    二つ目"].join("\n"),
+      ["gauntlet turn: fail (34ms)", "  ✗ crap (12ms)  対象 1 件", "    一つ目", "    二つ目"].join("\n"),
     );
+  });
+
+});
+
+describe("crapScope", () => {
+  function report(count: number): AdapterReport {
+    const functions: FunctionReport[] = Array.from({ length: count }, (_, index) => ({
+      location: { file: "a.ts", name: "f", scope: [], startLine: index + 1, startColumn: 0, endLine: index + 1, endColumn: 0 },
+      cc: 1,
+      coverage: 1,
+    }));
+    return { schemaVersion: REPORT_SCHEMA_VERSION, adapter: { name: "typescript", version: "0" }, root: "/repo", functions, excluded: [] };
+  }
+
+  it("触った数と測る対象の数を出す", () => {
+    expect(crapScope(report(5), new Map([["a.ts", new Set([2, 3])]]))).toBe("触った関数 2 / 測る対象 5");
+  });
+
+  // ここが 0 / 0 なら、緑は「良い」ではなく「何も測っていない」を意味する。
+  it("触っていなければ 0 と出す", () => {
+    expect(crapScope(report(5), new Map())).toBe("触った関数 0 / 測る対象 5");
+  });
+
+  it("測る対象が無ければ両方 0", () => {
+    expect(crapScope(report(0), new Map())).toBe("触った関数 0 / 測る対象 0");
   });
 });
 

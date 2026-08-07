@@ -10,7 +10,7 @@ import {
 } from "./tier.ts";
 
 function check(name: CheckResult["name"], status: CheckResult["status"]): CheckResult {
-  return { name, status, durationMs: 0, violations: [] };
+  return { name, status, durationMs: 0, violations: [], scope: "対象 1 件" };
 }
 
 describe("TIER_CHECKS", () => {

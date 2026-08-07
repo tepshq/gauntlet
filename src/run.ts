@@ -6,7 +6,7 @@ import { relative } from "node:path";
 import { ConfigError, type GauntletConfig, loadConfig } from "./config.ts";
 import { BASELINE_FILENAME, loadBaseline, ratchetByFile, saveBaseline } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
-import { gateRepository, gateTouched, measurementFaults } from "./gate.ts";
+import { gateRepository, gateTouched, measurementFaults, touchedFunctions } from "./gate.ts";
 import { changedLines, mergeBase } from "./git.ts";
 import {
   type CheckName,
@@ -40,14 +40,21 @@ export function parseTier(argv: readonly string[]): TierName {
   return value;
 }
 
-function timed(name: CheckName, body: () => Violation[]): CheckResult {
+/** どのチェックも「何を見たか」と「違反」を返す。任意にすると出し忘れが緑に見える。 */
+interface Examined {
+  scope: string;
+  violations: Violation[];
+}
+
+function timed(name: CheckName, body: () => Examined): CheckResult {
   const started = performance.now();
-  const violations = body();
+  const { scope, violations } = body();
   return {
     name,
     status: violations.length === 0 ? "pass" : "fail",
     durationMs: performance.now() - started,
     violations,
+    scope,
   };
 }
 
@@ -58,19 +65,15 @@ export function typecheckViolations(result: Captured): Violation[] {
   return result.stdout.trim() === "" ? [] : [{ message: result.combined.trim() }];
 }
 
-/** 型エラーの判定はプロジェクトの設定に従う。gauntlet はコマンドを走らせるだけ。 */
+/**
+ * 型エラーの判定はプロジェクトの設定に従う。gauntlet はコマンドを走らせるだけ。
+ *
+ * 走らせたコマンドをそのまま見せる。tsconfig が複数あるリポジトリでは
+ * 既定の `tsc --noEmit` が半分しか見ないことがあり、それは出力に出ないと気づけない。
+ */
 function typecheck(root: string, config: GauntletConfig): CheckResult {
   const command = config.commands?.typecheck ?? DEFAULT_TYPECHECK;
-  return timed("typecheck", () => typecheckViolations(captureShell(command, root)));
-}
-
-/**
- * まだ実装されていないチェックは fail にする。
- *
- * 未実装を pass にすると、チェックが増えるたびに緑の意味が変わる。
- */
-function pending(name: CheckName): CheckResult {
-  return { name, status: "fail", durationMs: 0, violations: [{ message: `${name} は未実装です` }] };
+  return timed("typecheck", () => ({ scope: command, violations: typecheckViolations(captureShell(command, root)) }));
 }
 
 export function runTier(root: string, tier: TierName): TierResult {
@@ -108,7 +111,13 @@ export function testsCheck(outcome: Pick<TestOutcome, "passed" | "failed" | "tot
   const violations = outcome.passed
     ? []
     : [{ message: `${outcome.failed} / ${outcome.total} 件が失敗: ${outcome.failedFiles.join(", ")}` }];
-  return { name: "tests", status: violations.length === 0 ? "pass" : "fail", durationMs, violations };
+  return {
+    name: "tests",
+    status: violations.length === 0 ? "pass" : "fail",
+    durationMs,
+    violations,
+    scope: `${outcome.total} 件`,
+  };
 }
 
 /**
@@ -218,13 +227,21 @@ export function crapCheckViolations(
   return faults.length === 0 ? crapViolations(tier, report, changed) : faults;
 }
 
+/** 何を見たかを一行で。緑のときに「対象 0 件で緑」と区別するために出す。 */
+export function crapScope(report: ReturnType<typeof analyze>, changed: Map<string, Set<number>>): string {
+  return `触った関数 ${touchedFunctions(report, changed).length} / 測る対象 ${report.functions.length}`;
+}
+
 function crapCheck(
   tier: TierName,
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
   outcome: Pick<TestOutcome, "passed" | "total">,
 ): CheckResult {
-  return timed("crap", () => crapCheckViolations(tier, report, changed, outcome));
+  return timed("crap", () => ({
+    violations: crapCheckViolations(tier, report, changed, outcome),
+    scope: crapScope(report, changed),
+  }));
 }
 
 /**
@@ -269,17 +286,19 @@ function gateByFile(
 /** 差分に関係するソースだけを変異させる。既存リポジトリ全体を一度に赤にしない。 */
 function mutationCheck(root: string, config: GauntletConfig, covered: Iterable<string>): CheckResult {
   const targets = mutationTargets(covered, listSourceFiles(root, config.source));
-  return timed("mutation", () =>
-    targets.length === 0
-      ? []
-      : gateByFile(
-          root,
-          "mutation",
-          targets,
-          countByFile(runMutation(root, targets)),
-          (entry) => `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`,
-        ),
-  );
+  return timed("mutation", () => ({
+    scope: `変異対象 ${targets.length} ファイル`,
+    violations:
+      targets.length === 0
+        ? []
+        : gateByFile(
+            root,
+            "mutation",
+            targets,
+            countByFile(runMutation(root, targets)),
+            (entry) => `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`,
+          ),
+  }));
 }
 
 /** ルールは対象リポジトリが持つ。gauntlet は件数を増やさせないだけ。 */
@@ -289,9 +308,12 @@ function lintCheck(root: string, config: GauntletConfig): CheckResult {
     // 対象は「エラーがあったファイル」ではなく「今回 lint したファイル」。
     // 直して 0 件になったファイルの記録も下げる必要がある。
     const scanned = [...new Set([...Object.keys(counts), ...Object.keys(loadBaseline(root)?.lint ?? {})])];
-    return gateByFile(root, "lint", scanned, counts, (entry) => {
-      return `lint エラーが ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`;
-    });
+    return {
+      scope: `lint 対象 ${scanned.length} ファイル`,
+      violations: gateByFile(root, "lint", scanned, counts, (entry) => {
+        return `lint エラーが ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`;
+      }),
+    };
   });
 }
 
@@ -299,7 +321,7 @@ export function formatResult(result: TierResult): string {
   const lines = result.checks.map((check) => {
     const mark = check.status === "pass" ? "✓" : "✗";
     const detail = check.violations.map((violation) => `\n    ${violation.message}`).join("");
-    return `  ${mark} ${check.name} (${check.durationMs.toFixed(0)}ms)${detail}`;
+    return `  ${mark} ${check.name} (${check.durationMs.toFixed(0)}ms)  ${check.scope}${detail}`;
   });
   const header = `gauntlet ${result.tier}: ${result.status} (${result.durationMs.toFixed(0)}ms)`;
   return [header, ...lines].join("\n");

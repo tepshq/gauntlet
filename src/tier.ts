@@ -40,6 +40,14 @@ export interface CheckResult {
   status: "pass" | "fail";
   durationMs: number;
   violations: Violation[];
+  /**
+   * このチェックが**何を見たか**。緑のときにこそ要る。
+   *
+   * 「対象 0 件で緑」と「見て問題なし」は、違反が無いという結果だけでは区別できない。
+   * 判定を足すのではなく、数を出して読み手が確かめられるようにする。
+   * 任意にしない。出し忘れたチェックが「何も見ていない」と区別できなくなる。
+   */
+  scope: string;
 }
 
 export interface TierResult {

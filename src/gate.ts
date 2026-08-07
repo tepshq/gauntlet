@@ -71,12 +71,14 @@ export interface GateResult {
   ratchet: RatchetOutcome | null;
 }
 
+/** 差分に含まれる関数。何件見たかを言うために、違反かどうかとは別に数えられるようにする。 */
+export function touchedFunctions(report: AdapterReport, changed: Map<string, Set<number>>): FunctionReport[] {
+  return report.functions.filter((fn) => isTouched(fn.location, changed));
+}
+
 /** 触った関数に絶対閾値を当てる。 */
 export function gateTouched(report: AdapterReport, changed: Map<string, Set<number>>): Violation[] {
-  return report.functions
-    .filter((fn) => isTouched(fn.location, changed))
-    .filter(violatesThreshold)
-    .map(toViolation);
+  return touchedFunctions(report, changed).filter(violatesThreshold).map(toViolation);
 }
 
 /**
