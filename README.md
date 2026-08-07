@@ -108,8 +108,18 @@ npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/*
 | `.claude/settings.json` | **フック 2 つ**（下記）。既存の設定は壊しません |
 | `.claude/skills/gauntlet/SKILL.md` | 測る範囲を決め直すときに使う skill |
 | `gauntlet.config.json` | このリポジトリの事実。閾値は入りません |
-| `.github/workflows/gauntlet.yml` | CI |
 | `.gitignore` | 足りない行だけ追記 |
+
+**CI の workflow は置きません。** CI が要るもの（DB などのサービス、マイグレーション、
+Node のバージョン、private パッケージの認証）は gauntlet からは見えないので、
+**既に動いている job に 1 行足す**のが基本形です。
+
+```yaml
+      - run: npx gauntlet run --tier=pr
+```
+
+その job には `fetch-depth: 0`（差分の起点に全履歴が要る）と **Node 22 以上**が必要です。
+足せる job が無い場合の雛形は skill が持っています。
 
 ### Claude Code の挙動が変わります
 

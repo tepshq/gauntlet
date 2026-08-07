@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -60,10 +60,16 @@ describe("init", () => {
     expect(init(root)).toEqual([
       "gauntlet.config.json",
       ".claude/settings.json",
-      ".github/workflows/gauntlet.yml",
       ".claude/skills/gauntlet/SKILL.md",
       ".gitignore",
     ]);
+  });
+
+  // CI が要るもの（サービスコンテナ・マイグレーション・Node のバージョン・認証）は
+  // gauntlet からは見えない。置くと既存 CI と重複し、手で足したものが再実行で消える。
+  it("CI workflow は置かない", () => {
+    init(root);
+    expect(existsSync(join(root, ".github/workflows/gauntlet.yml"))).toBe(false);
   });
 
   it("書いた config が自分のスキーマを通る", () => {
@@ -157,26 +163,25 @@ describe("init", () => {
     expect(read(".gitignore")).toBe("node_modules/\n\n# gauntlet の出力\ncoverage/\nreports/\n.stryker-tmp/\n");
   });
 
-  it("CI は pr tier を回す", () => {
-    init(root);
-    expect(read(".github/workflows/gauntlet.yml")).toContain("--tier=pr");
-  });
-
-  // merge-base を取るために全履歴が要る。
-  it("CI は履歴を全部取る", () => {
-    init(root);
-    expect(read(".github/workflows/gauntlet.yml")).toContain("fetch-depth: 0");
-  });
-
-  // private パッケージなので、認証が無いと npm ci の時点で必ず落ちる。
+  // CI の雛形は skill が持つ。ここが欠けると導入した CI が動かない。
   it.each([
+    ["pr tier を回す", "--tier=pr"],
+    ["履歴を全部取る（merge-base に要る）", "fetch-depth: 0"],
+    ["Node は 22 以上（node:fs の globSync）", "node-version: 22"],
     ["registry を指す", "registry-url: https://npm.pkg.github.com"],
     ["scope を指す", 'scope: "@tepshq"'],
     ["トークンを渡す", "NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}"],
     ["packages の読み取り権限を取る", "packages: read"],
-  ])("CI は GitHub Packages から入れられる（%s）", (_label, expected) => {
+  ])("skill の CI 雛形は %s", (_label, expected) => {
     init(root);
-    expect(read(".github/workflows/gauntlet.yml")).toContain(expected);
+    expect(read(".claude/skills/gauntlet/SKILL.md")).toContain(expected);
+  });
+
+  // 既に動いている job に足すのが基本。生成ファイルは重複を生む。
+  it("skill は既存の job に 1 行足す形を先に示す", () => {
+    init(root);
+    const skill = read(".claude/skills/gauntlet/SKILL.md");
+    expect(skill.indexOf("足せる job がある場合")).toBeLessThan(skill.indexOf("足せる job が無い場合"));
   });
 });
 

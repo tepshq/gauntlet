@@ -158,8 +158,19 @@ CRAP と違って単一の数にできないのは、mutation が差分に関係
 ## 4. 配布と設定
 
 - `npx @tepshq/gauntlet init` が**薄いファイルだけ**置く:
-  `.claude/settings.json` のフックエントリ / `gauntlet.config.json` / CI workflow / setup skill 1 枚。
+  `.claude/settings.json` のフックエントリ / `gauntlet.config.json` / setup skill 1 枚 / `.gitignore` の追記。
   ロジックはすべて npm パッケージ側にあり、生成物にロジックを持たせない。
+- **CI の workflow は置かない。** 以前は雛形を書いていたが、CI が要るものは gauntlet からは
+  見えない — サービスコンテナ、マイグレーション、Node のバージョン、private パッケージの認証。
+  duct では生成された workflow が既存 CI と重複した上に Postgres も migrate も無く、
+  手で足したそれが `init` の再実行で消える形になっていた。
+  **既に動いている job に `- run: npx gauntlet run --tier=pr` を 1 行足すのが基本形**で、
+  そうすればサービス・Node・認証・`fetch-depth: 0` は動いている job から来る。
+  無い場合の雛形は skill が持つ。CI について知っている場所を 1 つに保つ。
+- **Node 22 以上を要求する**（`node:fs` の `globSync`）。`engines` の宣言だけでは npm は
+  警告して通し、実行時にモジュール解決で落ちて
+  `does not provide an export named 'globSync'` しか出ない（duct の CI で踏んだ）。
+  入口（`cli.ts`）でバージョンを見てから中身を動的に読み込み、読めるメッセージで exit 2 にする。
 - **更新 = devDependency のバージョン上げ。** 再生成も差分適用も managed block も無い。
   バージョンは固定する（`npx` のバージョン無指定は CI で非決定的になり flaky）。
 - **測る範囲はエージェントとユーザーの対話で決める**（同梱の setup skill が駆動する）。

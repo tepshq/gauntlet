@@ -393,6 +393,14 @@ duct で見つけて直したもの:
 - **既存の `ci.yml` が壊れた。** `@tepshq/gauntlet` は private なので、gauntlet に依存した
   瞬間、認証を持たない他の workflow の `npm ci` が 401 で落ちる。`init` は自分の workflow に
   認証を書くだけで、他の workflow のことを何も言っていなかった。
+- **`init` が CI workflow を配るのをやめた（0.0.10）。** 生成された workflow は既存 CI と
+  重複した上、Postgres も migrate も seed も無く、手で足したそれは `init` の再実行で消える。
+  CI が要るものは gauntlet からは見えない。既に動いている job に 1 行足す形を基本にし、
+  雛形は skill が持つ。今日踏んだ CI 側の問題 5 件のうち 4 件がこの形なら起きなかった。
+- **Node 22 未満で読めないエラーになった（0.0.10）。** `node:fs` の `globSync` を使うので
+  22 以上が要る。`engines` は宣言してあるが npm は警告だけで通し、実行時にモジュール解決で
+  `does not provide an export named 'globSync'` だけを出して落ちる。入口を薄い層に分けて、
+  中身を読み込む前にバージョンを見る。Node 20 の docker で文言と exit 2 を実測して確認した。
 
 duct 側で残っているもの（gauntlet の問題ではない）:
 

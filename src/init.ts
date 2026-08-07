@@ -3,6 +3,12 @@
  *
  * 生成物が薄いほど「更新」は npm のバージョンを上げるだけで済む。
  * 再生成も差分適用も managed block も持たない。
+ *
+ * **CI の workflow は置かない。** 以前は雛形を書いていたが、CI が要るものは
+ * gauntlet からは見えない（サービスコンテナ、マイグレーション、Node のバージョン、認証）。
+ * duct では生成された workflow が既存 CI と重複した上、Postgres も migrate も無く、
+ * それを手で足したら `init` の再実行で消える形になっていた。
+ * 「1 行足す先」は skill が案内する。CI について知っている場所を 1 つに保つ。
  */
 
 import { globSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -43,32 +49,6 @@ const HOOKS = {
   ],
 };
 
-const WORKFLOW = `name: gauntlet
-on: pull_request
-
-jobs:
-  gauntlet:
-    runs-on: ubuntu-latest
-    # gauntlet は GitHub Packages の private パッケージなので読み取り権限が要る。
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          # merge-base を取るために全履歴が要る。浅いと差分の起点が決まらない。
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: package.json
-          registry-url: https://npm.pkg.github.com
-          scope: "@tepshq"
-      - run: npm ci
-        env:
-          NODE_AUTH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-      - run: npx gauntlet run --tier=pr
-`;
-
 const SKILL = `---
 name: gauntlet
 description: gauntlet をこのリポジトリに導入する、または測る範囲を直す。導入直後、gauntlet.config.json を作る・直すとき、turn が意図しない範囲を測っているときに使う。
@@ -105,14 +85,14 @@ DB・ネットワーク・実ファイルシステムに触れるテストを探
 除外し、\`pr\` でのみ走らせる。設定項目は無い。名前が合っていないファイルは**リネームしてもらう**。
 手元に DB が無いだけで毎ターン赤になると、ゲートが環境によって答えを変えることになる。
 
-### 既に CI があるか
+### CI はどうなっているか
 
-\`.github/workflows/\` を全部見る。2 つ確かめることがある。
+\`.github/workflows/\` を全部見る。\`pr\` をどこで回すかを 3 で決めるための材料を集める。
 
 **a. \`npm ci\` / \`npm install\` を叩く workflow を全て挙げる。** \`@tepshq/gauntlet\` は
 GitHub Packages の private パッケージなので、**gauntlet に依存した瞬間、認証を持たない
 workflow の \`npm ci\` が 401 で落ちる**（duct の \`ci.yml\` で実際に壊れた）。
-gauntlet が置く workflow には認証が書かれているが、既存のものには当然無い。全てに次を足す:
+gauntlet を回さない workflow も含めて、全てに認証が要る:
 
 \`\`\`yaml
     permissions:
@@ -131,12 +111,16 @@ gauntlet が置く workflow には認証が書かれているが、既存のも�
 加えて、パッケージ設定の **Manage Actions access** にそのリポジトリを Read で追加してもらう
 （これが無いと 401 ではなく 403 になる）。組織の設定なので、リポジトリの持ち主に依頼する。
 
-**b. lint / 型チェック / テストを回している workflow は gauntlet と重複する。**
-どう扱うかはリポジトリの持ち主が決めることなので、見つけたら必ず挙げる。
+**b. \`pr\` を足せる job があるか。** 次を全て満たす job を探す。lint / 型チェック /
+テストを回している job が普通は該当する。
+
+- \`actions/checkout\` に \`fetch-depth: 0\`（merge-base を取るのに全履歴が要る）
+- Node が **22 以上**（gauntlet が \`node:fs\` の \`globSync\` を使う）
+- 外部サービスを要するテストがあるなら、そのサービスと初期化（DB のマイグレーション・シード等）
 
 **完了条件** — TypeScript を含む最上位ディレクトリを 1 つ残らず挙げ、それぞれについて
 「製品コードか、テストか、生成物か、設定か」を言えること。型チェックのコマンド、
-外部サービスを要するテストの一覧、既存 workflow との重複を言えること。
+外部サービスを要するテストの一覧、そして \`pr\` を足せる job があるかどうかを言えること。
 
 ## 2. 提案してユーザーに確認する
 
@@ -165,7 +149,7 @@ npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glo
 
 ### 外部サービスを要するテストがあった場合
 
-\`init\` は**これを自動ではやらない**。1 で見つけていたら、ここで 3 つとも行う。
+\`init\` は**これを自動ではやらない**。1 で見つけていたら、ここで両方行う。
 
 **a. vitest に \`integration\` project を作る。** 既存の project があれば、そこから
 \`*.integration.test.*\` を除外して二重に走らないようにする。
@@ -181,14 +165,62 @@ projects: [
 **b. 命名が合っていないファイルをリネームする。** 外部サービスを要するのに
 \`*.integration.test.*\` でないものは \`turn\` に入ってしまう。
 
-**c. CI workflow に必要なサービスを足す。** \`pr\` では統合テストが走るので、
-DB などのサービスコンテナと、マイグレーション・シードの手順が要る。
-既存 workflow が同じものを持っていれば、そこから写す。
+## 4. CI で \`pr\` を回す
+
+**\`init\` は workflow を作らない。** CI が要るものは gauntlet からは見えない
+（サービスコンテナ、マイグレーション、Node のバージョン、認証）。既に動いている job には
+それが全部揃っているので、そこに 1 行足すのが一番確実で、重複も生まない。
+
+### 足せる job がある場合（1 の b で見つけたもの）
+
+その job の最後に足す。それだけ。
+
+\`\`\`yaml
+      - run: npx gauntlet run --tier=pr
+\`\`\`
+
+### 足せる job が無い場合
+
+作る。以後これは**リポジトリのファイル**で、gauntlet は二度と触らない。
+外部サービスを要するテストがあるなら \`services:\` と初期化の手順を足すのを忘れない。
+
+\`\`\`yaml
+name: gauntlet
+on: pull_request
+
+jobs:
+  gauntlet:
+    runs-on: ubuntu-latest
+    # @tepshq/gauntlet は GitHub Packages の private パッケージ。
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # merge-base を取るために全履歴が要る。浅いと差分の起点が決まらない。
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          # gauntlet は node:fs の globSync を使うので 22 以上。
+          node-version: 22
+          registry-url: https://npm.pkg.github.com
+          scope: "@tepshq"
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+      - run: npx gauntlet run --tier=pr
+\`\`\`
+
+**job の Node が 22 未満なら、そこには足せない。** 上の別 job を作るか、
+リポジトリの持ち主に CI の Node を上げてもらうか。どちらにするかは訊く
+（アプリが載る Node を変える話なので、gauntlet の都合で決めてよいことではない）。
 
 **完了条件** — \`npx gauntlet run --tier=turn\` が通り、測った件数が想定と一致していること。
 外部サービスが無い状態でも \`turn\` が通ること（\`--project=!integration\` が効いている証拠）。
+\`pr\` を回す job が 1 つあり、それが上の 3 条件（全履歴・Node 22 以上・必要なサービス）を満たすこと。
 
-## 4. ラチェットの種を置く
+## 5. ラチェットの種を置く
 
 \`pr\` を**手元で一度回して**、できた \`gauntlet.baseline.json\` をコミットする。
 
@@ -288,7 +320,6 @@ export function init(root: string, options: InitOptions = INIT_DEFAULTS): string
   return [
     write(root, CONFIG_FILENAME, `${JSON.stringify(configFor(options), null, 2)}\n`),
     write(root, ".claude/settings.json", mergeSettings(readIfPresent(root, ".claude/settings.json"))),
-    write(root, ".github/workflows/gauntlet.yml", WORKFLOW),
     write(root, ".claude/skills/gauntlet/SKILL.md", SKILL),
     write(root, ".gitignore", mergeGitignore(readIfPresent(root, ".gitignore"))),
   ];
