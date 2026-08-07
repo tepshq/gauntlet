@@ -21,13 +21,23 @@ export class GitError extends Error {
  * 既定では git が非 ASCII のパスを引用符付き・8 進エスケープで返す
  * （`"docs/\343\203\206..."`）。そのまま開こうとすると ENOENT で落ちる。
  */
+/**
+ * `git diff` の出力は既定の 1MB を軽く超える。
+ *
+ * duct では起点が古いブランチに解決された結果、差分が 1643 ファイル・46 万行になり
+ * `spawnSync git ENOBUFS` で落ちた。上限に当たると差分の一部ではなく**全部**を失うので、
+ * 「変更行ゼロ」ではなく起動時のエラーになる。それでも起点の取り違えは起きうるため、
+ * 現実的な最大の差分でも収まる値を置く。
+ */
+const MAX_OUTPUT_BYTES = 512_000_000;
+
 function git(root: string, args: readonly string[]): string {
   const withConfig = ["-c", "core.quotePath=false", ...args];
   try {
     // 子プロセスの起動引数と stdio の指定。壊すと git が動かないだけで、
-    // 区別できる振る舞いが無い。
-    // Stryker disable next-line ArrayDeclaration,StringLiteral,MethodExpression
-    return execFileSync("git", withConfig, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+    // 区別できる振る舞いが無い。1 行に収めないと disable の射程から外れる。
+    // Stryker disable next-line ArrayDeclaration,StringLiteral,MethodExpression,ObjectLiteral
+    return execFileSync("git", withConfig, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: MAX_OUTPUT_BYTES }).trim();
   } catch (cause) {
     throw new GitError(`git ${args.join(" ")} が失敗しました: ${(cause as Error).message}`);
   }
@@ -39,13 +49,20 @@ export function lines(output: string): string[] {
 }
 
 /**
- * 探す順。ローカルに無ければリモート追跡ブランチを見る。
+ * 探す順。**リモート追跡ブランチを先に見る。**
  *
- * CI の checkout は対象ブランチしかローカルに作らないので、`main` は解決できず
- * `origin/main` だけが存在する。手元では逆のこともあるため、両方を順に試す。
+ * PR が実際にマージされる先は `origin/main` であって、手元の `main` ではない。
+ * 手元の `main` は fetch しただけでは動かないので、いくらでも古くなる。
+ * duct では 1643 ファイル分古く、そこを起点にすると差分が 46 万行になり、
+ * 触っていない箇所まで絶対閾値の対象になっていた。
+ *
+ * ローカルだけを見る形にも戻せない。CI の checkout は対象ブランチしか
+ * ローカルに作らないので `main` は解決できず、`origin/main` だけが存在する。
+ * 両方を順に試す。手元の `main` が origin より進んでいる場合は起点が古い側になるが、
+ * それは対象が広がる方向なので、緑の意味を緩めない。
  */
 export function branchCandidates(defaultBranch: string): string[] {
-  return defaultBranch.includes("/") ? [defaultBranch] : [defaultBranch, `origin/${defaultBranch}`];
+  return defaultBranch.includes("/") ? [defaultBranch] : [`origin/${defaultBranch}`, defaultBranch];
 }
 
 function tryMergeBase(root: string, ref: string): string | null {

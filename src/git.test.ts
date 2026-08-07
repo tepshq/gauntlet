@@ -6,10 +6,11 @@ import { describe, expect, it } from "vitest";
 import { branchCandidates, changedLines, collectHunks, hunkLines, lines } from "./git.ts";
 
 describe("branchCandidates", () => {
-  // CI の checkout は対象ブランチしかローカルに作らないので、`main` は解決できず
-  // `origin/main` だけが存在する。手元では逆のこともある。
-  it("ローカルとリモート追跡の両方を試す", () => {
-    expect(branchCandidates("main")).toEqual(["main", "origin/main"]);
+  // PR がマージされる先は origin/main。手元の main は fetch では動かず、いくらでも古くなる
+  // （duct では 1643 ファイル分古く、差分が 46 万行になった）。リモート追跡を先に見る。
+  // CI の checkout は対象ブランチしかローカルに作らないので、ローカルも候補に残す。
+  it("リモート追跡を先に、ローカルを後に試す", () => {
+    expect(branchCandidates("main")).toEqual(["origin/main", "main"]);
   });
 
   it("既にリモートを指していれば足さない", () => {
