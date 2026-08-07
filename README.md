@@ -103,11 +103,31 @@ npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/*
 `init` が置くのは薄いファイルだけです。ロジックは全てパッケージ側にあるので、更新は npm の
 バージョンを上げるだけで済みます。何度叩いても結果は同じです。
 
-- `.claude/settings.json` — `Stop` と `PreToolUse` のフック（既存の設定は壊しません）
-- `gauntlet.config.json` — このリポジトリの事実。閾値は入りません
-- `.github/workflows/gauntlet.yml`
-- `.claude/skills/gauntlet/SKILL.md`
-- `.gitignore` — 足りない行だけ追記
+| 置くもの | 内容 |
+| --- | --- |
+| `.claude/settings.json` | **フック 2 つ**（下記）。既存の設定は壊しません |
+| `.claude/skills/gauntlet/SKILL.md` | 測る範囲を決め直すときに使う skill |
+| `gauntlet.config.json` | このリポジトリの事実。閾値は入りません |
+| `.github/workflows/gauntlet.yml` | CI |
+| `.gitignore` | 足りない行だけ追記 |
+
+### Claude Code の挙動が変わります
+
+`init` は `.claude/settings.json` にフックを 2 つ足します。**このリポジトリで Claude Code を
+使う全員に効きます。**
+
+**`Stop` フック** — エージェントが応答を終えようとするたびに `gauntlet run --tier=turn` が走り、
+赤なら**終了できずに直しにいきます**。人間が「テスト通してね」と言わなくてよくなる代わりに、
+毎ターン数秒〜数十秒かかります（実測は下の表）。
+
+**`PreToolUse` フック** — エージェントが `gauntlet.baseline.json` を編集しようとすると止めます。
+赤を消す最短経路が「基準を緩める」になってしまうためです。人間は普通に編集できます。
+
+既に `.claude/settings.json` がある場合、**既存のフックやプラグイン設定はそのまま残ります**
+（追記するだけで、同じものは二度足しません）。
+
+また `.claude/skills/gauntlet/` に skill が 1 枚入ります。測る範囲を決め直すときに
+「gauntlet の設定を見直して」と言えば起動します。
 
 ## 規約: 外部サービスを要するテストは `integration` project に置く
 
