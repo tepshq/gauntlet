@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { REPORT_PATH, lastLines, type MutationReport, survivedFrom } from "./mutation.ts";
+import { REPORT_PATH, type MutationReport, survivedFrom } from "./mutation.ts";
+import { lastLines } from "./runner.ts";
 
 // レポートが出ていないときは Stryker の出力が唯一の手がかりになる。
 // 全部出すと埋もれるので末尾だけ。
@@ -14,6 +15,11 @@ describe("lastLines", () => {
 
   it("空なら空", () => {
     expect(lastLines("", 3)).toBe("");
+  });
+
+  // 前後の空白を落とさないと、報告の頭に空行が並ぶ。
+  it("前後の空白を落とす", () => {
+    expect(lastLines("\n  a  \n\n", 5)).toBe("a");
   });
 });
 

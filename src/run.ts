@@ -89,7 +89,7 @@ export function runTier(root: string, tier: TierName): TierResult {
   const runners: Record<CheckName, () => CheckResult> = {
     typecheck: () => typecheck(root, config),
     tests: () => testsCheck(outcome, testsMs),
-    crap: () => crapCheck(tier, report, changed),
+    crap: () => crapCheck(tier, report, changed, outcome.passed),
     mutation: () => mutationCheck(root, config, mutationScope(root, base)),
     lint: () => lintCheck(root, config),
   };
@@ -147,12 +147,30 @@ export function applyRatchet(report: ReturnType<typeof analyze>): Violation[] {
   return [];
 }
 
-function crapCheck(tier: TierName, report: ReturnType<typeof analyze>, changed: Map<string, Set<number>>): CheckResult {
-  // リポジトリ全体のラチェットはフル実行のある pr でだけ判定する。
-  return timed("crap", () => [
-    ...gateTouched(report, changed),
-    ...(tier === "pr" ? applyRatchet(report) : []),
-  ]);
+/**
+ * テストが落ちていると coverage が無い（vitest は落ちると書き出さない）。
+ *
+ * そのまま当てると全関数が網羅率 0 と見なされ、偽の違反で本当の原因が埋もれる。
+ * 通さないが、理由はテストだと言う。
+ */
+export const CRAP_NEEDS_TESTS: Violation = { message: "テストが落ちているため計測できません" };
+
+/** リポジトリ全体のラチェットはフル実行のある `pr` でだけ判定する。 */
+export function crapViolations(
+  tier: TierName,
+  report: ReturnType<typeof analyze>,
+  changed: Map<string, Set<number>>,
+): Violation[] {
+  return [...gateTouched(report, changed), ...(tier === "pr" ? applyRatchet(report) : [])];
+}
+
+function crapCheck(
+  tier: TierName,
+  report: ReturnType<typeof analyze>,
+  changed: Map<string, Set<number>>,
+  testsPassed: boolean,
+): CheckResult {
+  return timed("crap", () => (testsPassed ? crapViolations(tier, report, changed) : [CRAP_NEEDS_TESTS]));
 }
 
 /**

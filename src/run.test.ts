@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, countByFile, formatResult, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, countByFile, CRAP_NEEDS_TESTS, crapViolations, formatResult, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
 describe("parseTier", () => {
@@ -239,5 +239,54 @@ describe("typecheckViolations", () => {
   it("診断があれば combined を出す", () => {
     const result = { stdout: "a.ts(1,1): error TS1005", combined: "a.ts(1,1): error TS1005\nextra" };
     expect(typecheckViolations(result)).toEqual([{ message: "a.ts(1,1): error TS1005\nextra" }]);
+  });
+});
+
+describe("crapViolations", () => {
+  const root = "/repo";
+  const bad: FunctionReport = {
+    location: { file: "a.ts", name: "f", scope: [], startLine: 10, startColumn: 0, endLine: 20, endColumn: 0 },
+    cc: 5,
+    coverage: 0,
+  };
+  const report: AdapterReport = {
+    schemaVersion: REPORT_SCHEMA_VERSION,
+    adapter: { name: "typescript", version: "0" },
+    root,
+    functions: [bad],
+    excluded: [],
+  };
+  const touched = new Map([["a.ts", new Set([15])]]);
+
+  it("触った関数の違反を出す", () => {
+    expect(crapViolations("turn", report, touched)[0]!.message).toContain("CRAP 30.0");
+  });
+
+  // turn は差分に関係するテストしか走らせないので、全体の数字は当てにならない。
+  it("turn ではリポジトリ全体を見ない", () => {
+    expect(crapViolations("turn", report, touched)).toHaveLength(1);
+  });
+
+  it("触っていなければ turn では何も出ない", () => {
+    expect(crapViolations("turn", report, new Map())).toEqual([]);
+  });
+
+  // pr はフル実行なのでリポジトリ全体のラチェットも当てる。
+  // turn と同じ扱いにすると、全体の悪化が誰にも止められなくなる。
+  it("pr ではリポジトリ全体のラチェットも当てる", () => {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-crap-"));
+    try {
+      saveBaseline(root, { crap: 0, mutation: {}, lint: {} });
+      const scoped = { ...report, root };
+      const messages = crapViolations("pr", scoped, new Map()).map((v) => v.message);
+      expect(messages).toEqual(["リポジトリ全体の違反が 0 → 1 に増えました"]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // 本当の原因はテストなので、そう言う。偽の CRAP 違反で埋もれさせない。
+  it("テストが落ちているときの文言", () => {
+    expect(CRAP_NEEDS_TESTS).toEqual({ message: "テストが落ちているため計測できません" });
   });
 });

@@ -20,20 +20,33 @@
 **既存リポジトリを導入初日に赤で埋めない。** 導入時点の違反数は `gauntlet.baseline.json` に記録され、
 以後それを増やせない（減れば自動で締まる）。baseline は `PreToolUse` フックでエージェントの編集から守られる。
 
-## 規約: 外部サービスを要するテストは `*.integration.test.ts`
+## 規約: 外部サービスを要するテストは `integration` project に置く
 
-DB・ネットワーク・実ファイルシステムに触れるテストは、この名前にする。
-gauntlet は **`turn` でこれを除外し、`pr` でのみ走らせる**。設定項目は無い。
+DB・ネットワーク・実ファイルシステムに触れるテストは、vitest の `projects` で
+`integration` という名前の project にまとめる。gauntlet は **`turn` でこれを除外し、
+`pr` でのみ走らせる**（`--project=!integration`）。設定項目は無い。
+
+```ts
+projects: [
+  { extends: true, test: { name: "unit", include: ["**/*.test.ts"],
+    exclude: ["**/node_modules/**", "**/*.integration.test.ts"] } },
+  { extends: true, test: { name: "integration", include: ["**/*.integration.test.ts"] } },
+]
+```
+
+`projects` を使っていないリポジトリでは `--project=!integration` は無害なので、
+統合テストが増えるまで何もしなくてよい。
 
 手元に DB が無いだけで毎ターン赤になると、ゲートが環境によって答えを変える。
 mutation も同じで、変異ごとに DB テストを走らせると実行不能になる。
 
-JS/TS にはこれといった標準が無く（Java の `*IT.java`、Go のビルドタグ、pytest のマーカーに
-相当するものが無い）、ディレクトリ方式や設定分割も同じくらい使われている。
-接尾辞を選んだのは、glob 1 つで済み、ファイルを開いた人に「DB が要る」と伝わるため。
+JS/TS にはこれといった標準が無い（Java の `*IT.java`、Go のビルドタグ、pytest のマーカーに
+相当するものが無い）。ファイル名の接尾辞で除外する案は**動かない** — vitest の `--exclude` は
+`projects` に伝わらず、project を使うリポジトリで黙って無効になる。project 名なら
+使っていないリポジトリでも無害なので、1 つの仕組みで両方に効く。
 
-**誰も強制しない。** 名前が合っていない DB テストは `turn` に入り、DB を持たない人の環境でだけ落ちる。
-そのときは名前を直す。
+**誰も強制しない。** project に入れ忘れた DB テストは `turn` に入り、
+DB を持たない人の環境でだけ落ちる。そのときは project を直す。
 
 ## 導入
 
