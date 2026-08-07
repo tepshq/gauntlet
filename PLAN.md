@@ -252,7 +252,7 @@ crap 0s / lint 0.5s / mutation 12.8s）。テスト 203 件。
 **完了条件** — hue で実際の PR が 1 本 gauntlet を通ってマージできる。
 3 リポジトリそれぞれで `turn` の実測時間を記録し、上のベースライン表に追記済み。
 
-### hue（完了、未コミット）
+### hue（完了、`adopt-gauntlet` ブランチにコミット済み）
 
 旧 `@tepshq/gauntlet` 0.8.0 を完全に除去（`.gauntlet/` 5 ファイル・`gauntlet.config.mjs`・
 依存・scripts 5 本）。`lint` と `depcruise` は旧 gauntlet 経由で eslint と dependency-cruiser を
@@ -269,7 +269,15 @@ crap 0s / lint 0.5s / mutation 12.8s）。テスト 203 件。
 `turn` の 4.7 秒はテスト実行。設定ファイルを変更しているため vitest が全テストを選んでいる状態で、
 ソースだけの変更ならもっと短くなる。
 
-パイロットで見つけて直したもの:
+パイロットで見つけて直したもの（いずれも hue で実際に踏んだ）:
+
+- **`init` が冪等でなかった。** 測る範囲を直すために 2 回叩いた結果フックが二重登録され、
+  毎ターン gauntlet が 2 回走る状態になっていた。同じ内容は二度足さないようにした（0.0.2）。
+- **CI の workflow に GitHub Packages の認証が無かった。** `npm ci` の時点で必ず落ちる。
+- **CI では `git merge-base HEAD main` が解決できない。** checkout は対象ブランチしか
+  ローカルに作らないため。`origin/main` へフォールバックする。
+- **`--inPlace` の Stryker が `stryker-setup-*.js` と `.stryker-tmp/` を残す。**
+  前者は実行後に消し、後者は `init` が `.gitignore` に足す。
 
 - **`npx stryker` が対象リポジトリに Stryker が無いと npm から非推奨の別パッケージを取ってくる。**
   `node_modules/.bin/stryker` を直接見て、無ければ導入コマンドを示して止める。
