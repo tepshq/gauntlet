@@ -1,5 +1,5 @@
 {
-  "crap": 4,
+  "crap": 1,
   "mutation": {
     "src/baseline.ts": 1,
     "src/cli.ts": 0,
