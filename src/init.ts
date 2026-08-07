@@ -105,9 +105,15 @@ DB・ネットワーク・実ファイルシステムに触れるテストを探
 除外し、\`pr\` でのみ走らせる。設定項目は無い。名前が合っていないファイルは**リネームしてもらう**。
 手元に DB が無いだけで毎ターン赤になると、ゲートが環境によって答えを変えることになる。
 
+### 既に CI があるか
+
+\`.github/workflows/\` を見る。lint / 型チェック / テストを回している workflow が既にあれば、
+gauntlet の workflow と**重複する**。どう扱うかはリポジトリの持ち主が決めることなので、
+見つけたら必ず挙げる。
+
 **完了条件** — TypeScript を含む最上位ディレクトリを 1 つ残らず挙げ、それぞれについて
-「製品コードか、テストか、生成物か、設定か」を言えること。型チェックのコマンドと、
-外部サービスを要するテストの一覧を言えること。
+「製品コードか、テストか、生成物か、設定か」を言えること。型チェックのコマンド、
+外部サービスを要するテストの一覧、既存 workflow との重複を言えること。
 
 ## 2. 提案してユーザーに確認する
 
@@ -134,7 +140,30 @@ npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glo
 型チェックの上書きが要る場合は \`gauntlet.config.json\` の \`commands.typecheck\` に書く
 （\`init\` にフラグは無い。config はスキーマ検証されるので、間違えれば起動時に落ちる）。
 
+### 外部サービスを要するテストがあった場合
+
+\`init\` は**これを自動ではやらない**。1 で見つけていたら、ここで 3 つとも行う。
+
+**a. vitest に \`integration\` project を作る。** 既存の project があれば、そこから
+\`*.integration.test.*\` を除外して二重に走らないようにする。
+
+\`\`\`ts
+projects: [
+  { extends: true, test: { name: "unit", include: ["**/*.test.ts"],
+    exclude: ["**/node_modules/**", "**/*.integration.test.ts"] } },
+  { extends: true, test: { name: "integration", include: ["**/*.integration.test.ts"] } },
+]
+\`\`\`
+
+**b. 命名が合っていないファイルをリネームする。** 外部サービスを要するのに
+\`*.integration.test.*\` でないものは \`turn\` に入ってしまう。
+
+**c. CI workflow に必要なサービスを足す。** \`pr\` では統合テストが走るので、
+DB などのサービスコンテナと、マイグレーション・シードの手順が要る。
+既存 workflow が同じものを持っていれば、そこから写す。
+
 **完了条件** — \`npx gauntlet run --tier=turn\` が通り、測った件数が想定と一致していること。
+外部サービスが無い状態でも \`turn\` が通ること（\`--project=!integration\` が効いている証拠）。
 
 ## 触らないもの
 
