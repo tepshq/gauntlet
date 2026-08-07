@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, countByFile, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, formatResult, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, countByFile, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, formatResult, mutationScopeText, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
 describe("parseTier", () => {
@@ -453,5 +453,21 @@ describe("crapCheckViolations", () => {
     const violations = crapCheckViolations("turn", broken, new Map([["a.ts", new Set([1])]]), green);
     expect(violations).toHaveLength(1);
     expect(violations[0]!.message).toContain("coverage.include");
+  });
+});
+
+describe("mutationScopeText", () => {
+  it("対象のファイル数を出す", () => {
+    expect(mutationScopeText(3, 0)).toBe("変異対象 3 ファイル");
+  });
+
+  // 測らなかった分を黙って落とすと、緑が「弱いテストが無い」ではなく
+  // 「そこは見ていない」を意味していることが伝わらない。
+  it("測らなかった件数があれば添える", () => {
+    expect(mutationScopeText(3, 10)).toBe("変異対象 3 ファイル（静的な変異 10 件は測っていません）");
+  });
+
+  it("対象が無くても形は同じ", () => {
+    expect(mutationScopeText(0, 0)).toBe("変異対象 0 ファイル");
   });
 });

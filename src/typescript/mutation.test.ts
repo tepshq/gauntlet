@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { REPORT_PATH, type MutationReport, survivedFrom } from "./mutation.ts";
+import { REPORT_PATH, type MutationReport, ignoredCount, strykerArgs, survivedFrom } from "./mutation.ts";
 import { lastLines } from "./runner.ts";
 
 // レポートが出ていないときは Stryker の出力が唯一の手がかりになる。
@@ -71,5 +71,52 @@ describe("survivedFrom", () => {
 
   it("変異が無ければ空", () => {
     expect(survivedFrom(report({}))).toEqual([]);
+  });
+});
+
+describe("ignoredCount", () => {
+  // --ignoreStatic で外した分。黙って落とすと、緑が「弱いテストが無い」ではなく
+  // 「そこは見ていない」を意味していることが伝わらない。
+  it("Ignored の数を返す", () => {
+    expect(ignoredCount(report({ "a.ts": [["Ignored", 1], ["Ignored", 2], ["Killed", 3]] }))).toBe(2);
+  });
+
+  it("ファイルを跨いで合計する", () => {
+    expect(ignoredCount(report({ "a.ts": [["Ignored", 1]], "b.ts": [["Ignored", 2]] }))).toBe(2);
+  });
+
+  it("無ければ 0", () => {
+    expect(ignoredCount(report({ "a.ts": [["Killed", 1], ["Survived", 2]] }))).toBe(0);
+  });
+
+  it("何も無ければ 0", () => {
+    expect(ignoredCount(report({}))).toBe(0);
+  });
+});
+
+// 呼び出しは必ず it の中で行う。describe の直下で値を作ると、
+// 変異が有効になる前に計算が終わっていて、テストが変異を検知できない。
+describe("strykerArgs", () => {
+  // 引数は丸ごと固定する。1 つ欠けると duct で踏んだ形（退避先をリポジトリ内に作り、
+  // その中のテストを vitest が拾って coverage 解析が壊れる）に戻る。
+  it("丸ごと固定する", () => {
+    expect(strykerArgs(["a.ts", "b.ts"], "/tmp/out")).toEqual([
+      "run",
+      "--testRunner",
+      "vitest",
+      "--inPlace",
+      "--tempDirName",
+      "/tmp/out",
+      "--ignoreStatic",
+      "--reporters",
+      "json",
+      "--mutate",
+      "a.ts,b.ts",
+    ]);
+  });
+
+  // 退避先がリポジトリ内だと、対象リポジトリの vitest がコピーをテストとして拾う。
+  it("退避先を渡す", () => {
+    expect(strykerArgs([], "/elsewhere")).toContain("/elsewhere");
   });
 });

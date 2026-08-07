@@ -16,13 +16,12 @@ describe("RunnerError", () => {
   });
 });
 
+// 呼び出しは必ず it の中で行う。describe の直下で値を作ると、
+// 変異が有効になる前に計算が終わっていて、テストが変異を検知できない。
 describe("vitestArgs", () => {
-  const turn = vitestArgs("abc123", "/tmp/out");
-  const pr = vitestArgs(null, "/tmp/out");
-
   // 引数は丸ごと固定する。部分一致で見ると、コマンド名や出力先が変わっても気づかない。
   it("pr は全部走らせる", () => {
-    expect(pr).toEqual([
+    expect(vitestArgs(null, "/tmp/out")).toEqual([
       "vitest",
       "run",
       "--coverage",
@@ -36,7 +35,7 @@ describe("vitestArgs", () => {
 
   // 手元に DB が無いだけで毎ターン赤になると、環境によって答えが変わる（flaky）。
   it("turn は差分に絞り、integration project を除外する", () => {
-    expect(turn).toEqual([
+    expect(vitestArgs("abc123", "/tmp/out")).toEqual([
       "vitest",
       "run",
       "--coverage",
@@ -67,7 +66,7 @@ describe("vitestArgs", () => {
   });
 
   it("ファイル指定が無ければ位置引数を足さない", () => {
-    expect(pr).toEqual(vitestArgs(null, "/tmp/out", []));
+    expect(vitestArgs(null, "/tmp/out")).toEqual(vitestArgs(null, "/tmp/out", []));
   });
 
   it("規約は integration という project 名", () => {

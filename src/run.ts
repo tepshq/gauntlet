@@ -283,22 +283,35 @@ function gateByFile(
   return regressed.map((entry) => ({ message: describe(entry), file: entry.file }));
 }
 
+/**
+ * 何を変異させ、何を測らなかったか。
+ *
+ * `--ignoreStatic` で外した分を黙って落とすと、緑が「弱いテストが無い」ではなく
+ * 「そこは見ていない」を意味していることが読み手に伝わらない。
+ */
+export function mutationScopeText(targets: number, ignored: number): string {
+  const skipped = ignored === 0 ? "" : `（静的な変異 ${ignored} 件は測っていません）`;
+  return `変異対象 ${targets} ファイル${skipped}`;
+}
+
 /** 差分に関係するソースだけを変異させる。既存リポジトリ全体を一度に赤にしない。 */
 function mutationCheck(root: string, config: GauntletConfig, covered: Iterable<string>): CheckResult {
   const targets = mutationTargets(covered, listSourceFiles(root, config.source));
-  return timed("mutation", () => ({
-    scope: `変異対象 ${targets.length} ファイル`,
-    violations:
-      targets.length === 0
-        ? []
-        : gateByFile(
-            root,
-            "mutation",
-            targets,
-            countByFile(runMutation(root, targets)),
-            (entry) => `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`,
-          ),
-  }));
+  return timed("mutation", () => {
+    if (targets.length === 0) return { scope: mutationScopeText(0, 0), violations: [] };
+    const { survived, ignored } = runMutation(root, targets);
+    return {
+      // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
+      scope: mutationScopeText(targets.length, ignored),
+      violations: gateByFile(
+        root,
+        "mutation",
+        targets,
+        countByFile(survived),
+        (entry) => `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`,
+      ),
+    };
+  });
 }
 
 /** ルールは対象リポジトリが持つ。gauntlet は件数を増やさせないだけ。 */
