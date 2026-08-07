@@ -243,6 +243,33 @@ gauntlet 自身も TypeScript 6.0.3 に落とし、`typescript` は runtime 依�
 gauntlet 自身に対する `pr`: **14.6 秒で全 5 ゲート緑**（typecheck 0.5s / tests 0.7s /
 crap 0s / lint 0.5s / mutation 12.8s）。テスト 203 件。
 
+### CI の実測（tepshq/gauntlet#1、GitHub Actions）
+
+| | ローカル | CI | 比 |
+| --- | --- | --- | --- |
+| mutation | 13.8 秒 | **86 秒** | **6.2 倍** |
+| `pr` 全体 | 15.6 秒 | 92 秒 | — |
+
+CI で確認できたこと: `merge-base` の `origin/main` フォールバックが効く、
+`--inPlace` の Stryker が動く、全 5 ゲートが緑になる。
+
+**mutation が予算の支配項。** hue はローカル 137 秒なので CI では 10 分超が見込まれる。
+teps（2222 テスト）と duct はさらに大きい。実数が出てから、以下のどれかを検討する:
+`--concurrency` を CI のコア数に合わせる / 対象を触った関数の行範囲まで絞る（保留していた案）/
+mutation を別ジョブにして PR のブロックから外す。
+
+### private パッケージのアクセス（GitHub の手続き）
+
+消費側リポジトリの `secrets.GITHUB_TOKEN` は、別リポジトリが所有する private パッケージを読めない。
+hue の CI が `403 permission_denied: read_package` で落ちて判明した。
+
+`Internal` 可視性なら解決するが、**tepshq は Team プランで internal が使えない**
+（UI には出るが「organization administrators によって無効」と表示される）。
+org レベルの secret に PAT を置く案は、寿命の長い個人トークンを org 全体の CI に置くことになるので採らない。
+
+→ パッケージ設定の **Manage Actions access** で導入先リポジトリを個別に Read 許可する。
+gauntlet の機能ではなく GitHub 側の手続きなので、`init` にも skill にも入れず README に書く。
+
 ### 7. パイロット投入
 
 - **hue** — 機構そのものの検証。既に 87.8% カバー済みなので、テストを書く作業と混ざらない
