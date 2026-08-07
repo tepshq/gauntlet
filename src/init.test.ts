@@ -3,7 +3,43 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseConfig } from "./config.ts";
-import { INIT_DEFAULTS, init, parseInitOptions, scopeReport } from "./init.ts";
+import { INIT_DEFAULTS, init, mergeGitignore, parseInitOptions, scopeReport } from "./init.ts";
+
+// 出力の体裁ごと固定する。部分一致で見ると、改行の数や区切りが崩れても気づかない。
+describe("mergeGitignore", () => {
+  const ADDED = "# gauntlet の出力\ncoverage/\nreports/\n.stryker-tmp/\n";
+
+  it("何も無ければ全部足す", () => {
+    expect(mergeGitignore(null)).toBe(ADDED);
+  });
+
+  it("空でも全部足す", () => {
+    expect(mergeGitignore("")).toBe(ADDED);
+  });
+
+  // 既存の .gitignore を壊すと、導入そのものが敬遠される。
+  it("既にある行の後ろに空行を挟んで足す", () => {
+    expect(mergeGitignore("node_modules/\n.env\n")).toBe(`node_modules/\n.env\n\n${ADDED}`);
+  });
+
+  it("末尾の改行が重なっても増やさない", () => {
+    expect(mergeGitignore("node_modules/\n\n\n")).toBe(`node_modules/\n\n${ADDED}`);
+  });
+
+  it("全部揃っていれば一字も変えない", () => {
+    const existing = "coverage/\nreports/\n.stryker-tmp/\n";
+    expect(mergeGitignore(existing)).toBe(existing);
+  });
+
+  it("足りないものだけ足す", () => {
+    expect(mergeGitignore("coverage/\n")).toBe("coverage/\n\n# gauntlet の出力\nreports/\n.stryker-tmp/\n");
+  });
+
+  // 既存の .gitignore は字下げされていることがある。
+  it("前後の空白を無視して既存判定する", () => {
+    expect(mergeGitignore("  coverage/  \nreports/\n.stryker-tmp/\n")).toBe("  coverage/  \nreports/\n.stryker-tmp/\n");
+  });
+});
 
 let root: string;
 
@@ -20,12 +56,13 @@ const settings = (): { hooks: Record<string, { matcher?: string }[]> } =>
   JSON.parse(read(".claude/settings.json")) as { hooks: Record<string, { matcher?: string }[]> };
 
 describe("init", () => {
-  it("薄いファイルを 4 枚だけ置く", () => {
+  it("薄いファイルだけ置く", () => {
     expect(init(root)).toEqual([
       "gauntlet.config.json",
       ".claude/settings.json",
       ".github/workflows/gauntlet.yml",
       ".claude/skills/gauntlet/SKILL.md",
+      ".gitignore",
     ]);
   });
 
@@ -96,6 +133,12 @@ describe("init", () => {
     const merged = JSON.parse(read(".claude/settings.json")) as { permissions: unknown; hooks: { Stop: unknown[] } };
     expect(merged.permissions).toEqual({ allow: ["Bash(ls)"] });
     expect(merged.hooks.Stop).toHaveLength(2);
+  });
+
+  it("既にある .gitignore を残して足す", () => {
+    writeFileSync(join(root, ".gitignore"), "node_modules/\n");
+    init(root);
+    expect(read(".gitignore")).toBe("node_modules/\n\n# gauntlet の出力\ncoverage/\nreports/\n.stryker-tmp/\n");
   });
 
   it("CI は pr tier を回す", () => {

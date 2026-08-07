@@ -118,6 +118,24 @@ npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glo
 編集は \`PreToolUse\` フックで止まる。赤を消すには違反そのものを直す。
 `;
 
+/**
+ * gauntlet と、それが呼ぶ道具が残す作業ファイル。
+ *
+ * `coverage/` と `.stryker-tmp/` は実行のたびに作られる。放っておくと
+ * 導入した全リポジトリで未追跡のゴミになるので、こちらで面倒を見る。
+ */
+const IGNORED = ["coverage/", "reports/", ".stryker-tmp/"];
+
+/** 既にある行は足さない。既存の .gitignore を並べ替えたり消したりもしない。 */
+export function mergeGitignore(existing: string | null): string {
+  const current = existing ?? "";
+  const lines = current.split("\n");
+  const missing = IGNORED.filter((entry) => !lines.some((line) => line.trim() === entry));
+  if (missing.length === 0) return current;
+  const head = current === "" ? "" : `${current.replace(/\n+$/, "")}\n\n`;
+  return `${head}# gauntlet の出力\n${missing.join("\n")}\n`;
+}
+
 type Settings = { hooks?: Record<string, unknown[]> };
 
 /** 既にあるフックを消さずに足す。他の用途で使っている設定を壊さない。 */
@@ -172,6 +190,7 @@ export function init(root: string, options: InitOptions = INIT_DEFAULTS): string
     write(root, ".claude/settings.json", mergeSettings(readIfPresent(root, ".claude/settings.json"))),
     write(root, ".github/workflows/gauntlet.yml", WORKFLOW),
     write(root, ".claude/skills/gauntlet/SKILL.md", SKILL),
+    write(root, ".gitignore", mergeGitignore(readIfPresent(root, ".gitignore"))),
   ];
 }
 
