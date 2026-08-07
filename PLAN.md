@@ -243,6 +243,78 @@ gauntlet 自身も TypeScript 6.0.3 に落とし、`typescript` は runtime 依�
 gauntlet 自身に対する `pr`: **14.6 秒で全 5 ゲート緑**（typecheck 0.5s / tests 0.7s /
 crap 0s / lint 0.5s / mutation 12.8s）。テスト 203 件。
 
+### CI の実測（tepshq/gauntlet#1、GitHub Actions）
+
+| | ローカル | CI | 比 |
+| --- | --- | --- | --- |
+| mutation | 13.8 秒 | **86 秒** | **6.2 倍** |
+| `pr` 全体 | 15.6 秒 | 92 秒 | — |
+
+CI で確認できたこと: `merge-base` の `origin/main` フォールバックが効く、
+`--inPlace` の Stryker が動く、全 5 ゲートが緑になる。
+
+**mutation が予算の支配項。** hue はローカル 137 秒なので CI では 10 分超が見込まれる。
+teps（2222 テスト）と duct はさらに大きい。実数が出てから、以下のどれかを検討する:
+`--concurrency` を CI のコア数に合わせる / 対象を触った関数の行範囲まで絞る（保留していた案）/
+mutation を別ジョブにして PR のブロックから外す。
+
+### private パッケージのアクセス（GitHub の手続き）
+
+消費側リポジトリの `secrets.GITHUB_TOKEN` は、別リポジトリが所有する private パッケージを読めない。
+hue の CI が `403 permission_denied: read_package` で落ちて判明した。
+
+`Internal` 可視性なら解決するが、**tepshq は Team プランで internal が使えない**
+（UI には出るが「organization administrators によって無効」と表示される）。
+org レベルの secret に PAT を置く案は、寿命の長い個人トークンを org 全体の CI に置くことになるので採らない。
+
+→ パッケージ設定の **Manage Actions access** で導入先リポジトリを個別に Read 許可する。
+gauntlet の機能ではなく GitHub 側の手続きなので、`init` にも skill にも入れず README に書く。
+
+### teps（進行中、`adopt-gauntlet` ブランチ）
+
+測る範囲は対話で決めた。`tsconfig.include` は当てにならず、機械的には決まらない例:
+
+| 除いたもの | 理由 |
+| --- | --- |
+| `tests/` | 133 ファイル中 132 がテスト。ここを測るとテストを測ることになる |
+| `e2e/` | Playwright。vitest では走らないので coverage も mutation も意味を持たない |
+| `scripts/` | デモと一度きりの移行スクリプト。出荷される製品コードではない |
+| ルート直下の `.ts` | `next.config` `vitest.config` 等の設定 |
+
+測る対象は `src` / `components` / `app` / `lib` の **170 ファイル**。
+
+| | 実測 |
+| --- | --- |
+| `turn`（ソース 1 ファイル変更） | **10.4 秒**（typecheck 2.6s / tests 7.6s） |
+| `pr` | **64 秒**（typecheck 2.6s / tests 9.6s / lint 2.3s / mutation 40.9s） |
+
+`turn` の 10.4 秒は目標の 10 秒を超えている。テスト 7.6 秒が支配項で、
+`src/dsl/schema.ts` のような中核ファイルは多くのテストから import されるため。
+
+teps で見つけて直したもの:
+
+- **`commands.typecheck` がシェルを通っていなかった。** teps は `tsc -p a.json --noEmit && tsc --noEmit`
+  の 2 パスで、`&&` が tsc の引数になって `error TS5042` で落ちた。`sh -c` 経由にし、
+  `node_modules/.bin` を PATH の先頭に置く。
+- **eslint はマッチしない glob が 1 つでもあると即エラーで死ぬ。** 測る範囲の指定として
+  `src/**/*.tsx` のように空になる組み合わせは普通にある。`--no-error-on-unmatched-pattern` を渡す。
+- **eslint の失敗原因を握り潰していた。** 標準エラーにしか出ないので、報告に混ぜる。
+- **`tsc` は出力に実行ビットを付けない。** ローカルパス install で `Permission denied` になる。
+  ビルドで `chmod +x` する。
+
+### 一巡したら決めたいこと
+
+**mutation が「0 件検査して緑」と「検査して問題なし」を区別していない。**
+hue の CI で `✓ mutation (0ms)` が出た。差分にソースが無いので正しい挙動だが、
+`--changed` が取りこぼした場合も同じ表示になる。走らなかったゲートが緑に見えるのは
+設計で `flaky` として避けた形そのもの。旧 gauntlet 0.8.0 は `vacuousUnless` で
+実質何も検査していないゲートを負債として数えていた。
+
+**重複（duplication）のゲートが無い。** 「検討して外したもの」にも入っておらず、単に
+考えていなかった。旧版は jscpd で持っていた。実際、gauntlet 自身で同じ `capture` を
+2 か所に書いてしまい、CRAP が 2 件の違反として並べたのを人間が読んで気づいた
+— ツールは重複を検出していない。名前が違えば見逃していた。
+
 ### 7. パイロット投入
 
 - **hue** — 機構そのものの検証。既に 87.8% カバー済みなので、テストを書く作業と混ざらない
@@ -252,7 +324,7 @@ crap 0s / lint 0.5s / mutation 12.8s）。テスト 203 件。
 **完了条件** — hue で実際の PR が 1 本 gauntlet を通ってマージできる。
 3 リポジトリそれぞれで `turn` の実測時間を記録し、上のベースライン表に追記済み。
 
-### hue（完了、未コミット）
+### hue（完了、`adopt-gauntlet` ブランチにコミット済み）
 
 旧 `@tepshq/gauntlet` 0.8.0 を完全に除去（`.gauntlet/` 5 ファイル・`gauntlet.config.mjs`・
 依存・scripts 5 本）。`lint` と `depcruise` は旧 gauntlet 経由で eslint と dependency-cruiser を
@@ -269,7 +341,20 @@ crap 0s / lint 0.5s / mutation 12.8s）。テスト 203 件。
 `turn` の 4.7 秒はテスト実行。設定ファイルを変更しているため vitest が全テストを選んでいる状態で、
 ソースだけの変更ならもっと短くなる。
 
-パイロットで見つけて直したもの:
+**CI（0.0.2、差分スコープ前）: 成功。ただし 948 秒（うち mutation 932 秒）。**
+GitHub Packages の認証経路がこれで検証できた（パッケージ設定の Manage Actions access で
+`tepshq/hue` に Read を付与した後）。同時に、mutation の範囲を絞る修正が
+必要だったことの裏付けにもなった — 24 ファイル全部を変異させて 15.5 分かかっている。
+
+パイロットで見つけて直したもの（いずれも hue で実際に踏んだ）:
+
+- **`init` が冪等でなかった。** 測る範囲を直すために 2 回叩いた結果フックが二重登録され、
+  毎ターン gauntlet が 2 回走る状態になっていた。同じ内容は二度足さないようにした（0.0.2）。
+- **CI の workflow に GitHub Packages の認証が無かった。** `npm ci` の時点で必ず落ちる。
+- **CI では `git merge-base HEAD main` が解決できない。** checkout は対象ブランチしか
+  ローカルに作らないため。`origin/main` へフォールバックする。
+- **`--inPlace` の Stryker が `stryker-setup-*.js` と `.stryker-tmp/` を残す。**
+  前者は実行後に消し、後者は `init` が `.gitignore` に足す。
 
 - **`npx stryker` が対象リポジトリに Stryker が無いと npm から非推奨の別パッケージを取ってくる。**
   `node_modules/.bin/stryker` を直接見て、無ければ導入コマンドを示して止める。

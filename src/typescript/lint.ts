@@ -36,16 +36,24 @@ export function countErrors(results: readonly EslintFileResult[], root: string):
   return counts;
 }
 
-export function parseLintOutput(stdout: string, root: string): Record<string, number> {
+export function parseLintOutput(stdout: string, root: string, detail = ""): Record<string, number> {
   try {
     return countErrors(JSON.parse(stdout) as EslintFileResult[], root);
   } catch {
-    throw new RunnerError(`eslint の出力を読めません:\n${stdout.slice(0, 500)}`);
+    // 原因は標準エラーにしか出ないことがある。stdout だけ見せると空の報告になる。
+    throw new RunnerError(`eslint の出力を読めません:\n${(detail === "" ? stdout : detail).slice(0, 500)}`);
   }
 }
 
-/** 対象が 1 つ以上あることは呼び出し側が保証する。 */
+/**
+ * 対象が 1 つ以上あることは呼び出し側が保証する。
+ *
+ * `--no-error-on-unmatched-pattern` が要る。eslint は既定で、マッチしない glob が
+ * 1 つでもあると即エラーで終わる。gauntlet が渡すのは**測る範囲**の指定なので、
+ * `src/**\/*.tsx` のように空になる組み合わせは普通にある（teps で実際に踏んだ）。
+ */
 export function runLint(root: string, targets: readonly string[]): Record<string, number> {
-  const { stdout } = capture(eslintBin(root), ["--format", "json", ...targets], root);
-  return parseLintOutput(stdout, root);
+  const args = ["--format", "json", "--no-error-on-unmatched-pattern", ...targets];
+  const { stdout, combined } = capture(eslintBin(root), args, root);
+  return parseLintOutput(stdout, root, combined);
 }

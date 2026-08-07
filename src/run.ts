@@ -2,10 +2,10 @@
  * tier の実行。CLI から切り離してテスト可能にしてある。
  */
 
-import { execFileSync } from "node:child_process";
 import { relative } from "node:path";
 import { ConfigError, type GauntletConfig, loadConfig } from "./config.ts";
 import { loadBaseline, ratchetByFile, saveBaseline } from "./baseline.ts";
+import { type Captured, captureShell } from "./exec.ts";
 import { gateRepository, gateTouched } from "./gate.ts";
 import { changedLines, mergeBase } from "./git.ts";
 import {
@@ -51,20 +51,17 @@ function timed(name: CheckName, body: () => Violation[]): CheckResult {
   };
 }
 
+export const DEFAULT_TYPECHECK = "tsc --noEmit";
+
+/** tsc は診断を標準出力に出す。出ていなければ通っている。 */
+export function typecheckViolations(result: Captured): Violation[] {
+  return result.stdout.trim() === "" ? [] : [{ message: result.combined.trim() }];
+}
+
+/** 型エラーの判定はプロジェクトの設定に従う。gauntlet はコマンドを走らせるだけ。 */
 function typecheck(root: string, config: GauntletConfig): CheckResult {
-  return timed("typecheck", () => {
-    try {
-      execFileSync("npx", (config.commands?.typecheck ?? "tsc --noEmit").split(" "), {
-        cwd: root,
-        encoding: "utf8",
-        stdio: "pipe",
-      });
-      return [];
-    } catch (error) {
-      const output = String((error as { stdout?: string }).stdout ?? (error as Error).message).trim();
-      return [{ message: output }];
-    }
-  });
+  const command = config.commands?.typecheck ?? DEFAULT_TYPECHECK;
+  return timed("typecheck", () => typecheckViolations(captureShell(command, root)));
 }
 
 /**
@@ -92,8 +89,8 @@ export function runTier(root: string, tier: TierName): TierResult {
   const runners: Record<CheckName, () => CheckResult> = {
     typecheck: () => typecheck(root, config),
     tests: () => testsCheck(outcome, testsMs),
-    crap: () => crapCheck(tier, report, changed),
-    mutation: () => mutationCheck(root, config, coveredFiles(root, outcome.coverage)),
+    crap: () => crapCheck(tier, report, changed, outcome.passed),
+    mutation: () => mutationCheck(root, config, mutationScope(root, base)),
     lint: () => lintCheck(root, config),
   };
   const checks = TIER_CHECKS[tier].map((name) => runners[name]());
@@ -119,6 +116,22 @@ function coveredFiles(root: string, coverage: Record<string, unknown>): string[]
 }
 
 /**
+ * 変異させる範囲。**差分に関係するテストが触れたソースだけ。**
+ *
+ * `pr` は全テストを走らせるので、その coverage を使うとリポジトリのほぼ全部が対象になる。
+ * teps の実測では 135 ファイル・約 23,000 変異で、ローカル 47 分・CI で数時間になった。
+ * 1 変異あたり 124ms のうち約 7 割は変異を差し替える往復のオーバーヘッドで、
+ * テスト自体（11 件・38ms）は速い。回数が問題なので、範囲を絞るしかない。
+ *
+ * そのために `--changed` の実行を 1 回足す（teps で約 8 秒）。分単位と引き換えなら安い。
+ * テストファイルを変更すれば `--changed` がそれを選ぶので、
+ * assert を消しただけの差分を捕まえる経路は保たれる。
+ */
+function mutationScope(root: string, base: string): string[] {
+  return coveredFiles(root, runTests(root, base).coverage);
+}
+
+/**
  * リポジトリ全体のラチェットを当て、必要なら記録を更新する。
  *
  * 改善と初回の種置きは自動で固定する。記録し損ねると許容値が緩いまま残り、
@@ -134,12 +147,30 @@ export function applyRatchet(report: ReturnType<typeof analyze>): Violation[] {
   return [];
 }
 
-function crapCheck(tier: TierName, report: ReturnType<typeof analyze>, changed: Map<string, Set<number>>): CheckResult {
-  // リポジトリ全体のラチェットはフル実行のある pr でだけ判定する。
-  return timed("crap", () => [
-    ...gateTouched(report, changed),
-    ...(tier === "pr" ? applyRatchet(report) : []),
-  ]);
+/**
+ * テストが落ちていると coverage が無い（vitest は落ちると書き出さない）。
+ *
+ * そのまま当てると全関数が網羅率 0 と見なされ、偽の違反で本当の原因が埋もれる。
+ * 通さないが、理由はテストだと言う。
+ */
+export const CRAP_NEEDS_TESTS: Violation = { message: "テストが落ちているため計測できません" };
+
+/** リポジトリ全体のラチェットはフル実行のある `pr` でだけ判定する。 */
+export function crapViolations(
+  tier: TierName,
+  report: ReturnType<typeof analyze>,
+  changed: Map<string, Set<number>>,
+): Violation[] {
+  return [...gateTouched(report, changed), ...(tier === "pr" ? applyRatchet(report) : [])];
+}
+
+function crapCheck(
+  tier: TierName,
+  report: ReturnType<typeof analyze>,
+  changed: Map<string, Set<number>>,
+  testsPassed: boolean,
+): CheckResult {
+  return timed("crap", () => (testsPassed ? crapViolations(tier, report, changed) : [CRAP_NEEDS_TESTS]));
 }
 
 /**

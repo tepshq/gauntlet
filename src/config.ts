@@ -18,13 +18,7 @@ export interface GauntletConfig {
   runner: "vitest";
   defaultBranch: string;
   source: { include: string[]; exclude?: string[] };
-  commands?: {
-    typecheck?: string;
-    test?: string;
-    testChanged?: string;
-    coverage?: string;
-    lint?: string;
-  };
+  commands?: { typecheck?: string };
 }
 
 /** config が使えないときに投げる。メッセージだけ読めば直せる形にする。 */

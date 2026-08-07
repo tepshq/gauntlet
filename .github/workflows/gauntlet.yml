@@ -1,0 +1,18 @@
+name: gauntlet
+on: pull_request
+
+jobs:
+  gauntlet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # merge-base を取るために全履歴が要る。浅いと差分の起点が決まらない。
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: package.json
+      - run: npm ci
+      - run: npm run build
+      # 自分自身を測るので、registry からではなくビルド結果を直接叩く。
+      - run: node dist/cli.js run --tier=pr

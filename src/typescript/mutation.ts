@@ -10,7 +10,7 @@
 import { existsSync, globSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { capture } from "../exec.ts";
-import { RunnerError } from "./runner.ts";
+import { RunnerError, lastLines } from "./runner.ts";
 
 /** Stryker の json reporter の固定出力先。CLI からファイル名を変えられない。 */
 export const REPORT_PATH = "reports/mutation/mutation.json";
@@ -94,9 +94,5 @@ function cleanLeftovers(root: string): void {
   for (const name of globSync("stryker-setup-*.js", { cwd: root })) {
     rmSync(join(root, name), { force: true });
   }
-}
-
-export function lastLines(text: string, count: number): string {
-  return text.split("\n").slice(-count).join("\n");
 }
 
