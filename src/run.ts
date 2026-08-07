@@ -90,7 +90,12 @@ export function runTier(root: string, tier: TierName): TierResult {
     typecheck: () => typecheck(root, config),
     tests: () => testsCheck(outcome, testsMs),
     crap: () => crapCheck(tier, report, changed, outcome),
-    mutation: () => mutationCheck(root, config, mutationScope(root, base)),
+    mutation: () =>
+      mutationCheck(
+        root,
+        config,
+        mutationScope(changed.keys(), (tests) => coveredFiles(root, runTests(root, null, tests).coverage)),
+      ),
     lint: () => lintCheck(root, config),
   };
   const checks = TIER_CHECKS[tier].map((name) => runners[name]());
@@ -115,20 +120,37 @@ function coveredFiles(root: string, coverage: Record<string, unknown>): string[]
   return Object.keys(coverage).map((absolute) => relative(root, absolute).split("\\").join("/"));
 }
 
+export function isTestFile(file: string): boolean {
+  return /\.(test|spec)\.tsx?$/.test(file);
+}
+
 /**
- * 変異させる範囲。**差分に関係するテストが触れたソースだけ。**
+ * 変異させる範囲。**差分そのものが上限を決める。**
  *
- * `pr` は全テストを走らせるので、その coverage を使うとリポジトリのほぼ全部が対象になる。
- * teps の実測では 135 ファイル・約 23,000 変異で、ローカル 47 分・CI で数時間になった。
+ * 変異は高い。teps の実測では 135 ファイル・約 23,000 変異でローカル 47 分。
  * 1 変異あたり 124ms のうち約 7 割は変異を差し替える往復のオーバーヘッドで、
  * テスト自体（11 件・38ms）は速い。回数が問題なので、範囲を絞るしかない。
  *
- * そのために `--changed` の実行を 1 回足す（teps で約 8 秒）。分単位と引き換えなら安い。
- * テストファイルを変更すれば `--changed` がそれを選ぶので、
- * assert を消しただけの差分を捕まえる経路は保たれる。
+ * **`--changed` が選んだテストの coverage は使えない。** vitest は変更ファイルを
+ * import する全テストを逆依存グラフから拾うので、`package.json` や `vitest.config.ts`
+ * を触る差分では全テストが選ばれる。duct の実測では全 664 テストファイルが走り、
+ * 変異対象が 520 ファイルになった。Dependabot の更新でも同じことが起きる。
+ * そして gauntlet を導入する PR 自身が必ず設定ファイルを触るので、
+ * **baseline の種を置くための最初の `pr` が最も回らない**という形になっていた。
+ *
+ * 代わりに差分から直接決める:
+ *
+ * - **変更されたソース** — これがテストで守られているかを問うのが本題
+ * - **変更されたテストが覆うソース** — assert を消しただけの差分でも、
+ *   そのテストが覆うソースが対象に入る。これが無いと mutation を素通りできる（gameable）
+ *
+ * 変更されたテストが無ければ余分な実行そのものが要らないので、`coveredBy` は呼ばない。
  */
-function mutationScope(root: string, base: string): string[] {
-  return coveredFiles(root, runTests(root, base).coverage);
+export function mutationScope(changed: Iterable<string>, coveredBy: (tests: string[]) => string[]): string[] {
+  const files = [...changed];
+  const tests = files.filter(isTestFile);
+  if (tests.length === 0) return files;
+  return [...new Set([...files, ...coveredBy(tests)])];
 }
 
 /**
@@ -205,16 +227,10 @@ function crapCheck(
   return timed("crap", () => crapCheckViolations(tier, report, changed, outcome));
 }
 
-/**
- * 変異させる対象。テストファイルと除外指定は外す。
- *
- * **変更されたファイルではなく、この差分で実際に走ったテストが触れたソースを渡す。**
- * 変更ファイルだけを対象にすると、テストの assert を消しただけの差分では
- * 対応するソースが変異対象から外れ、mutation ゲートを素通りできてしまう（gameable）。
- */
+/** 変異させる対象。テストファイルと除外指定は外す。範囲は `mutationScope` が決める。 */
 export function mutationTargets(covered: Iterable<string>, exclude: readonly string[]): string[] {
   const excluded = new Set(exclude);
-  const isSource = (file: string): boolean => file.endsWith(".ts") && !file.endsWith(".test.ts");
+  const isSource = (file: string): boolean => file.endsWith(".ts") && !isTestFile(file);
   return [...covered].filter((file) => isSource(file) && !excluded.has(file)).sort();
 }
 

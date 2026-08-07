@@ -50,6 +50,26 @@ describe("vitestArgs", () => {
     ]);
   });
 
+  // 位置引数がフラグの前に来ると vitest が読み取れない。
+  it("指定したテストファイルだけに絞る", () => {
+    expect(vitestArgs(null, "/tmp/out", ["a.test.ts", "b.test.ts"])).toEqual([
+      "vitest",
+      "run",
+      "--coverage",
+      "--coverage.provider=v8",
+      "--coverage.reporter=json",
+      "--coverage.reportsDirectory=/tmp/out/coverage",
+      "--reporter=json",
+      "--outputFile=/tmp/out/result.json",
+      "a.test.ts",
+      "b.test.ts",
+    ]);
+  });
+
+  it("ファイル指定が無ければ位置引数を足さない", () => {
+    expect(pr).toEqual(vitestArgs(null, "/tmp/out", []));
+  });
+
   it("規約は integration という project 名", () => {
     expect(INTEGRATION_PROJECT).toBe("integration");
   });

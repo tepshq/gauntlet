@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, countByFile, CRAP_NEEDS_TESTS, crapCheckViolations, crapViolations, formatResult, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, countByFile, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapViolations, formatResult, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
 describe("parseTier", () => {
@@ -148,15 +148,61 @@ describe("countByFile", () => {
   });
 });
 
+describe("isTestFile", () => {
+  it.each(["a.test.ts", "a.test.tsx", "a.spec.ts", "a.spec.tsx", "a.integration.test.ts"])(
+    "%s はテスト",
+    (file) => {
+      expect(isTestFile(file)).toBe(true);
+    },
+  );
+
+  // ここを取りこぼすとテストファイル自身を変異させ、それを守るテストは無いので必ず生き残る。
+  // 末尾で判定しないと、スナップショットや sourcemap の隣接ファイルまで拾う。
+  it.each(["a.ts", "a.tsx", "testing.ts", "spec.ts", "a.test.md", "a.test.ts.snap"])(
+    "%s はテストではない",
+    (file) => {
+      expect(isTestFile(file)).toBe(false);
+    },
+  );
+});
+
+describe("mutationScope", () => {
+  const never = (): string[] => {
+    throw new Error("呼ばれてはいけない");
+  };
+
+  // 変更されたテストが無ければ、覆っているソースを調べる実行そのものが要らない。
+  // ここで余分に走らせると、設定ファイルだけの差分でも全テストが走る。
+  it("変更されたテストが無ければ調べに行かない", () => {
+    expect(mutationScope(["a.ts", "package.json"], never)).toEqual(["a.ts", "package.json"]);
+  });
+
+  it("何も変わっていなければ空", () => {
+    expect(mutationScope([], never)).toEqual([]);
+  });
+
+  // assert を消しただけの差分でも、そのテストが覆うソースが対象に入らないと素通りできる。
+  it("変更されたテストが覆うソースを足す", () => {
+    expect(mutationScope(["a.test.ts"], () => ["a.ts", "b.ts"])).toEqual(["a.test.ts", "a.ts", "b.ts"]);
+  });
+
+  it("調べに行くのは変更されたテストだけ", () => {
+    const asked: string[][] = [];
+    mutationScope(["a.ts", "b.test.ts"], (tests) => {
+      asked.push(tests);
+      return [];
+    });
+    expect(asked).toEqual([["b.test.ts"]]);
+  });
+
+  it("重複は畳む", () => {
+    expect(mutationScope(["a.ts", "a.test.ts"], () => ["a.ts"])).toEqual(["a.ts", "a.test.ts"]);
+  });
+});
+
 describe("mutationTargets", () => {
   it("TypeScript のソースだけを選ぶ", () => {
     expect(mutationTargets(["a.ts", "b.md", "c.json", "d.tsx"], [])).toEqual(["a.ts"]);
-  });
-
-  // 変更ファイルではなく「この差分で走ったテストが触れたソース」を渡す。
-  // 変更ファイルだけだと、assert を消しただけの差分で mutation が素通りする。
-  it("変更されていなくてもテストが触れたソースを含める", () => {
-    expect(mutationTargets(["untouched.ts"], [])).toEqual(["untouched.ts"]);
   });
 
   it("順序を固定する", () => {

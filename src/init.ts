@@ -107,9 +107,32 @@ DB・ネットワーク・実ファイルシステムに触れるテストを探
 
 ### 既に CI があるか
 
-\`.github/workflows/\` を見る。lint / 型チェック / テストを回している workflow が既にあれば、
-gauntlet の workflow と**重複する**。どう扱うかはリポジトリの持ち主が決めることなので、
-見つけたら必ず挙げる。
+\`.github/workflows/\` を全部見る。2 つ確かめることがある。
+
+**a. \`npm ci\` / \`npm install\` を叩く workflow を全て挙げる。** \`@tepshq/gauntlet\` は
+GitHub Packages の private パッケージなので、**gauntlet に依存した瞬間、認証を持たない
+workflow の \`npm ci\` が 401 で落ちる**（duct の \`ci.yml\` で実際に壊れた）。
+gauntlet が置く workflow には認証が書かれているが、既存のものには当然無い。全てに次を足す:
+
+\`\`\`yaml
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          registry-url: https://npm.pkg.github.com
+          scope: "@tepshq"
+      - run: npm ci
+        env:
+          NODE_AUTH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+\`\`\`
+
+加えて、パッケージ設定の **Manage Actions access** にそのリポジトリを Read で追加してもらう
+（これが無いと 401 ではなく 403 になる）。組織の設定なので、リポジトリの持ち主に依頼する。
+
+**b. lint / 型チェック / テストを回している workflow は gauntlet と重複する。**
+どう扱うかはリポジトリの持ち主が決めることなので、見つけたら必ず挙げる。
 
 **完了条件** — TypeScript を含む最上位ディレクトリを 1 つ残らず挙げ、それぞれについて
 「製品コードか、テストか、生成物か、設定か」を言えること。型チェックのコマンド、

@@ -81,11 +81,13 @@ export function toOutcome(report: VitestJsonReport): Omit<TestOutcome, "coverage
   };
 }
 
-export function vitestArgs(base: string | null, outDir: string): string[] {
+export function vitestArgs(base: string | null, outDir: string, files: readonly string[] = []): string[] {
   const args = ["vitest", "run", "--coverage", "--coverage.provider=v8", "--coverage.reporter=json"];
   if (base !== null) args.push(`--changed=${base}`, `--project=!${INTEGRATION_PROJECT}`);
   args.push(`--coverage.reportsDirectory=${join(outDir, "coverage")}`);
   args.push("--reporter=json", `--outputFile=${join(outDir, "result.json")}`);
+  // 位置引数はテストファイルの絞り込み。フラグの後ろに置く。
+  args.push(...files);
   return args;
 }
 
@@ -95,12 +97,15 @@ export function vitestArgs(base: string | null, outDir: string): string[] {
  * `base` を渡すとその起点以降の変更に関係するテストだけを走らせる。
  * `--changed` は変更ファイルを import する全テストをモジュールグラフから選ぶので、
  * 変更ファイルの coverage はこれで完全になる。
+ *
+ * `files` を渡すとそのテストファイルだけを走らせる。どのソースを覆っているかを
+ * 知るために使う（`mutationScope`）。`base` とは併用しない。
  */
-export function runTests(root: string, base: string | null): TestOutcome {
+export function runTests(root: string, base: string | null, files: readonly string[] = []): TestOutcome {
   const outDir = mkdtempSync(join(tmpdir(), "gauntlet-"));
   try {
     // exit code は握り潰す。閾値違反とテスト失敗が区別できないため。
-    const { combined } = capture("npx", vitestArgs(base, outDir), root);
+    const { combined } = capture("npx", vitestArgs(base, outDir, files), root);
     const report = readJson<VitestJsonReport>(join(outDir, "result.json"), "vitest の実行結果", combined);
     const outcome = toOutcome(report);
 
