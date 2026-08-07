@@ -53,22 +53,49 @@ describe("gateTouched", () => {
 
   it("違反の理由が読める", () => {
     const [violation] = gateTouched(reportOf([BAD]), new Map([["a.ts", new Set([15])]]));
-    expect(violation!.message).toContain("複雑度 5");
-    expect(violation!.message).toContain("網羅率 0%");
-    expect(violation!.message).toContain("a.ts:10");
+    expect(violation!.message).toBe("CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f");
+  });
+
+  // 網羅率を百分率にし損ねると、0% 以外が全部おかしくなる。
+  it("網羅率を百分率で出す", () => {
+    const half = fn("a.ts", 10, 20, 5, 0.5);
+    const [violation] = gateTouched(reportOf([half]), new Map([["a.ts", new Set([15])]]));
+    expect(violation!.message).toContain("網羅率 50%");
+  });
+
+  // 閾値ちょうどは通す。hue には CRAP ぴったり 8 の関数が実在する。
+  it.each([
+    [8, 1, true],
+    [9, 1, false],
+  ])("CC %i / 網羅率 %d は通るか: %s", (cc, coverage, passes) => {
+    const edge = fn("a.ts", 10, 20, cc, coverage);
+    const violations = gateTouched(reportOf([edge]), new Map([["a.ts", new Set([15])]]));
+    expect(violations).toHaveLength(passes ? 0 : 1);
+  });
+
+  // 行の範囲を無視すると、ファイルを触っただけで全関数が対象になる。
+  it("関数の範囲の外の行では触ったとみなさない", () => {
+    for (const line of [9, 21]) {
+      expect(gateTouched(reportOf([BAD]), new Map([["a.ts", new Set([line])]]))).toEqual([]);
+    }
   });
 });
 
 describe("gateRepository", () => {
   it("違反数が許容値以下なら落とさない", () => {
-    expect(gateRepository(reportOf([BAD, GOOD]), { crap: 1 })).toEqual({ kind: "ok" });
+    expect(gateRepository(reportOf([BAD, GOOD]), { crap: 1, mutation: {}, lint: {} })).toEqual({ kind: "ok" });
   });
 
   it("許容値を超えたら落とす", () => {
-    expect(gateRepository(reportOf([BAD]), { crap: 0 })).toEqual({ kind: "regressed", allowed: 0, actual: 1 });
+    expect(gateRepository(reportOf([BAD]), { crap: 0, mutation: {}, lint: {} })).toEqual({ kind: "regressed", allowed: 0, actual: 1 });
   });
 
   it("減っていたら改善として返す", () => {
-    expect(gateRepository(reportOf([GOOD]), { crap: 3 })).toEqual({ kind: "improved", from: 3, to: 0 });
+    expect(gateRepository(reportOf([GOOD]), { crap: 3, mutation: {}, lint: {} })).toEqual({ kind: "improved", from: 3, to: 0 });
+  });
+
+  // 0 から始めると、既存リポジトリは導入した瞬間に赤で埋まって誰も入れられない。
+  it("記録が無ければ今の実測値を種にする", () => {
+    expect(gateRepository(reportOf([BAD, BAD, GOOD]), null)).toEqual({ kind: "seeded", to: 2 });
   });
 });

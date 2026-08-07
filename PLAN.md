@@ -119,7 +119,7 @@ hue に対する通しの実測（起点 `HEAD~5`）:
 
 **vitest の exit code は使わない。** プロジェクトが coverage 閾値を設定していると部分実行は必ず下回って exit 1 になり、しきい値の CLI 上書きは glob キー付き設定に効かない（hue で実測）。JSON reporter でテスト結果を、`coverage-final.json` で網羅率を別々に読む。これで設定の形に依存しなくなる。
 
-### 4. ratchet と baseline ガード
+### 4. ratchet と baseline ガード — 完了
 
 - 触った関数 → 絶対閾値
 - リポジトリ全体 → baseline 比較、悪化で fail
@@ -129,20 +129,119 @@ hue に対する通しの実測（起点 `HEAD~5`）:
 **完了条件** — baseline を悪化させる変更が fail する。
 エージェントとして baseline を書き換える 2 経路（`Bash` / `Edit`）が両方ブロックされることを、実際に試して確認済み。
 
-### 5. `init` と setup skill
+実装で決まったこと:
 
-- 置くのは薄いファイルのみ: `.claude/settings.json` のフックエントリ / `gauntlet.config.json` / CI workflow / setup skill 1 枚
-- `init` の最後にフル計測してキャッシュを温める
-- `gauntlet doctor`（TypeScript バージョン判定を含む）
+- **差分は行単位で見る。** ファイル単位だと 1 行直しただけでそのファイルの全関数が絶対閾値の対象になり、既存リポジトリが即座に赤くなる。
+- **未コミットの変更と新規ファイルを含める。** エージェントはコミットせずにターンを終えるので、コミット済みだけでは書いたばかりのコードが素通りする。
+- **リポジトリ全体のラチェットは `pr` でだけ判定する。** 部分実行の coverage を全体に当てると偽陽性が出る（hue で 201 件）。
+- **改善は gauntlet 自身が自動で baseline に固定する。** エージェントは baseline を触れないので、改善の記録は道具側の仕事になる。
+- baseline の後退を git HEAD と比較して弾く仕組みは**作らなかった**。`PreToolUse` ガードで足りているうちは二重にしない。
 
-**完了条件** — 素の TypeScript プロジェクトに `init` を打つと、その直後の最初のターンで `turn` が緑になり、キャッシュが温まっている。config の中身は skill 経由でエージェントが決めている。
+gauntlet 自身に対する通し（dogfooding）:
 
-### 6. mutation testing（`pr` のみ）
+```
+gauntlet turn: pass (559ms)     差分なし
+  ✓ typecheck (174ms)  ✓ tests (0ms)  ✓ crap (18ms)
 
-Stryker + vitest runner、`--since` + `--incremental`。
+gauntlet turn: fail (685ms)     未テストで CC 5 の関数を足した状態  exit 2
+  ✗ crap  CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  src/bad.ts:1 messy
+```
+
+### 5. `init` と setup skill — 完了
+
+置くのは薄いファイルのみ: `.claude/settings.json` のフックエントリ / `gauntlet.config.json` / CI workflow / setup skill 1 枚。
+
+キャッシュを温める工程は無い（ステップ 3 でキャッシュごと捨てた）。
+`gauntlet doctor` は作らない — TypeScript の下限は gauntlet のチェック項目であって別コマンドではなく、今それを読む呼び出し元が無い。
+
+**完了条件** — 素の TypeScript プロジェクトに `init` を打つと、その直後の最初のターンで `turn` が緑になる。
+既にある `.claude/settings.json` を壊さない。
+
+素の vitest プロジェクト（2 テスト）での通し:
+
+```
+$ gauntlet init
+  gauntlet.config.json / .claude/settings.json
+  .github/workflows/gauntlet.yml / .claude/skills/gauntlet/SKILL.md
+
+$ gauntlet run --tier=turn          差分なし
+gauntlet turn: pass (1390ms)  ✓ typecheck (603ms) ✓ tests (0ms) ✓ crap (27ms)
+
+$ gauntlet run --tier=turn          未テストで CC 5 の関数を足した状態   exit 2
+gauntlet turn: fail (670ms)
+  ✗ crap  CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  src/broken.ts:1 tangled
+```
+
+**新規ファイルにテストが無いと `tests` は 0 件で通る。** `--changed` が選ぶテストが無いため。
+これは crap 側が網羅率 0 として捕まえるので穴にはならないが、2 つのチェックの合わせ技で成立している。
+
+パッケージ名は **`@tepshq/gauntlet`**。開発中止した旧 gauntlet と同名で、registry 上のものは作り直す。
+
+### 6. mutation testing（`pr` のみ）— 完了
+
+Stryker + vitest runner。変更されたソースだけを `--mutate` に渡す。
 
 **完了条件** — assert を取り除いた弱いテストを入れると `pr` が赤くなる。
 その状態で `turn` は緑のまま（tier の役割分担が意図通り）。
+
+**`--inPlace` が必須。** Stryker は既定でサンドボックスにコピーし、その過程で
+`ts.parseConfigFileTextToJson` を呼ぶ。TypeScript 7 にその API は無く落ちる
+（Volar や ts-jest が壊れているのと同じ根っこ）。`--inPlace` はコピーしないので前処理が走らない。
+実ファイルを書き換えるが、mutation は CI でしか走らせないので作業ツリーは使い捨て。
+Stryker 9.6.1 が最新で、修正版は無い。
+
+`--since` は CLI に無い。`--mutate` が `file:startLine:startCol-endLine:endCol` の範囲指定を取れるので、
+必要になればそちらで行単位に絞れる。今は変更ファイル丸ごと渡している。
+
+`NoCoverage` は数えない。それは網羅率の話で CRAP が既に見ている。
+mutation が独自に捕まえるのは「テストは通るが assert が弱い」ケースなので `Survived` だけを違反にする。
+
+**変異対象は「変更されたファイル」ではなく「この差分で走ったテストが触れたソース」。**
+変更ファイルだけを対象にすると、テストの assert を消しただけの差分では対応するソースが
+変異対象から外れ、mutation ゲートを素通りできた（gameable）。完了条件の検証で実際に踏んだ。
+coverage レポートに現れたファイルを渡すことで塞いだ。
+
+gauntlet 自身に対する `pr` の推移:
+
+| 状態 | Survived | 備考 |
+| --- | --- | --- |
+| 変更ファイルのみを対象 | 23 | うち 1 件は等価変異（`Stryker disable` で除外） |
+| 上を全て潰した | 0 | 変異 347 件中 |
+| 対象をテストが触れたソースに拡大 | **53** | 対象が広がって新しい穴が出た |
+
+変異の種類（`StringLiteral` 等）だけで信号かノイズかは判断できない。
+実際 `PreToolUse` の `matcher` を空文字にしてもテストが気づかなかった —
+つまり「baseline ガードが起動しなくなっても緑」の状態だった。
+
+**mutation にもファイル単位のラチェットを置いた**（DESIGN §3）。gauntlet 自身の種は:
+
+```
+config.ts 17 / complexity.ts 12 / coverage.ts 10 / ast.ts 8 / guard.ts 4 / その他 0〜1
+```
+
+**「触った関数の中の変異だけを絶対的に見る」は入れなかった。** ラチェットが既に
+「増やさない」を保証しており、その上に 2 つ目の機構を足す根拠がまだ無い（CLAUDE.md の YAGNI）。
+ラチェットだけでは足りない証拠が出たら足す。
+
+gauntlet 自身に対する `pr`: **12.6 秒**で `lint`（未実装）以外すべて緑。
+
+**baseline は記録が無ければ最初の実測値を種にする。** 0 から始めると既存リポジトリは
+導入した瞬間に赤で埋まって誰も入れられない。gauntlet 自身では 12 が置かれた。
+
+### 6.5 lint — 完了
+
+eslint を `--format json` で叩き、ファイルごとのエラー数を mutation と同じラチェット
+（`ratchetByFile`）に載せた。ルールは対象リポジトリが持つ。warning は数えない。
+
+この過程で **TypeScript 7 の下限要求を撤回**した（DESIGN §5）。`typescript-eslint` の
+peer 範囲が `<6.1.0` で、TS 7 では lint ゲートそのものが成立しないため。
+gauntlet 自身も TypeScript 6.0.3 に落とし、`typescript` は runtime 依存から外した
+（`oxc-parser` に切り替えて以降どこも import していない死んだ依存だった）。
+
+ランタイム依存は **ajv / istanbul-lib-coverage / oxc-parser** の 3 つだけ。
+
+gauntlet 自身に対する `pr`: **14.6 秒で全 5 ゲート緑**（typecheck 0.5s / tests 0.7s /
+crap 0s / lint 0.5s / mutation 12.8s）。テスト 203 件。
 
 ### 7. パイロット投入
 
@@ -152,6 +251,33 @@ Stryker + vitest runner、`--since` + `--incremental`。
 
 **完了条件** — hue で実際の PR が 1 本 gauntlet を通ってマージできる。
 3 リポジトリそれぞれで `turn` の実測時間を記録し、上のベースライン表に追記済み。
+
+### hue（完了、未コミット）
+
+旧 `@tepshq/gauntlet` 0.8.0 を完全に除去（`.gauntlet/` 5 ファイル・`gauntlet.config.mjs`・
+依存・scripts 5 本）。`lint` と `depcruise` は旧 gauntlet 経由で eslint と dependency-cruiser を
+呼んでいただけなので、下地のツールを直接叩く形に戻した。
+
+| | 実測 |
+| --- | --- |
+| `turn` | **5.36 秒**（typecheck 0.6s / tests 4.7s / crap 0s） |
+| `pr` | **142 秒**（うち mutation **137 秒**） |
+| 測る対象 | 24 ファイル（`src` + `bin`） |
+| CRAP 違反 | 1（seed 済み） |
+| mutation 生き残り | 590（seed 済み。`server.ts` 137 / `stream.ts` 103 / `runner.ts` 68 が上位） |
+
+`turn` の 4.7 秒はテスト実行。設定ファイルを変更しているため vitest が全テストを選んでいる状態で、
+ソースだけの変更ならもっと短くなる。
+
+パイロットで見つけて直したもの:
+
+- **`npx stryker` が対象リポジトリに Stryker が無いと npm から非推奨の別パッケージを取ってくる。**
+  `node_modules/.bin/stryker` を直接見て、無ければ導入コマンドを示して止める。
+- **下位ツールのエラーを握り潰していた。** レポートが出ていないときは Stryker の出力を添えて落とす。
+- **`init` が測る範囲を黙って推測していた。** 対象外に TypeScript がある場所を出すようにし、
+  skill を「エージェントがリポジトリを読み、理由つきで提案し、ユーザーの同意を得てから
+  `init` を叩く」流れに書き直した（DESIGN §4）。tsconfig の `include` から機械的に導けるかを
+  3 本で試したが、hue は正解・teps と duct は不正解で、判断が要ることが確認できた。
 
 ---
 

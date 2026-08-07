@@ -1,0 +1,29 @@
+{
+  "crap": 6,
+  "mutation": {
+    "src/baseline.ts": 1,
+    "src/cli.ts": 0,
+    "src/config.ts": 17,
+    "src/crap.ts": 0,
+    "src/gate.ts": 0,
+    "src/git.ts": 0,
+    "src/guard.ts": 4,
+    "src/index.ts": 0,
+    "src/init.ts": 0,
+    "src/report.ts": 0,
+    "src/run.ts": 0,
+    "src/tier.ts": 1,
+    "src/typescript/adapter.ts": 1,
+    "src/typescript/ast.ts": 8,
+    "src/typescript/complexity.ts": 12,
+    "src/typescript/coverage.ts": 10,
+    "src/typescript/mutation.ts": 0,
+    "src/typescript/runner.ts": 0,
+    "src/typescript/lint.ts": 1,
+    "src/exec.ts": 3
+  },
+  "lint": {
+    "src/cli.ts": 1,
+    "src/run.ts": 1
+  }
+}

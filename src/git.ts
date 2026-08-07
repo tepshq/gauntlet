@@ -27,9 +27,36 @@ function lines(output: string): string[] {
   return output === "" ? [] : output.split("\n");
 }
 
+/**
+ * 探す順。ローカルに無ければリモート追跡ブランチを見る。
+ *
+ * CI の checkout は対象ブランチしかローカルに作らないので、`main` は解決できず
+ * `origin/main` だけが存在する。手元では逆のこともあるため、両方を順に試す。
+ */
+export function branchCandidates(defaultBranch: string): string[] {
+  return defaultBranch.includes("/") ? [defaultBranch] : [defaultBranch, `origin/${defaultBranch}`];
+}
+
+function tryMergeBase(root: string, ref: string): string | null {
+  try {
+    return git(root, ["merge-base", "HEAD", ref]);
+  } catch {
+    return null;
+  }
+}
+
 /** デフォルトブランチとの分岐点。turn と pr はこれを共有する。 */
 export function mergeBase(root: string, defaultBranch: string): string {
-  return git(root, ["merge-base", "HEAD", defaultBranch]);
+  const found = branchCandidates(defaultBranch)
+    .map((ref) => tryMergeBase(root, ref))
+    .find((base) => base !== null);
+  if (found === undefined) {
+    throw new GitError(
+      `${defaultBranch} との分岐点が見つかりません。` +
+        `CI では actions/checkout に fetch-depth: 0 を指定してください。`,
+    );
+  }
+  return found;
 }
 
 /** `@@ -a,b +c,d @@` の新側だけを読む。削除のみのハンクは新側の行を持たない。 */

@@ -49,7 +49,14 @@ export function gateTouched(report: AdapterReport, changed: Map<string, Set<numb
     .map(toViolation);
 }
 
-/** リポジトリ全体の違反数を許容値と突き合わせる。フル実行の結果にだけ当てる。 */
-export function gateRepository(report: AdapterReport, baseline: Baseline): RatchetOutcome {
-  return ratchet(baseline, report.functions.filter(violatesThreshold).length);
+/**
+ * リポジトリ全体の違反数を許容値と突き合わせる。フル実行の結果にだけ当てる。
+ *
+ * 記録が無ければ今の実測値を種にする（`seeded`）。既存リポジトリを導入初日に
+ * 赤で埋めないため。以降はそこから下げる方向にしか動かない。
+ */
+export function gateRepository(report: AdapterReport, baseline: Baseline | null): RatchetOutcome {
+  const actual = report.functions.filter(violatesThreshold).length;
+  if (baseline === null) return { kind: "seeded", to: actual };
+  return ratchet(baseline, actual);
 }

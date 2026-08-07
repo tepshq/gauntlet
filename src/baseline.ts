@@ -13,15 +13,32 @@ export const BASELINE_FILENAME = "gauntlet.baseline.json";
 export interface Baseline {
   /** リポジトリ全体で許容する CRAP 違反の数。 */
   crap: number;
+  /**
+   * ファイルごとに許容する「生き残った変異」の数。
+   *
+   * CRAP と違って単一の数にできない。mutation は差分に関係するファイルだけを
+   * 対象にするので、件数は差分の大きさで変わり、リポジトリ全体の 1 つの数と
+   * 比べても意味を持たない。今回の対象になったファイルだけを突き合わせる。
+   */
+  mutation: Record<string, number>;
+  /** ファイルごとに許容する lint エラーの数。 */
+  lint: Record<string, number>;
 }
 
-/** 無ければ 0 から始める。新規リポジトリは最初から絶対閾値と同じ厳しさになる。 */
-export function loadBaseline(root: string): Baseline {
+/**
+ * まだ記録が無ければ null。
+ *
+ * 呼び出し側は最初の実測値でそこに種を置く。0 から始めると、既存リポジトリは
+ * 導入した瞬間に赤で埋まって誰も入れられない。ラチェットは「今より悪くしない」
+ * ための仕組みであって、導入初日に借金を返させるものではない。
+ */
+export function loadBaseline(root: string): Baseline | null {
   try {
     const data = JSON.parse(readFileSync(join(root, BASELINE_FILENAME), "utf8")) as Partial<Baseline>;
-    return { crap: typeof data.crap === "number" ? data.crap : 0 };
+    if (typeof data.crap !== "number") return null;
+    return { crap: data.crap, mutation: data.mutation ?? {}, lint: data.lint ?? {} };
   } catch {
-    return { crap: 0 };
+    return null;
   }
 }
 
@@ -31,6 +48,7 @@ export function saveBaseline(root: string, baseline: Baseline): void {
 
 export type RatchetOutcome =
   | { kind: "ok" }
+  | { kind: "seeded"; to: number }
   | { kind: "improved"; from: number; to: number }
   | { kind: "regressed"; allowed: number; actual: number };
 
@@ -44,4 +62,33 @@ export function ratchet(baseline: Baseline, actual: number): RatchetOutcome {
   if (actual > baseline.crap) return { kind: "regressed", allowed: baseline.crap, actual };
   if (actual < baseline.crap) return { kind: "improved", from: baseline.crap, to: actual };
   return { kind: "ok" };
+}
+
+export interface FileRatchet {
+  /** 許容数を超えたファイル。 */
+  regressed: { file: string; allowed: number; actual: number }[];
+  /** 対象になったファイルの新しい許容数。対象外のファイルは元のまま残す。 */
+  updated: Record<string, number>;
+}
+
+/**
+ * ファイルごとに件数を突き合わせる。mutation と lint が共有する。
+ *
+ * 記録が無いファイルは今の実測値を種にする。既存リポジトリは導入時点で
+ * 大量に抱えているので、0 から始めると誰も入れられない。
+ */
+export function ratchetByFile(
+  allowed: Record<string, number>,
+  scanned: readonly string[],
+  counts: Record<string, number>,
+): FileRatchet {
+  const regressed: FileRatchet["regressed"] = [];
+  const updated = { ...allowed };
+  for (const file of scanned) {
+    const actual = counts[file] ?? 0;
+    const limit = allowed[file];
+    if (limit !== undefined && actual > limit) regressed.push({ file, allowed: limit, actual });
+    else updated[file] = actual;
+  }
+  return { regressed, updated };
 }
