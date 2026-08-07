@@ -364,6 +364,38 @@ GitHub Packages の認証経路がこれで検証できた（パッケージ設�
   `init` を叩く」流れに書き直した（DESIGN §4）。tsconfig の `include` から機械的に導けるかを
   3 本で試したが、hue は正解・teps と duct は不正解で、判断が要ることが確認できた。
 
+### duct（進行中、`try-gauntlet` ブランチ / tepshq/duct#563）
+
+**唯一、リポジトリの持ち主が skill に沿って自分で入れた例。** こちらが用意した
+`adopt-gauntlet-v2`（#559）は使わず閉じた。導入手順そのものの検証がここで取れる。
+
+測る対象は `lib` / `components` / `app` の `.ts` + `.tsx`（`src/` は無い）。
+
+duct で見つけて直したもの:
+
+- **`--exclude` の glob は vitest の `projects` に伝わらない。** 統合テストが `turn` でも走っていた。
+  project 名で `--project=!integration` を指定する形に変えた。project を使っていない
+  リポジトリでは無害なので、1 つの仕組みで両方に効く。
+- **vitest はテストが落ちると coverage を書き出さない。** `coverage-final.json を読めません` が
+  出て、本当の原因（テストの失敗）が見えなくなっていた。落ちていたら coverage を読まない。
+- **`git ls-files` は非 ASCII のパスを 8 進エスケープする。** 日本語ファイル名で `ENOENT`。
+  全 git 呼び出しに `core.quotePath=false` を付け、読めないファイルは 0 行として扱う。
+- **`coverage.include` のずれを黙って緑にしていた。** 既定の `src/**/*.ts` のまま入れると
+  duct には `src/` が無いので対象 0 件で緑になる。`measurementFaults` を入れた（0.0.8）。
+- **baseline が履歴に無いままだった。** `pr` を CI でしか回していないので種が捨てられ、
+  ラチェットが一度も噛んでいなかった。種を置いた回は落とすようにした（0.0.8）。
+
+duct 側で残っているもの（gauntlet の問題ではない）:
+
+- **CI の `npm ci` が 403。** パッケージ設定の Manage Actions access に `tepshq/duct` が無い。
+  hue は付与済みで通っている。
+- **workflow に Postgres サービスが無い。** `pr` は統合テストを走らせるので必ず落ちる。skill 3c。
+- **`jscpd` / `dependency-cruiser` / `.dependency-cruiser.cjs` / `package.json` の `"gauntlet"` キー**
+  — 0.0.7 に duplication / dependencies ゲートは無く、どこからも読まれない。中止した旧版の名残。
+- **Prisma client が schema とずれている**（`sourceType` 等）。`postinstall` の
+  `prisma generate` が `DATABASE_URL` 無しで失敗するため。
+- **`ci.yml` と `gauntlet.yml` が lint / 型チェック / テストで重複している。**
+
 ---
 
 ## 前提が崩れたら戻る先

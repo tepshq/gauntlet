@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, countByFile, CRAP_NEEDS_TESTS, crapViolations, formatResult, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, countByFile, CRAP_NEEDS_TESTS, crapCheckViolations, crapViolations, formatResult, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
 describe("parseTier", () => {
@@ -71,10 +71,30 @@ describe("applyRatchet", () => {
     }
   }
 
-  it("記録が無ければ実測値を種にして通す", () => {
+  // 種を置くのは通すためではない。CI だけで回すとコンテナに書かれて捨てられ、
+  // 毎回いまの状態が許容値になる。落として、コミットさせる。
+  it("記録が無ければ種を置いて落とす", () => {
     withRoot((root) => {
-      expect(applyRatchet(violating(3, root))).toEqual([]);
+      expect(applyRatchet(violating(3, root))).toEqual([BASELINE_NOT_COMMITTED]);
       expect(loadBaseline(root)).toEqual({ crap: 3, mutation: {}, lint: {} });
+    });
+  });
+
+  // 落としてもファイルを残さないと、コミットするものが無くて詰む。
+  it("落とした回のファイルは残す", () => {
+    withRoot((root) => {
+      applyRatchet(violating(3, root));
+      expect(applyRatchet(violating(3, root))).toEqual([]);
+    });
+  });
+
+  // 文言はエージェントへのフィードバックそのもの。理由が落ちると
+  // 「コミットしろと言われたから baseline を触る」だけが伝わる。
+  it("コミットを促す文言を丸ごと固定する", () => {
+    expect(BASELINE_NOT_COMMITTED).toEqual({
+      message:
+        "gauntlet.baseline.json を作りました。コミットしてください。" +
+        "履歴に無いと毎回いまの状態が許容値として置き直され、ラチェットが噛みません",
     });
   });
 
@@ -288,5 +308,63 @@ describe("crapViolations", () => {
   // 本当の原因はテストなので、そう言う。偽の CRAP 違反で埋もれさせない。
   it("テストが落ちているときの文言", () => {
     expect(CRAP_NEEDS_TESTS).toEqual({ message: "テストが落ちているため計測できません" });
+  });
+});
+
+describe("crapCheckViolations", () => {
+  const root = "/repo";
+  const good: FunctionReport = {
+    location: { file: "a.ts", name: "f", scope: [], startLine: 1, startColumn: 0, endLine: 5, endColumn: 0 },
+    cc: 1,
+    coverage: 1,
+  };
+  const report: AdapterReport = {
+    schemaVersion: REPORT_SCHEMA_VERSION,
+    adapter: { name: "typescript", version: "0" },
+    root,
+    functions: [good],
+    excluded: [],
+  };
+  const empty: AdapterReport = { ...report, functions: [] };
+  const green = { passed: true, total: 10 };
+
+  it("測れていて違反が無ければ通す", () => {
+    expect(crapCheckViolations("turn", report, new Map(), green)).toEqual([]);
+  });
+
+  // テストが落ちていれば coverage が無い。偽の違反で本当の原因を埋もれさせない。
+  it("テストが落ちていればそう言う", () => {
+    expect(crapCheckViolations("turn", report, new Map(), { passed: false, total: 10 })).toEqual([CRAP_NEEDS_TESTS]);
+  });
+
+  // 設定が現実とずれていると「違反ゼロ」に見える。走らなかったゲートを緑にしない。
+  it("対象が空なら閾値を当てずに落とす", () => {
+    const violations = crapCheckViolations("turn", empty, new Map(), green);
+    expect(violations[0]!.message).toContain("source.include");
+  });
+
+  it("テスト失敗の方が設定のずれより先に出る", () => {
+    expect(crapCheckViolations("turn", empty, new Map(), { passed: false, total: 10 })).toEqual([CRAP_NEEDS_TESTS]);
+  });
+
+  // 測れていることを確かめたら、次は閾値を当てる。ここを飛ばすと
+  // 「測定は健全」を確認した見返りが何も無くなる。
+  it("測れているなら閾値の違反を出す", () => {
+    const violating: FunctionReport = { ...good, location: { ...good.location, name: "g" }, cc: 5, coverage: 0 };
+    // good（網羅率 1）が居るので「どの関数も覆われていない」には当たらない。
+    const mixed: AdapterReport = { ...report, functions: [good, violating] };
+    const violations = crapCheckViolations("turn", mixed, new Map([["a.ts", new Set([1])]]), green);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]!.message).toContain("CRAP 30.0");
+  });
+
+  // 設定のずれを見つけたら、閾値の判定はしない。
+  // 両方出すと、原因（設定）が結果（大量の違反）に埋もれる。
+  it("設定のずれがあれば閾値の違反は出さない", () => {
+    const violating: FunctionReport = { ...good, cc: 5, coverage: 0 };
+    const broken: AdapterReport = { ...report, functions: [violating] };
+    const violations = crapCheckViolations("turn", broken, new Map([["a.ts", new Set([1])]]), green);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]!.message).toContain("coverage.include");
   });
 });

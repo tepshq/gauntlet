@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { gateRepository, gateTouched } from "./gate.ts";
+import { gateRepository, gateTouched, measurementFaults } from "./gate.ts";
 
 function fn(file: string, startLine: number, endLine: number, cc: number, coverage: number): FunctionReport {
   return {
@@ -97,5 +97,45 @@ describe("gateRepository", () => {
   // 0 から始めると、既存リポジトリは導入した瞬間に赤で埋まって誰も入れられない。
   it("記録が無ければ今の実測値を種にする", () => {
     expect(gateRepository(reportOf([BAD, BAD, GOOD]), null)).toEqual({ kind: "seeded", to: 2 });
+  });
+});
+
+describe("measurementFaults", () => {
+  const covered: FunctionReport = fn("a.ts", 1, 5, 1, 1);
+  const bare: FunctionReport = fn("a.ts", 1, 5, 1, 0);
+
+  it("測れていれば何も言わない", () => {
+    expect(measurementFaults(reportOf([covered]), 10)).toEqual([]);
+  });
+
+  // メッセージだけ読んで直せる必要がある。原因の場所を名指しする。
+  it("対象が 1 つも無ければ、どこを見るべきか言う", () => {
+    expect(measurementFaults(reportOf([]), 10)).toEqual([
+      {
+        message:
+          "測る対象が 1 つもありません。gauntlet.config.json の source.include が" +
+          "実在しないパスを指している可能性があります",
+      },
+    ]);
+  });
+
+  // 「テストが無いから 0%」と「coverage 設定が噛み合っていない」を区別できないまま
+  // 全関数を違反にしてはいけない。件数を出すと、どちらか判断しやすい。
+  it("テストが走ったのに誰も覆われていなければ、件数つきで落とす", () => {
+    expect(measurementFaults(reportOf([bare, bare]), 3822)).toEqual([
+      {
+        message:
+          "テストが 3822 件走ったのに、どの関数も覆われていません。" +
+          "vitest の coverage.include が測る対象と噛み合っていない可能性があります",
+      },
+    ]);
+  });
+
+  it("テストが 0 件なら網羅率 0 でも咎めない", () => {
+    expect(measurementFaults(reportOf([bare]), 0)).toEqual([]);
+  });
+
+  it("1 つでも覆われていれば咎めない", () => {
+    expect(measurementFaults(reportOf([bare, covered]), 10)).toEqual([]);
   });
 });

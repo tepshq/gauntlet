@@ -25,6 +25,36 @@ function violatesThreshold(fn: FunctionReport): boolean {
   return crap(fn.cc, fn.coverage) > CRAP_THRESHOLD;
 }
 
+/**
+ * 測れていないのに緑を出さないための検査。
+ *
+ * 設定が現実とずれると、gauntlet は「違反ゼロ」を報告する。走らなかったゲートが
+ * 緑に見えるのは、設計で `flaky` として避けた形そのもの。落として理由を言う。
+ */
+export function measurementFaults(report: AdapterReport, testsRan: number): Violation[] {
+  if (report.functions.length === 0) {
+    return [
+      {
+        message:
+          "測る対象が 1 つもありません。gauntlet.config.json の source.include が" +
+          "実在しないパスを指している可能性があります",
+      },
+    ];
+  }
+  // テストが走ったのに 1 関数も覆われていないなら、coverage の設定が噛み合っていない。
+  // 「テストが無いから 0%」と区別がつかないまま全関数を違反にしてはいけない。
+  if (testsRan > 0 && report.functions.every((fn) => fn.coverage === 0)) {
+    return [
+      {
+        message:
+          `テストが ${testsRan} 件走ったのに、どの関数も覆われていません。` +
+          "vitest の coverage.include が測る対象と噛み合っていない可能性があります",
+      },
+    ];
+  }
+  return [];
+}
+
 function toViolation(fn: FunctionReport): Violation {
   const score = crap(fn.cc, fn.coverage).toFixed(1);
   const coverage = (fn.coverage * 100).toFixed(0);

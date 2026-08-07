@@ -4,9 +4,9 @@
 
 import { relative } from "node:path";
 import { ConfigError, type GauntletConfig, loadConfig } from "./config.ts";
-import { loadBaseline, ratchetByFile, saveBaseline } from "./baseline.ts";
+import { BASELINE_FILENAME, loadBaseline, ratchetByFile, saveBaseline } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
-import { gateRepository, gateTouched } from "./gate.ts";
+import { gateRepository, gateTouched, measurementFaults } from "./gate.ts";
 import { changedLines, mergeBase } from "./git.ts";
 import {
   type CheckName,
@@ -89,7 +89,7 @@ export function runTier(root: string, tier: TierName): TierResult {
   const runners: Record<CheckName, () => CheckResult> = {
     typecheck: () => typecheck(root, config),
     tests: () => testsCheck(outcome, testsMs),
-    crap: () => crapCheck(tier, report, changed, outcome.passed),
+    crap: () => crapCheck(tier, report, changed, outcome),
     mutation: () => mutationCheck(root, config, mutationScope(root, base)),
     lint: () => lintCheck(root, config),
   };
@@ -132,9 +132,24 @@ function mutationScope(root: string, base: string): string[] {
 }
 
 /**
+ * 種を置いただけの回は通さない。
+ *
+ * `pr` を CI でしか回さないと、置いた種はコンテナの中に書かれて捨てられる。
+ * 毎 PR が自分の状態から許容値を置き直すことになり、**どれだけ悪化しても通る**
+ * （duct で実測。導入して数回 CI を回してもファイルが履歴に無かった）。
+ *
+ * ファイルは書いたまま残すので、コミットすれば次から噛む。
+ */
+export const BASELINE_NOT_COMMITTED: Violation = {
+  message:
+    `${BASELINE_FILENAME} を作りました。コミットしてください。` +
+    "履歴に無いと毎回いまの状態が許容値として置き直され、ラチェットが噛みません",
+};
+
+/**
  * リポジトリ全体のラチェットを当て、必要なら記録を更新する。
  *
- * 改善と初回の種置きは自動で固定する。記録し損ねると許容値が緩いまま残り、
+ * 改善は自動で固定する。記録し損ねると許容値が緩いまま残り、
  * あとで同じだけ悪化させても通ってしまう。
  */
 export function applyRatchet(report: ReturnType<typeof analyze>): Violation[] {
@@ -144,7 +159,7 @@ export function applyRatchet(report: ReturnType<typeof analyze>): Violation[] {
     return [{ message: `リポジトリ全体の違反が ${outcome.allowed} → ${outcome.actual} に増えました` }];
   }
   if (outcome.kind !== "ok") saveBaseline(report.root, { ...EMPTY_BASELINE, ...baseline, crap: outcome.to });
-  return [];
+  return outcome.kind === "seeded" ? [BASELINE_NOT_COMMITTED] : [];
 }
 
 /**
@@ -164,13 +179,30 @@ export function crapViolations(
   return [...gateTouched(report, changed), ...(tier === "pr" ? applyRatchet(report) : [])];
 }
 
+/**
+ * 測れているか確かめてから閾値を当てる。
+ *
+ * テストが落ちていれば coverage が無く、設定がずれていれば対象が空になる。
+ * どちらも「違反ゼロ」に見えてしまうので、先に潰す。
+ */
+export function crapCheckViolations(
+  tier: TierName,
+  report: ReturnType<typeof analyze>,
+  changed: Map<string, Set<number>>,
+  outcome: Pick<TestOutcome, "passed" | "total">,
+): Violation[] {
+  if (!outcome.passed) return [CRAP_NEEDS_TESTS];
+  const faults = measurementFaults(report, outcome.total);
+  return faults.length === 0 ? crapViolations(tier, report, changed) : faults;
+}
+
 function crapCheck(
   tier: TierName,
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
-  testsPassed: boolean,
+  outcome: Pick<TestOutcome, "passed" | "total">,
 ): CheckResult {
-  return timed("crap", () => (testsPassed ? crapViolations(tier, report, changed) : [CRAP_NEEDS_TESTS]));
+  return timed("crap", () => crapCheckViolations(tier, report, changed, outcome));
 }
 
 /**
