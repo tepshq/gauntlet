@@ -304,11 +304,9 @@ teps で見つけて直したもの:
 
 ### 一巡したら決めたいこと
 
-**mutation が「0 件検査して緑」と「検査して問題なし」を区別していない。**
-hue の CI で `✓ mutation (0ms)` が出た。差分にソースが無いので正しい挙動だが、
-`--changed` が取りこぼした場合も同じ表示になる。走らなかったゲートが緑に見えるのは
-設計で `flaky` として避けた形そのもの。旧 gauntlet 0.8.0 は `vacuousUnless` で
-実質何も検査していないゲートを負債として数えていた。
+**~~mutation が「0 件検査して緑」と「検査して問題なし」を区別していない。~~ 解決（0.0.10）。**
+判定は足さず、全チェックが「何を見たか」を必ず出す形にした（`CheckResult.scope`、DESIGN §2）。
+`✓ mutation (0ms)  変異対象 0 ファイル` と読めるので、沈黙が主張になった。
 
 **重複（duplication）のゲートが無い。** 「検討して外したもの」にも入っておらず、単に
 考えていなかった。旧版は jscpd で持っていた。実際、gauntlet 自身で同じ `capture` を
@@ -364,12 +362,23 @@ GitHub Packages の認証経路がこれで検証できた（パッケージ設�
   `init` を叩く」流れに書き直した（DESIGN §4）。tsconfig の `include` から機械的に導けるかを
   3 本で試したが、hue は正解・teps と duct は不正解で、判断が要ることが確認できた。
 
-### duct（進行中、`try-gauntlet` ブランチ / tepshq/duct#563）
+### duct（CI 緑、`try-gauntlet` ブランチ / tepshq/duct#563 — マージ待ち）
 
-**唯一、リポジトリの持ち主が skill に沿って自分で入れた例。** こちらが用意した
+**唯一、リポジトリの持ち主が導入ガイドに沿って自分で入れた例**（skill はまだ実地で
+試されていない — 開発者が読んだのはアーティファクトのガイド）。こちらが用意した
 `adopt-gauntlet-v2`（#559）は使わず閉じた。導入手順そのものの検証がここで取れる。
 
 測る対象は `lib` / `components` / `app` の `.ts` + `.tsx`（`src/` は無い）。
+
+| | 手元 | CI |
+| --- | --- | --- |
+| `pr`（0.0.10、差分にソース無し） | 68〜82 秒 | 523〜791 秒 |
+| うちテスト（7355 件） | 52〜66 秒 | 463〜694 秒 |
+
+**注意: 3 本のパイロット全部で、これまでの緑は「触った関数 0 / 変異対象 0」。**
+差分が設定とバージョン上げだけなので正しいが、ゲートが実際にソースを検査した緑は
+まだ 1 つも無い（0.0.11 の検証で一時変更を作って mutation が判定を出すことだけは確認済み）。
+各リポジトリで実際にソースを触る最初の PR が本当の試験。
 
 duct で見つけて直したもの:
 
@@ -418,16 +427,21 @@ duct で見つけて直したもの:
   `does not provide an export named 'globSync'` だけを出して落ちる。入口を薄い層に分けて、
   中身を読み込む前にバージョンを見る。Node 20 の docker で文言と exit 2 を実測して確認した。
 
-duct 側で残っているもの（gauntlet の問題ではない）:
+duct 側で片付いたもの（#563 上で解消。いずれもガイド／skill の穴として gauntlet 側に還元済み）:
 
-- **CI の `npm ci` が 403。** パッケージ設定の Manage Actions access に `tepshq/duct` が無い。
-  hue は付与済みで通っている。
-- **workflow に Postgres サービスが無い。** `pr` は統合テストを走らせるので必ず落ちる。skill 3c。
-- **`jscpd` / `dependency-cruiser` / `.dependency-cruiser.cjs` / `package.json` の `"gauntlet"` キー**
-  — 0.0.7 に duplication / dependencies ゲートは無く、どこからも読まれない。中止した旧版の名残。
-- **Prisma client が schema とずれている**（`sourceType` 等）。`postinstall` の
-  `prisma generate` が `DATABASE_URL` 無しで失敗するため。
-- **`ci.yml` と `gauntlet.yml` が lint / 型チェック / テストで重複している。**
+- ~~CI の `npm ci` が 403~~ — Manage Actions access に `tepshq/duct` を Read で追加した
+- ~~workflow に Postgres が無い~~ — `ci.yml` と同じ service container・migrate・seed を足した
+- ~~`jscpd` / `dependency-cruiser` / `"gauntlet"` キー~~ — 削除した（中止した旧版の名残だった）
+- ~~baseline が履歴に無い~~ — 手元で `pr` を回して種を置き、コミットした（crap 761）
+
+duct 側に残っているもの（duct の判断待ち）:
+
+- **Prisma client が schema とずれる**ことがある（`postinstall` の `prisma generate` が
+  `DATABASE_URL` 無しで失敗するため）。gauntlet の問題ではない。
+- **`ci.yml` と `gauntlet.yml` が lint / 型チェック / テストで重複している。** `ci.yml` が
+  Node 20 なので 1 本にまとめられない。CI の Node を上げるかは duct の判断（#563 に記載）。
+- **CI の `pr` が 13 分**（うちテスト 11.5 分。手元の 7 倍）。`gauntlet.yml` に timeout は無いが、
+  テストが増えれば `ci.yml` の 15 分感覚を超えていく。
 
 ---
 
