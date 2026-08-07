@@ -64,3 +64,14 @@ describe("countErrors", () => {
     expect(countErrors([], ROOT)).toEqual({});
   });
 });
+
+describe("parseLintOutput の原因表示", () => {
+  // 原因は標準エラーにしか出ないことがある。stdout だけ見せると空の報告になる。
+  it("detail があればそちらを見せる", () => {
+    expect(() => parseLintOutput("", "/repo", "No files matching the pattern")).toThrow(/No files matching/);
+  });
+
+  it("detail が空なら stdout を見せる", () => {
+    expect(() => parseLintOutput("broken", "/repo", "")).toThrow(/broken/);
+  });
+});

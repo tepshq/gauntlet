@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, countByFile, formatResult, mutationTargets, parseTier, testsCheck } from "./run.ts";
+import { applyRatchet, countByFile, formatResult, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
 describe("parseTier", () => {
@@ -211,5 +211,33 @@ describe("formatResult", () => {
     expect(formatResult(result([many]))).toBe(
       ["gauntlet turn: fail (34ms)", "  ✗ crap (12ms)", "    一つ目", "    二つ目"].join("\n"),
     );
+  });
+});
+
+describe("typecheckViolations", () => {
+  it("診断が無ければ通す", () => {
+    expect(typecheckViolations({ stdout: "", combined: "" })).toEqual([]);
+  });
+
+  // 既定は tsc。プロジェクトが上書きしなければこれが走る。
+  it("既定の型チェックコマンド", () => {
+    expect(DEFAULT_TYPECHECK).toBe("tsc --noEmit");
+  });
+
+  // 前後の空白を落とさないと、報告に無駄な改行が混ざる。
+  it("報告から前後の空白を落とす", () => {
+    expect(typecheckViolations({ stdout: "x", combined: "\n  a.ts(1,1): error  \n" })).toEqual([
+      { message: "a.ts(1,1): error" },
+    ]);
+  });
+
+  it("空白だけなら通す", () => {
+    expect(typecheckViolations({ stdout: "\n  \n", combined: "" })).toEqual([]);
+  });
+
+  // 原因が標準エラーにしか出ないこともあるので、報告には combined を使う。
+  it("診断があれば combined を出す", () => {
+    const result = { stdout: "a.ts(1,1): error TS1005", combined: "a.ts(1,1): error TS1005\nextra" };
+    expect(typecheckViolations(result)).toEqual([{ message: "a.ts(1,1): error TS1005\nextra" }]);
   });
 });

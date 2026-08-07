@@ -7,6 +7,7 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { join } from "node:path";
 
 export interface Captured {
   /** 標準出力だけ。機械可読な出力を読むときはこちら。 */
@@ -15,13 +16,36 @@ export interface Captured {
   combined: string;
 }
 
-export function capture(bin: string, args: readonly string[], cwd: string): Captured {
+function toCaptured(run: () => string): Captured {
   try {
-    const stdout = execFileSync(bin, args, { cwd, encoding: "utf8", stdio: "pipe" });
+    const stdout = run();
     return { stdout, combined: stdout };
   } catch (error) {
     const failure = error as { stdout?: string; stderr?: string };
     const stdout = failure.stdout ?? "";
     return { stdout, combined: `${stdout}${failure.stderr ?? (error as Error).message}`.trim() };
   }
+}
+
+export function capture(bin: string, args: readonly string[], cwd: string): Captured {
+  return toCaptured(() => execFileSync(bin, args, { cwd, encoding: "utf8", stdio: "pipe" }));
+}
+
+/**
+ * config に書かれたコマンドをシェルで実行する。
+ *
+ * `tsc -p a.json --noEmit && tsc --noEmit` のような複数パスの型チェックは
+ * 実在する（teps）。引数を分割して渡すだけでは `&&` が tsc の引数になってしまう。
+ * `node_modules/.bin` を PATH の先頭に置くので、`npx` を書かなくても解決する。
+ */
+export function captureShell(command: string, cwd: string): Captured {
+  const bin = join(cwd, "node_modules", ".bin");
+  return toCaptured(() =>
+    execFileSync("sh", ["-c", command], {
+      cwd,
+      encoding: "utf8",
+      stdio: "pipe",
+      env: { ...process.env, PATH: `${bin}:${process.env["PATH"] ?? ""}` },
+    }),
+  );
 }

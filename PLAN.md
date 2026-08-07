@@ -270,6 +270,38 @@ org レベルの secret に PAT を置く案は、寿命の長い個人トーク
 → パッケージ設定の **Manage Actions access** で導入先リポジトリを個別に Read 許可する。
 gauntlet の機能ではなく GitHub 側の手続きなので、`init` にも skill にも入れず README に書く。
 
+### teps（進行中、`adopt-gauntlet` ブランチ）
+
+測る範囲は対話で決めた。`tsconfig.include` は当てにならず、機械的には決まらない例:
+
+| 除いたもの | 理由 |
+| --- | --- |
+| `tests/` | 133 ファイル中 132 がテスト。ここを測るとテストを測ることになる |
+| `e2e/` | Playwright。vitest では走らないので coverage も mutation も意味を持たない |
+| `scripts/` | デモと一度きりの移行スクリプト。出荷される製品コードではない |
+| ルート直下の `.ts` | `next.config` `vitest.config` 等の設定 |
+
+測る対象は `src` / `components` / `app` / `lib` の **170 ファイル**。
+
+| | 実測 |
+| --- | --- |
+| `turn`（ソース 1 ファイル変更） | **10.4 秒**（typecheck 2.6s / tests 7.6s） |
+| `pr` | **64 秒**（typecheck 2.6s / tests 9.6s / lint 2.3s / mutation 40.9s） |
+
+`turn` の 10.4 秒は目標の 10 秒を超えている。テスト 7.6 秒が支配項で、
+`src/dsl/schema.ts` のような中核ファイルは多くのテストから import されるため。
+
+teps で見つけて直したもの:
+
+- **`commands.typecheck` がシェルを通っていなかった。** teps は `tsc -p a.json --noEmit && tsc --noEmit`
+  の 2 パスで、`&&` が tsc の引数になって `error TS5042` で落ちた。`sh -c` 経由にし、
+  `node_modules/.bin` を PATH の先頭に置く。
+- **eslint はマッチしない glob が 1 つでもあると即エラーで死ぬ。** 測る範囲の指定として
+  `src/**/*.tsx` のように空になる組み合わせは普通にある。`--no-error-on-unmatched-pattern` を渡す。
+- **eslint の失敗原因を握り潰していた。** 標準エラーにしか出ないので、報告に混ぜる。
+- **`tsc` は出力に実行ビットを付けない。** ローカルパス install で `Permission denied` になる。
+  ビルドで `chmod +x` する。
+
 ### 7. パイロット投入
 
 - **hue** — 機構そのものの検証。既に 87.8% カバー済みなので、テストを書く作業と混ざらない
