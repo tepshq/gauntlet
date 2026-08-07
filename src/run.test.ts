@@ -201,21 +201,31 @@ describe("mutationScope", () => {
 });
 
 describe("mutationTargets", () => {
-  it("TypeScript のソースだけを選ぶ", () => {
-    expect(mutationTargets(["a.ts", "b.md", "c.json", "d.tsx"], [])).toEqual(["a.ts"]);
+  // 差分には設定ファイルも混ざる。vitest.config.ts を変異させても意味が無い。
+  it("測る範囲の外は落とす", () => {
+    expect(mutationTargets(["a.ts", "vitest.config.ts"], ["a.ts"])).toEqual(["a.ts"]);
+  });
+
+  it("測る範囲にあるものは残す", () => {
+    expect(mutationTargets(["a.ts", "b.tsx"], ["a.ts", "b.tsx", "c.ts"])).toEqual(["a.ts", "b.tsx"]);
+  });
+
+  // 範囲側にしか無いファイルは、この差分に関係が無い。
+  it("差分に出ていないものは足さない", () => {
+    expect(mutationTargets(["a.ts"], ["a.ts", "b.ts"])).toEqual(["a.ts"]);
   });
 
   it("順序を固定する", () => {
-    expect(mutationTargets(["b.ts", "a.ts"], [])).toEqual(["a.ts", "b.ts"]);
+    expect(mutationTargets(["b.ts", "a.ts"], ["a.ts", "b.ts"])).toEqual(["a.ts", "b.ts"]);
   });
 
-  // テストファイルを変異させても、それを守るテストは無い。
-  it("テストファイルを外す", () => {
-    expect(mutationTargets(["a.ts", "a.test.ts"], [])).toEqual(["a.ts"]);
+  // テストファイルは source.exclude で範囲から外れる。init が既定で書く。
+  it("測る範囲が空なら何も変異させない", () => {
+    expect(mutationTargets(["a.ts", "a.test.ts"], [])).toEqual([]);
   });
 
-  it("除外指定を外す", () => {
-    expect(mutationTargets(["a.ts", "b.ts"], ["b.ts"])).toEqual(["a.ts"]);
+  it("重複は畳む", () => {
+    expect(mutationTargets(["a.ts", "a.ts"], ["a.ts"])).toEqual(["a.ts"]);
   });
 
   it("何も無ければ空", () => {

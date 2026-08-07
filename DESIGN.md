@@ -78,6 +78,11 @@ vitest は変更ファイルを import する全テストを逆依存グラフ�
 
 変更されたテストが無ければ、覆っているソースを調べる実行そのものを省く。
 
+**対象は `source.include` / `exclude` を glob で解決した一覧との積集合。** 差分には
+`vitest.config.ts` のような設定ファイルも混ざるので、CRAP が見ているのと同じ範囲に揃える。
+`exclude` を文字列の完全一致で見ていた時期があり、glob である `exclude` は
+一度も効いていなかった（テストファイルは別の判定で落ちていたので表に出ていなかった）。
+
 **`--inPlace` を使う。** Stryker は既定でサンドボックスにコピーし、その過程で
 `ts.parseConfigFileTextToJson` を呼ぶが、TypeScript 7 にその API は無く落ちる。
 `--inPlace` はコピーしないので前処理が走らない。実ファイルを書き換えるが、

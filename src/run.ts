@@ -17,7 +17,7 @@ import {
   type Violation,
   tierStatus,
 } from "./tier.ts";
-import { analyze } from "./typescript/adapter.ts";
+import { analyze, listSourceFiles } from "./typescript/adapter.ts";
 import { runLint } from "./typescript/lint.ts";
 import { runMutation } from "./typescript/mutation.ts";
 import { type TestOutcome, runTests } from "./typescript/runner.ts";
@@ -227,11 +227,16 @@ function crapCheck(
   return timed("crap", () => crapCheckViolations(tier, report, changed, outcome));
 }
 
-/** 変異させる対象。テストファイルと除外指定は外す。範囲は `mutationScope` が決める。 */
-export function mutationTargets(covered: Iterable<string>, exclude: readonly string[]): string[] {
-  const excluded = new Set(exclude);
-  const isSource = (file: string): boolean => file.endsWith(".ts") && !isTestFile(file);
-  return [...covered].filter((file) => isSource(file) && !excluded.has(file)).sort();
+/**
+ * 変異させる対象。**測る範囲の中にあるものだけ。**
+ *
+ * 範囲は `mutationScope` が決めるが、そこには差分に出てきた設定ファイル
+ * （`vitest.config.ts` など）も混ざる。`source.include` / `exclude` を glob で
+ * 解決した一覧と突き合わせて落とす。CRAP が見ているのと同じ範囲になる。
+ */
+export function mutationTargets(covered: Iterable<string>, inScope: Iterable<string>): string[] {
+  const scoped = new Set(inScope);
+  return [...new Set(covered)].filter((file) => scoped.has(file)).sort();
 }
 
 export function countByFile(mutants: readonly { file: string }[]): Record<string, number> {
@@ -263,7 +268,7 @@ function gateByFile(
 
 /** 差分に関係するソースだけを変異させる。既存リポジトリ全体を一度に赤にしない。 */
 function mutationCheck(root: string, config: GauntletConfig, covered: Iterable<string>): CheckResult {
-  const targets = mutationTargets(covered, config.source.exclude ?? []);
+  const targets = mutationTargets(covered, listSourceFiles(root, config.source));
   return timed("mutation", () =>
     targets.length === 0
       ? []
