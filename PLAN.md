@@ -536,6 +536,24 @@ GitHub Packages の認証経路がこれで検証できた（パッケージ設�
   (d) gauntlet 側でテストを間引く — 緑の意味が差分サイズで変わる（flaky）ので
   やるなら DESIGN の判断。(a)(b) で 15〜25 秒圏、10 秒を切るには (c) まで要る見込み。
 
+**(a)+(b) を使い捨て clone で実際に入れて再計測（同日）: 48.5 秒 → 30.0 秒。**
+
+- 実タイマーの主犯は retry ではなく **rate-limiter だった**（Yahoo は
+  `capacity: 1, refillPerSecond: 1` = 1 QPS。テストが 2 リクエスト目で 1 秒、
+  3 つ目で 2 秒、実時間で待つ。実測 1004ms / 2003ms と一致）。retry も
+  rate-limiter も clock / sleep は**最初から注入可能に作られていて**、使われて
+  いないだけ。vitest の setup 1 枚で仮想時計（sleep が仮想時刻を進める）を
+  注入したら、`yahoo/client.test.ts` は 40 テストで 167ms になり、
+  **1,658 件全部緑のまま** tests が 40.0 → 23.2 秒。
+- incremental typecheck は床では 8.5 → 1.9 秒だが、**実差分では 6.2 秒までしか
+  下がらない** — 変更ファイルの依存元を再検査するので、barrel 経由で閉包が
+  膨らむ問題が typecheck にもそのまま効く。
+- 残り 30 秒の内訳（worker 累積）: collect 44.6s（テストファイルの import =
+  ハブの閉包コスト）/ tests 30.7s（実計算、~19ms/件）/ environment 24.6s（jsdom）。
+  実タイマー待ちはもう見えない。**10 秒を切るには (c) が必要**という見立ては
+  実測で裏付けられた — (c) は選択数・collect・incremental typecheck の
+  再検査範囲、3 つ全部に同時に効く。
+
 ### duct 第 1 期（`try-gauntlet` ブランチ / tepshq/duct#563 — #564 に置き換えて close 済み）
 
 **唯一、リポジトリの持ち主が導入ガイドに沿って自分で入れた例**（skill はまだ実地で
