@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { branchCandidates, changedLines, collectHunks, hunkLines, lines } from "./git.ts";
+import { branchCandidates, changedLines, collectHunks, hunkLines, lines, repoSourceSet } from "./git.ts";
 
 describe("branchCandidates", () => {
   // PR がマージされる先は origin/main。手元の main は fetch では動かず、いくらでも古くなる
@@ -87,6 +87,52 @@ describe("changedLines", () => {
     repo((root) => {
       writeFileSync(join(root, "new.ts"), "a\n");
       expect([...changedLines(root, "main").keys()]).toEqual(["new.ts"]);
+    });
+  });
+});
+
+describe("repoSourceSet", () => {
+  function repo(body: (root: string) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-owned-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" });
+      body(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // glob（ディスク）だけで測る対象を決めると gitignore された生成物が混入する。
+  // duct では Prisma の生成クライアント 61 ファイルが lib/** に合致していた。
+  it("gitignore された生成物は所有物ではない", () => {
+    repo((root) => {
+      writeFileSync(join(root, ".gitignore"), "generated/\n");
+      mkdirSync(join(root, "generated"));
+      writeFileSync(join(root, "generated/client.ts"), "export const g = 1;\n");
+      writeFileSync(join(root, "real.ts"), "export const r = 1;\n");
+      const owned = repoSourceSet(root);
+      expect(owned.has("real.ts")).toBe(true);
+      expect(owned.has("generated/client.ts")).toBe(false);
+    });
+  });
+
+  // エージェントはコミットせずにターンを終える。書きたての新規ファイルが
+  // 所有物に入らないと、その差分がどのゲートからも見えなくなる。
+  it("未追跡でも gitignore されていなければ所有物", () => {
+    repo((root) => {
+      writeFileSync(join(root, "fresh.ts"), "export const f = 1;\n");
+      expect(repoSourceSet(root).has("fresh.ts")).toBe(true);
+    });
+  });
+
+  it("追跡済みのファイルは所有物", () => {
+    repo((root) => {
+      execFileSync("git", ["config", "user.name", "t"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "t@t"], { cwd: root, stdio: "ignore" });
+      writeFileSync(join(root, "a.ts"), "export const a = 1;\n");
+      execFileSync("git", ["add", "-A"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["commit", "-q", "-m", "x"], { cwd: root, stdio: "ignore" });
+      expect(repoSourceSet(root).has("a.ts")).toBe(true);
     });
   });
 });

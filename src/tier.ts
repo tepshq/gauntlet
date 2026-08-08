@@ -8,7 +8,7 @@
 /** 起動点で呼ぶ。番号は使わない（中間の tier を作らないため）。 */
 export type TierName = "turn" | "pr";
 
-export type CheckName = "typecheck" | "tests" | "crap" | "lint" | "mutation";
+export type CheckName = "typecheck" | "tests" | "crap" | "lint" | "duplication" | "mutation";
 
 /**
  * 各 tier が走らせるチェック。
@@ -19,7 +19,7 @@ export type CheckName = "typecheck" | "tests" | "crap" | "lint" | "mutation";
  */
 export const TIER_CHECKS: Record<TierName, readonly CheckName[]> = {
   turn: ["typecheck", "tests", "crap"],
-  pr: ["typecheck", "tests", "crap", "lint", "mutation"],
+  pr: ["typecheck", "tests", "crap", "lint", "duplication", "mutation"],
 };
 
 export interface Violation {

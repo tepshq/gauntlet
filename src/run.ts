@@ -4,7 +4,7 @@
 
 import { relative } from "node:path";
 import { ConfigError, type GauntletConfig, loadConfig } from "./config.ts";
-import { BASELINE_FILENAME, loadBaseline, ratchetByFile, saveBaseline } from "./baseline.ts";
+import { BASELINE_FILENAME, loadBaseline, ratchetByFile, ratchetNumber, saveBaseline } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
 import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, touchedFunctions } from "./gate.ts";
 import { changedLines, mergeBase } from "./git.ts";
@@ -20,6 +20,7 @@ import {
 import { analyze, listSourceFiles } from "./typescript/adapter.ts";
 import { runLint } from "./typescript/lint.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
+import { runDuplication } from "./typescript/duplication.ts";
 import { type SurvivedMutant, runMutation } from "./typescript/mutation.ts";
 import { type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
@@ -104,6 +105,7 @@ export function runTier(root: string, tier: TierName): TierResult {
         new Set(coveredFiles(root, outcome.coverage)),
       ),
     lint: () => lintCheck(root, config),
+    duplication: () => duplicationCheck(root, config),
   };
   const checks = TIER_CHECKS[tier].map((name) => runners[name]());
 
@@ -440,6 +442,39 @@ function mutationCheck(
           survived.filter((mutant) => mutant.file === entry.file).map(describeSurvivor),
         ),
       ),
+    };
+  });
+}
+
+/**
+ * 重複はリポジトリ全体の 1 つの数（重複トークン）を crap と同じ ratchet で見る。
+ *
+ * ファイル単位にしないのは、クローンがファイルの対に跨るため — どちらの件数に
+ * 数えるかという割り付けの判断を増やさずに済む。絶対閾値も持たない（既存リポジトリを
+ * 導入初日に赤で埋めない）。「増やさない」だけを課し、減れば自動で締まる。
+ */
+export function duplicationViolations(root: string, actual: number): Violation[] {
+  const baseline = loadBaseline(root);
+  const allowed = baseline?.duplication;
+  // 0.11.0 より前の baseline にはこの欄が無い。種を置いた回は通さない（crap と同じ理由）。
+  if (allowed === undefined) {
+    saveBaseline(root, { ...EMPTY_BASELINE, ...baseline, duplication: actual });
+    return [BASELINE_NOT_COMMITTED];
+  }
+  const outcome = ratchetNumber(allowed, actual);
+  if (outcome.kind === "regressed") {
+    return [{ message: `重複が ${outcome.allowed} → ${outcome.actual} トークンに増えました` }];
+  }
+  if (outcome.kind === "improved") saveBaseline(root, { ...EMPTY_BASELINE, ...baseline, duplication: outcome.to });
+  return [];
+}
+
+function duplicationCheck(root: string, config: GauntletConfig): CheckResult {
+  return timed("duplication", () => {
+    const { duplicatedTokens, sources } = runDuplication(root, listSourceFiles(root, config.source));
+    return {
+      scope: `重複 ${duplicatedTokens} トークン / 対象 ${sources} ファイル`,
+      violations: duplicationViolations(root, duplicatedTokens),
     };
   });
 }

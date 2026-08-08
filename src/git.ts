@@ -137,6 +137,19 @@ function countLines(root: string, file: string): number {
  * そのファイルの全関数が絶対閾値の対象になり、既存リポジトリが即座に赤くなる。
  * エージェントはコミットせずにターンを終えるので、コミット済みだけでは足りない。
  */
+/**
+ * リポジトリが所有するファイル — 追跡済み + 追跡外だが gitignore されていないもの。
+ *
+ * 測る対象を glob（ディスク）だけで決めると、gitignore された生成物が混入する。
+ * duct では `postinstall` が生成する Prisma クライアント 61 ファイルが `lib/**` に
+ * 合致し、CRAP の対象と重複の数を静かに膨らませていた（重複 169k ↔ 実際は 29k）。
+ * エージェントが書いたばかりの未コミットの新規ファイルは gitignore されていないので、
+ * `--others` 側でここに含まれる。
+ */
+export function repoSourceSet(root: string): Set<string> {
+  return new Set(lines(git(root, ["ls-files", "--cached", "--others", "--exclude-standard"])));
+}
+
 export function changedLines(root: string, base: string): Map<string, Set<number>> {
   const result = new Map<string, Set<number>>();
   collectHunks(git(root, ["diff", "--unified=0", `${base}...HEAD`]), result);

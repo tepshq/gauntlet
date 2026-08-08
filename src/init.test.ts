@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,6 +46,8 @@ let root: string;
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "gauntlet-init-"));
+  // scopeReport は「リポジトリが所有するファイル」で数えるので、git が要る。
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" });
 });
 
 afterEach(() => {
@@ -236,6 +239,18 @@ describe("scopeReport", () => {
     put("src/a.ts");
     put("src/b.ts");
     expect(scopeReport(root, INIT_DEFAULTS).matched).toBe(2);
+  });
+
+  // glob はディスクを見るので gitignore された生成物を拾う。duct では Prisma の
+  // 生成クライアントが「測る対象 837」を水増しし、対象外の候補にも生成物が混ざった。
+  it("gitignore された生成物は数えず、対象外の候補にも出さない", () => {
+    writeFileSync(join(root, ".gitignore"), "src/generated.ts\ngen/\n");
+    put("src/real.ts");
+    put("src/generated.ts");
+    put("gen/out.ts");
+    const report = scopeReport(root, INIT_DEFAULTS);
+    expect(report.matched).toBe(1);
+    expect(report.unmatched).not.toContain("gen");
   });
 
   it("除外されたファイルは数えない", () => {

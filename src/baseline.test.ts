@@ -42,6 +42,22 @@ describe("loadBaseline", () => {
     saveBaseline(root, { crap: 3, mutation: { "a.ts": 1 }, lint: {} });
     expect(loadBaseline(root)).toEqual({ crap: 3, mutation: { "a.ts": 1 }, lint: {} });
   });
+
+  // 「無い」と 0 は違う — 無ければ種を置く判定（duplicationViolations）に使う。
+  it("duplication を読み戻せる", () => {
+    saveBaseline(root, { crap: 3, duplication: 1090, mutation: {}, lint: {} });
+    expect(loadBaseline(root)?.duplication).toBe(1090);
+  });
+
+  it("duplication が無ければ欄ごと無い", () => {
+    put('{"crap": 7}');
+    expect(loadBaseline(root)).not.toHaveProperty("duplication");
+  });
+
+  it("duplication が数値でなければ欄ごと無い", () => {
+    put('{"crap": 7, "duplication": "many"}');
+    expect(loadBaseline(root)).not.toHaveProperty("duplication");
+  });
 });
 
 describe("ratchetByFile", () => {

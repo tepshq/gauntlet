@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, parseTier, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, duplicationViolations, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, parseTier, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -706,6 +706,61 @@ describe("crapCheckViolations", () => {
     const untouched: AdapterReport = { ...report, functions: [{ ...good, coverage: 0 }] };
     const violations = crapCheckViolations("pr", untouched, new Map(), { passed: true, total: 4795 });
     expect(violations[0]!.message).toContain("coverage.include");
+  });
+});
+
+describe("duplicationViolations", () => {
+  function withRoot(body: (root: string) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-dup-"));
+    try {
+      body(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // 0.11.0 より前の baseline にはこの欄が無い。種を置いた回は通さない（crap と同じ）。
+  it("欄が無ければ種を置いて落とす", () => {
+    withRoot((root) => {
+      saveBaseline(root, { crap: 5, mutation: {}, lint: {} });
+      expect(duplicationViolations(root, 1090)).toEqual([BASELINE_NOT_COMMITTED]);
+      expect(loadBaseline(root)).toEqual({ crap: 5, mutation: {}, lint: {}, duplication: 1090 });
+    });
+  });
+
+  // baseline ファイル自体が無いリポジトリでも落ちずに種を置く。
+  it("記録ファイルそのものが無くても種を置いて落とす", () => {
+    withRoot((root) => {
+      expect(duplicationViolations(root, 42)).toEqual([BASELINE_NOT_COMMITTED]);
+      expect(loadBaseline(root)?.duplication).toBe(42);
+    });
+  });
+
+  it("増えていたら落とし、記録は変えない", () => {
+    withRoot((root) => {
+      saveBaseline(root, { crap: 0, mutation: {}, lint: {}, duplication: 100 });
+      expect(duplicationViolations(root, 150)).toEqual([
+        { message: "重複が 100 → 150 トークンに増えました" },
+      ]);
+      expect(loadBaseline(root)?.duplication).toBe(100);
+    });
+  });
+
+  // 記録し損ねると許容値が緩いまま残り、後で同じだけコピペしても通る。
+  it("減っていたら通し、記録を下げる", () => {
+    withRoot((root) => {
+      saveBaseline(root, { crap: 0, mutation: {}, lint: {}, duplication: 100 });
+      expect(duplicationViolations(root, 60)).toEqual([]);
+      expect(loadBaseline(root)?.duplication).toBe(60);
+    });
+  });
+
+  it("同じなら通し、記録も変わらない", () => {
+    withRoot((root) => {
+      saveBaseline(root, { crap: 0, mutation: {}, lint: {}, duplication: 100 });
+      expect(duplicationViolations(root, 100)).toEqual([]);
+      expect(loadBaseline(root)?.duplication).toBe(100);
+    });
   });
 });
 

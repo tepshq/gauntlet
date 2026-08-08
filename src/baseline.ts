@@ -14,6 +14,13 @@ export interface Baseline {
   /** リポジトリ全体で許容する CRAP 違反の数。 */
   crap: number;
   /**
+   * リポジトリ全体で許容する重複トークンの数。
+   *
+   * 0.11.0 で追加。それ以前の baseline には無いので optional — 無ければ
+   * 種を置いて落とす（「種を置いた回は通さない」は crap と同じ）。
+   */
+  duplication?: number;
+  /**
    * ファイルごとに許容する「生き残った変異」の数。
    *
    * CRAP と違って単一の数にできない。mutation は差分に関係するファイルだけを
@@ -36,7 +43,13 @@ export function loadBaseline(root: string): Baseline | null {
   try {
     const data = JSON.parse(readFileSync(join(root, BASELINE_FILENAME), "utf8")) as Partial<Baseline>;
     if (typeof data.crap !== "number") return null;
-    return { crap: data.crap, mutation: data.mutation ?? {}, lint: data.lint ?? {} };
+    return {
+      crap: data.crap,
+      // 無いのと 0 は違う。無ければ欄ごと無し（種を置く判定に使う）。
+      ...(typeof data.duplication === "number" ? { duplication: data.duplication } : {}),
+      mutation: data.mutation ?? {},
+      lint: data.lint ?? {},
+    };
   } catch {
     return null;
   }
@@ -58,10 +71,15 @@ export type RatchetOutcome =
  * 改善は自動で固定し、後退だけを落とす。改善を記録し損ねると許容値が緩いまま残り、
  * あとで同じだけ悪化させても通ってしまう。
  */
-export function ratchet(baseline: Baseline, actual: number): RatchetOutcome {
-  if (actual > baseline.crap) return { kind: "regressed", allowed: baseline.crap, actual };
-  if (actual < baseline.crap) return { kind: "improved", from: baseline.crap, to: actual };
+/** 単一の数の ratchet。crap と duplication が共有する。 */
+export function ratchetNumber(allowed: number, actual: number): RatchetOutcome {
+  if (actual > allowed) return { kind: "regressed", allowed, actual };
+  if (actual < allowed) return { kind: "improved", from: allowed, to: actual };
   return { kind: "ok" };
+}
+
+export function ratchet(baseline: Baseline, actual: number): RatchetOutcome {
+  return ratchetNumber(baseline.crap, actual);
 }
 
 export interface FileRatchet {

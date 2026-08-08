@@ -8,6 +8,7 @@
 import { globSync, readFileSync } from "node:fs";
 import { relative, resolve } from "node:path";
 import type { GauntletConfig } from "../config.ts";
+import { repoSourceSet } from "../git.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type ExcludedFile, type FunctionReport } from "../report.ts";
 import { extractFunctions } from "./complexity.ts";
 import { type IstanbulCoverage, coverageByFunction } from "./coverage.ts";
@@ -19,12 +20,23 @@ function toPosix(path: string): string {
   return path.split("\\").join("/");
 }
 
+/**
+ * 測る対象 = include/exclude の glob に合致し、**かつリポジトリが所有する**ファイル。
+ *
+ * glob（ディスク）だけだと gitignore された生成物が混入する — duct では Prisma の
+ * 生成クライアント 61 ファイルが `lib/**` に合致していた（`repoSourceSet` 参照）。
+ * エージェントの書きたての新規ファイルは gitignore されていないので残る。
+ */
 export function listSourceFiles(root: string, source: GauntletConfig["source"]): string[] {
+  const owned = repoSourceSet(root);
   const found = globSync(source.include, {
     cwd: root,
     ...(source.exclude === undefined ? {} : { exclude: source.exclude }),
   });
-  return found.map(toPosix).sort();
+  return found
+    .map(toPosix)
+    .filter((file) => owned.has(file))
+    .sort();
 }
 
 /** coverage-final.json は絶対パスをキーに持つので、リポジトリ相対に直して引けるようにする。 */

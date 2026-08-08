@@ -14,6 +14,7 @@
 import { globSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONFIG_FILENAME, type GauntletConfig } from "./config.ts";
+import { repoSourceSet } from "./git.ts";
 
 export interface InitOptions {
   defaultBranch: string;
@@ -314,9 +315,14 @@ function readIfPresent(root: string, path: string): string | null {
  */
 export function scopeReport(root: string, source: InitOptions): { matched: number; unmatched: string[] } {
   const topOf = (path: string): string => path.split(/[\\/]/)[0] ?? path;
-  const matched = globSync(source.include, { cwd: root, exclude: source.exclude });
+  // gitignore された生成物は数えない（duct の Prisma 生成クライアントが「測る対象 837」を
+  // 水増しし、対象外の候補にも生成物のディレクトリが混ざっていた）。
+  const owned = repoSourceSet(root);
+  const matched = globSync(source.include, { cwd: root, exclude: source.exclude }).filter((file) => owned.has(file));
   const covered = new Set(matched.map(topOf));
-  const all = globSync("**/*.ts", { cwd: root, exclude: ["node_modules/**", "dist/**", "coverage/**"] });
+  const all = globSync("**/*.ts", { cwd: root, exclude: ["node_modules/**", "dist/**", "coverage/**"] }).filter(
+    (file) => owned.has(file),
+  );
   const unmatched = [...new Set(all.map(topOf))]
     .filter((top) => !covered.has(top) && !top.endsWith(".ts"))
     .sort();
