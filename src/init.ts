@@ -234,8 +234,10 @@ jobs:
 \`\`\`
 npx gauntlet run --tier=pr
 \`\`\`
-初回は「\`gauntlet.baseline.json\` を作りました。コミットしてください」で**落ちる**。
+初回は「\`gauntlet.baseline.json\` を作りました。…コミットしてください」で**落ちる**。
 これが正常。ファイルはできているので、コミットしてもう一度回せば通る。
+コミットは \`git add -A\` で行う — ファイル名を含む Bash コマンドは guard が止めるので、
+名指しの \`git add gauntlet.baseline.json\` は使えない。
 
 **CI に任せてはいけない。** CI が置いた種はコンテナの中に書かれて捨てられる。
 毎 PR がその PR の状態を許容値として置き直すことになり、ラチェットが一度も噛まない。
@@ -245,7 +247,8 @@ npx gauntlet run --tier=pr
 ## 触らないもの
 
 \`gauntlet.baseline.json\` は許容する違反数の記録で、減らすのは gauntlet が自動で行う。
-編集は \`PreToolUse\` フックで止まる。赤を消すには違反そのものを直す。
+編集と、ファイル名に触れる Bash コマンドは \`PreToolUse\` フックで止まる
+（読むには Read ツール、コミットには \`git add -A\` を使う）。赤を消すには違反そのものを直す。
 `;
 
 /**

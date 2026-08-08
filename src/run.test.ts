@@ -5,7 +5,8 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, countByFile, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, formatResult, mutationScopeText, mutationTargets, parseTier, testsCheck, typecheckViolations, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, parseTier, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
 describe("parseTier", () => {
@@ -76,7 +77,7 @@ describe("applyRatchet", () => {
   // 毎回いまの状態が許容値になる。落として、コミットさせる。
   it("記録が無ければ種を置いて落とす", () => {
     withRoot((root) => {
-      expect(applyRatchet(violating(3, root))).toEqual([BASELINE_NOT_COMMITTED]);
+      expect(applyRatchet(violating(3, root), new Map())).toEqual([BASELINE_NOT_COMMITTED]);
       expect(loadBaseline(root)).toEqual({ crap: 3, mutation: {}, lint: {} });
     });
   });
@@ -84,17 +85,20 @@ describe("applyRatchet", () => {
   // 落としてもファイルを残さないと、コミットするものが無くて詰む。
   it("落とした回のファイルは残す", () => {
     withRoot((root) => {
-      applyRatchet(violating(3, root));
-      expect(applyRatchet(violating(3, root))).toEqual([]);
+      applyRatchet(violating(3, root), new Map());
+      expect(applyRatchet(violating(3, root), new Map())).toEqual([]);
     });
   });
 
   // 文言はエージェントへのフィードバックそのもの。理由が落ちると
   // 「コミットしろと言われたから baseline を触る」だけが伝わる。
+  // 手段（git add -A）まで言うのは、ファイル名を含む Bash を guard が
+  // 止めるから — 名指しの git add は矛盾した 2 つの指示になる。
   it("コミットを促す文言を丸ごと固定する", () => {
     expect(BASELINE_NOT_COMMITTED).toEqual({
       message:
-        "gauntlet.baseline.json を作りました。コミットしてください。" +
+        "gauntlet.baseline.json を作りました。git add -A などでコミットしてください" +
+        "（ファイル名を含む Bash コマンドは guard が止めます）。" +
         "履歴に無いと毎回いまの状態が許容値として置き直され、ラチェットが噛みません",
     });
   });
@@ -102,7 +106,7 @@ describe("applyRatchet", () => {
   // ファイルに書き出す時点で全ゲート分の枠が無いと、次のゲートが記録を失う。
   it("種を置くとき全ゲート分の枠を書く", () => {
     withRoot((root) => {
-      applyRatchet(violating(1, root));
+      applyRatchet(violating(1, root), new Map());
       const written = JSON.parse(readFileSync(join(root, "gauntlet.baseline.json"), "utf8")) as object;
       expect(Object.keys(written).sort()).toEqual(["crap", "lint", "mutation"]);
     });
@@ -111,7 +115,7 @@ describe("applyRatchet", () => {
   it("増えていたら落とし、記録は変えない", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 1, mutation: {}, lint: {} });
-      expect(applyRatchet(violating(4, root))[0]!.message).toContain("1 → 4");
+      expect(applyRatchet(violating(4, root), new Map())[0]!.message).toContain("1 → 4");
       expect(loadBaseline(root)).toEqual({ crap: 1, mutation: {}, lint: {} });
     });
   });
@@ -120,7 +124,7 @@ describe("applyRatchet", () => {
   it("減っていたら通し、記録を下げる", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 5, mutation: {}, lint: {} });
-      expect(applyRatchet(violating(2, root))).toEqual([]);
+      expect(applyRatchet(violating(2, root), new Map())).toEqual([]);
       expect(loadBaseline(root)).toEqual({ crap: 2, mutation: {}, lint: {} });
     });
   });
@@ -128,8 +132,41 @@ describe("applyRatchet", () => {
   it("同じなら通し、記録も変わらない", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 2, mutation: {}, lint: {} });
-      expect(applyRatchet(violating(2, root))).toEqual([]);
+      expect(applyRatchet(violating(2, root), new Map())).toEqual([]);
       expect(loadBaseline(root)).toEqual({ crap: 2, mutation: {}, lint: {} });
+    });
+  });
+});
+
+describe("ratchetViolation", () => {
+  const outcome = { allowed: 1, actual: 2 };
+  const bad = (line: number): FunctionReport => ({
+    location: { file: "a.ts", name: "f", scope: [], startLine: line, startColumn: 0, endLine: line, endColumn: 0 },
+    cc: 5,
+    coverage: 0,
+  });
+  const reportOf = (functions: FunctionReport[]): AdapterReport => ({
+    schemaVersion: REPORT_SCHEMA_VERSION,
+    adapter: { name: "typescript", version: "0" },
+    root: "/repo",
+    functions,
+    excluded: [],
+  });
+
+  // 記録は数だけなので、どれが増えた分かは特定できない。それでも、テストを消して
+  // 触っていない関数の網羅率が落ちた後退は、一覧が無いと手がかりがゼロになる。
+  it("差分の外にある違反を名指しする", () => {
+    expect(ratchetViolation(reportOf([bad(10)]), new Map(), outcome)).toEqual({
+      message:
+        "リポジトリ全体の違反が 1 → 2 に増えました。差分の外にある違反（増えた分と、以前から許容されている分）:\n" +
+        "  CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f",
+    });
+  });
+
+  // 触った関数の違反は gateTouched が別に出している。二重に並べると同じ違反が 2 回見える。
+  it("違反が全部差分の中なら、上の違反を指す", () => {
+    expect(ratchetViolation(reportOf([bad(10)]), new Map([["a.ts", new Set([10])]]), outcome)).toEqual({
+      message: "リポジトリ全体の違反が 1 → 2 に増えました。増えた分は上の触った関数の違反です",
     });
   });
 });
@@ -235,7 +272,7 @@ describe("mutationTargets", () => {
 });
 
 describe("testsCheck", () => {
-  const green = { passed: true, failed: 0, total: 5, failedFiles: [] };
+  const green = { passed: true, failed: 0, total: 5, failures: [] };
 
   // 0 件で緑なら、テストが 1 つも選ばれていないということ。件数を出さないと区別できない。
   it("通っていれば pass、走った件数を添える", () => {
@@ -248,13 +285,26 @@ describe("testsCheck", () => {
     });
   });
 
-  it("落ちていれば fail にして件数と失敗ファイルを出す", () => {
-    const red = { passed: false, failed: 2, total: 5, failedFiles: ["a.test.ts", "b.test.ts"] };
+  // ファイル名だけだと、読み手は理由を知るためにテストをもう一周回すしかない。
+  it("落ちていれば fail にして、テストごとに理由を出す", () => {
+    const red = {
+      passed: false,
+      failed: 2,
+      total: 5,
+      failures: [
+        { file: "a.test.ts", test: "sum > 足せる", message: "expected 1 to be 2" },
+        { file: "b.test.ts", test: null, message: "" },
+      ],
+    };
     expect(testsCheck(red, 100)).toEqual({
       name: "tests",
       status: "fail",
       durationMs: 100,
-      violations: [{ message: "2 / 5 件が失敗: a.test.ts, b.test.ts" }],
+      violations: [
+        { message: "2 / 5 件が失敗:" },
+        { message: "sum > 足せる  a.test.ts\n  expected 1 to be 2", file: "a.test.ts" },
+        { message: "(テストファイル自体が失敗)  b.test.ts", file: "b.test.ts" },
+      ],
       scope: "5 件",
     });
   });
@@ -262,6 +312,183 @@ describe("testsCheck", () => {
   // 実行はチェックの評価より前に済んでいるので、外から渡さないと 0ms と嘘をつく。
   it("渡された所要時間をそのまま持つ", () => {
     expect(testsCheck(green, 632).durationMs).toBe(632);
+  });
+});
+
+describe("testViolations", () => {
+  const failure = (n: number): { file: string; test: string; message: string } => ({
+    file: `f${n}.test.ts`,
+    test: `t${n}`,
+    message: "",
+  });
+
+  // vitest が success: false だけ返す形（未処理エラー等）でも、無言で fail にしない。
+  it("個別の失敗が取れなければ、確認の仕方を言う", () => {
+    expect(testViolations({ failed: 0, total: 5, failures: [] })).toEqual([
+      { message: "0 / 5 件が失敗: 詳細を取れませんでした。npx vitest run で確認してください" },
+    ]);
+  });
+
+  // 大規模なリファクタで 200 件落ちたとき、全部並べると本当の原因が量に埋もれる。
+  it("11 件目からは件数に畳む", () => {
+    const failures = Array.from({ length: 12 }, (_, index) => failure(index));
+    const violations = testViolations({ failed: 12, total: 20, failures });
+    expect(violations).toHaveLength(12); // 見出し + 10 件 + 「他 2 件」
+    expect(violations[0]!.message).toBe("12 / 20 件が失敗:");
+    expect(violations.at(-1)!.message).toBe("…他 2 件の失敗");
+  });
+
+  it("上限までは畳まない", () => {
+    const failures = Array.from({ length: 10 }, (_, index) => failure(index));
+    expect(testViolations({ failed: 10, total: 10, failures })).toHaveLength(11); // 見出し + 10 件
+  });
+});
+
+describe("testViolation", () => {
+  it("テスト名・ファイル・理由を出し、ファイルを違反の場所にする", () => {
+    expect(testViolation({ file: "a.test.ts", test: "sum > 足せる", message: "expected 1 to be 2" })).toEqual({
+      message: "sum > 足せる  a.test.ts\n  expected 1 to be 2",
+      file: "a.test.ts",
+    });
+  });
+
+  it("理由が無ければ 1 行に収める", () => {
+    expect(testViolation({ file: "a.test.ts", test: "t", message: "" })).toEqual({
+      message: "t  a.test.ts",
+      file: "a.test.ts",
+    });
+  });
+
+  it("テスト名が無ければファイル自体の失敗と言う", () => {
+    expect(testViolation({ file: "a.test.ts", test: null, message: "boom" }).message).toBe(
+      "(テストファイル自体が失敗)  a.test.ts\n  boom",
+    );
+  });
+});
+
+describe("condenseFailure", () => {
+  // 理由（期待値と実際）を残せば、場所はテスト名で足りる。
+  it("スタックトレースの行を削る", () => {
+    const raw = "AssertionError: expected 1 to be 2\n    at file.ts:10:5\n    at run (x.ts:1:1)";
+    expect(condenseFailure(raw, 10)).toBe("AssertionError: expected 1 to be 2");
+  });
+
+  // vitest は端末でない出力にも色コードを混ぜることがある。
+  it("色コードを落とす", () => {
+    expect(condenseFailure("\u001b[31mexpected\u001b[39m 1 to be 2", 10)).toBe("expected 1 to be 2");
+  });
+
+  it("末尾の空行を削る", () => {
+    expect(condenseFailure("expected\n\n\n", 10)).toBe("expected");
+  });
+
+  // 行頭アンカーが無いと、本文中の「 at 」を含む行（期待値の説明など）まで消える。
+  it("行の途中の at はスタックと見なさない", () => {
+    expect(condenseFailure("expected item at index 3 to be 4", 10)).toBe("expected item at index 3 to be 4");
+  });
+
+  // trim しないと、空白だけの行が「空行ではない」扱いで末尾に残る。
+  it("末尾の空白だけの行も削る", () => {
+    expect(condenseFailure("expected\n   ", 10)).toBe("expected");
+  });
+
+  // assert の diff が長いときも、頭に理由が来る前提で先頭を残す。
+  it("上限を超えた行は件数に畳む", () => {
+    const raw = Array.from({ length: 5 }, (_, index) => `行${index}`).join("\n");
+    expect(condenseFailure(raw, 3)).toBe("行0\n行1\n行2\n…他 2 件");
+  });
+
+  it("空なら空", () => {
+    expect(condenseFailure("", 10)).toBe("");
+  });
+});
+
+describe("detailLines", () => {
+  it("上限以下ならそのまま", () => {
+    expect(detailLines(["a", "b"], 3)).toEqual(["a", "b"]);
+  });
+
+  // 黙って切ると「これで全部」に読める。切った分は件数で言う。
+  it("上限を超えた分は件数に畳む", () => {
+    expect(detailLines(["a", "b", "c"], 2)).toEqual(["a", "b", "…他 1 件"]);
+  });
+
+  it("ちょうど上限なら畳まない", () => {
+    expect(detailLines(["a", "b"], 2)).toEqual(["a", "b"]);
+  });
+
+  it("空なら空", () => {
+    expect(detailLines([], 3)).toEqual([]);
+  });
+});
+
+describe("withDetails", () => {
+  // formatResult が全体を 4 字下げるので、ここは見出しからの相対で 2 字。
+  it("見出しの下に 2 字下げでぶら下げる", () => {
+    expect(withDetails("見出し", ["一つ目", "二つ目"])).toBe("見出し\n  一つ目\n  二つ目");
+  });
+
+  it("詳細が無ければ見出しだけ", () => {
+    expect(withDetails("見出し", [])).toBe("見出し");
+  });
+
+  it("11 件目からは件数に畳む", () => {
+    const items = Array.from({ length: 12 }, (_, index) => `i${index}`);
+    const lines = withDetails("見出し", items).split("\n");
+    expect(lines).toHaveLength(12); // 見出し + 10 件 + 「他 2 件」
+    expect(lines.at(-1)).toBe("  …他 2 件");
+  });
+});
+
+describe("oneLine", () => {
+  it("複数行を空白 1 つで繋ぐ", () => {
+    expect(oneLine("a\n  b\nc", 60)).toBe("a b c");
+  });
+
+  it("上限を超えたら切って印をつける", () => {
+    expect(oneLine("abcdef", 3)).toBe("abc…");
+  });
+
+  it("上限ちょうどは切らない", () => {
+    expect(oneLine("abc", 3)).toBe("abc");
+  });
+});
+
+describe("describeSurvivor", () => {
+  // 位置と種類と変異後のコードが揃えば、Stryker の再実行（分単位）なしで直せる。
+  it("行・mutator・変異後のコードを一行に", () => {
+    expect(describeSurvivor({ file: "a.ts", line: 47, mutator: "EqualityOperator", replacement: "<=" })).toBe(
+      "L47 EqualityOperator  → <=",
+    );
+  });
+
+  it("変異後のコードが無ければ行と mutator だけ", () => {
+    expect(describeSurvivor({ file: "a.ts", line: 3, mutator: "BlockStatement", replacement: null })).toBe(
+      "L3 BlockStatement",
+    );
+  });
+
+  it("複数行の置換は 1 行に潰す", () => {
+    expect(describeSurvivor({ file: "a.ts", line: 1, mutator: "M", replacement: "{\n}" })).toBe("L1 M  → { }");
+  });
+});
+
+describe("describeCrash", () => {
+  // 既知のエラー（設定・git・道具）はメッセージが説明そのもの。スタックは雑音になる。
+  it("既知のエラーはメッセージだけ", () => {
+    expect(describeCrash(new ConfigError("--tier が必要です"))).toBe("--tier が必要です");
+    expect(describeCrash(new RunnerError("Stryker が入っていません"))).toBe("Stryker が入っていません");
+  });
+
+  // 未知のエラーは gauntlet 自身のバグ。メッセージだけだと読み手は直しようがない。
+  it("未知のエラーは場所（スタック）ごと出す", () => {
+    const described = describeCrash(new TypeError("x is not a function"));
+    expect(described).toContain("TypeError: x is not a function");
+    expect(described).toContain("at ");
+  });
+
+  it("Error でないものは文字列にする", () => {
+    expect(describeCrash("boom")).toBe("boom");
   });
 });
 
@@ -295,6 +522,14 @@ describe("formatResult", () => {
     );
   });
 
+  // tsc の診断や詳細つきの違反は複数行になる。先頭行しか下げないと、
+  // 2 行目以降がチェックの木から外れて見える。
+  it("複数行の違反は全行を段に入れる", () => {
+    const multiline: CheckResult = { ...check("tests", "fail"), violations: [{ message: "見出し\n  詳細" }] };
+    expect(formatResult(result([multiline]))).toBe(
+      ["gauntlet turn: fail (34ms)", "  ✗ tests (12ms)  対象 1 件", "    見出し", "      詳細"].join("\n"),
+    );
+  });
 });
 
 describe("crapScope", () => {
@@ -386,7 +621,10 @@ describe("crapViolations", () => {
       saveBaseline(root, { crap: 0, mutation: {}, lint: {} });
       const scoped = { ...report, root };
       const messages = crapViolations("pr", scoped, new Map()).map((v) => v.message);
-      expect(messages).toEqual(["リポジトリ全体の違反が 0 → 1 に増えました"]);
+      expect(messages).toEqual([
+        "リポジトリ全体の違反が 0 → 1 に増えました。差分の外にある違反（増えた分と、以前から許容されている分）:\n" +
+          "  CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f",
+      ]);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

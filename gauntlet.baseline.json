@@ -3,7 +3,7 @@
   "mutation": {
     "src/baseline.ts": 1,
     "src/cli.ts": 0,
-    "src/config.ts": 17,
+    "src/config.ts": 16,
     "src/crap.ts": 0,
     "src/gate.ts": 0,
     "src/git.ts": 0,

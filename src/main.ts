@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { GUARD_MESSAGE, shouldBlock } from "./guard.ts";
 import { init, parseInitOptions, scopeReport } from "./init.ts";
-import { run } from "./run.ts";
+import { describeCrash, run } from "./run.ts";
 import { EXIT_BLOCKED, EXIT_PASS, exitCodeFor } from "./tier.ts";
 
 function guard(_argv: readonly string[]): number {
@@ -76,6 +76,6 @@ try {
   process.exitCode = main(process.argv.slice(2));
 } catch (error) {
   // gauntlet 自身が走れなかった場合も阻止側に倒す。素通しすると flaky になる。
-  process.stderr.write(`gauntlet: ${(error as Error).message}\n`);
+  process.stderr.write(`gauntlet: ${describeCrash(error)}\n`);
   process.exitCode = EXIT_BLOCKED;
 }

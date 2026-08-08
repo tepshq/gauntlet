@@ -10,9 +10,23 @@ import { join, relative } from "node:path";
 import { capture } from "../exec.ts";
 import { RunnerError } from "./runner.ts";
 
+/** eslint の指摘 1 件分。`ruleId` は設定や構文のエラー（fatal）では null。 */
+interface EslintMessage {
+  ruleId: string | null;
+  line?: number;
+  message: string;
+  severity: number;
+}
+
 interface EslintFileResult {
   filePath: string;
   errorCount: number;
+  messages?: EslintMessage[];
+}
+
+/** baseline のキーと同じ形（リポジトリ相対・区切りは `/`）に揃える。 */
+function relativeKey(filePath: string, root: string): string {
+  return relative(root, filePath).split("\\").join("/");
 }
 
 function eslintBin(root: string): string {
@@ -31,9 +45,26 @@ export function countErrors(results: readonly EslintFileResult[], root: string):
   const counts: Record<string, number> = {};
   for (const result of results) {
     if (result.errorCount === 0) continue;
-    counts[relative(root, result.filePath).split("\\").join("/")] = result.errorCount;
+    counts[relativeKey(result.filePath, root)] = result.errorCount;
   }
   return counts;
+}
+
+/** どの行のどのルールか。これが無いと読み手は eslint を再実行しないと直せない。 */
+function describeMessage(message: EslintMessage): string {
+  return `L${message.line ?? "?"} ${message.ruleId ?? "(設定または構文のエラー)"}  ${message.message}`;
+}
+
+/** ファイルごとの error の内訳。counts と同じ基準（severity 2 のみ。warning は見ない）。 */
+export function errorDetails(results: readonly EslintFileResult[], root: string): Record<string, string[]> {
+  const details: Record<string, string[]> = {};
+  for (const result of results) {
+    // Stryker disable next-line ArrayDeclaration: 既定値に何を入れても
+    // 直後の filter が severity を見て落とすので、区別できる振る舞いが無い。
+    const errors = (result.messages ?? []).filter((message) => message.severity === 2);
+    if (errors.length > 0) details[relativeKey(result.filePath, root)] = errors.map(describeMessage);
+  }
+  return details;
 }
 
 export interface LintResult {
@@ -43,12 +74,14 @@ export interface LintResult {
   scanned: number;
   /** ファイルごとの error の数。0 のファイルは載らない。 */
   counts: Record<string, number>;
+  /** ファイルごとの error の内訳（行・ルール・本文）。0 のファイルは載らない。 */
+  details: Record<string, string[]>;
 }
 
 export function parseLintOutput(stdout: string, root: string, detail = ""): LintResult {
   try {
     const results = JSON.parse(stdout) as EslintFileResult[];
-    return { scanned: results.length, counts: countErrors(results, root) };
+    return { scanned: results.length, counts: countErrors(results, root), details: errorDetails(results, root) };
   } catch {
     // 原因は標準エラーにしか出ないことがある。stdout だけ見せると空の報告になる。
     throw new RunnerError(`eslint の出力を読めません:\n${(detail === "" ? stdout : detail).slice(0, 500)}`);

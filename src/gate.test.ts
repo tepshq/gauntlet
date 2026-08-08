@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { gateRepository, gateTouched, measurementFaults } from "./gate.ts";
+import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators } from "./gate.ts";
 
 function fn(file: string, startLine: number, endLine: number, cc: number, coverage: number): FunctionReport {
   return {
@@ -78,6 +78,24 @@ describe("gateTouched", () => {
     for (const line of [9, 21]) {
       expect(gateTouched(reportOf([BAD]), new Map([["a.ts", new Set([line])]]))).toEqual([]);
     }
+  });
+});
+
+describe("crapText", () => {
+  // gateTouched の違反にも pr のラチェット報告にも同じ形で載る。ずれると同じ違反が別物に見える。
+  it("スコア・閾値・両方のレバー・場所を一行に収める", () => {
+    expect(crapText(BAD)).toBe("CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f");
+  });
+});
+
+describe("repositoryViolators", () => {
+  // ラチェットはこの数を数え、後退の報告はこの一覧を名指しする。数と一覧の基準がずれてはいけない。
+  it("閾値を超えた関数だけ返す", () => {
+    expect(repositoryViolators(reportOf([BAD, GOOD]))).toEqual([BAD]);
+  });
+
+  it("違反が無ければ空", () => {
+    expect(repositoryViolators(reportOf([GOOD]))).toEqual([]);
   });
 });
 

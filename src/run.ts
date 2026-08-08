@@ -6,7 +6,7 @@ import { relative } from "node:path";
 import { ConfigError, type GauntletConfig, loadConfig } from "./config.ts";
 import { BASELINE_FILENAME, loadBaseline, ratchetByFile, saveBaseline } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
-import { gateRepository, gateTouched, measurementFaults, touchedFunctions } from "./gate.ts";
+import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, touchedFunctions } from "./gate.ts";
 import { changedLines, mergeBase } from "./git.ts";
 import {
   type CheckName,
@@ -19,8 +19,8 @@ import {
 } from "./tier.ts";
 import { analyze, listSourceFiles } from "./typescript/adapter.ts";
 import { runLint } from "./typescript/lint.ts";
-import { runMutation } from "./typescript/mutation.ts";
-import { type TestOutcome, runTests } from "./typescript/runner.ts";
+import { type SurvivedMutant, runMutation } from "./typescript/mutation.ts";
+import { type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
 const TIER_NAMES: readonly TierName[] = ["turn", "pr"];
 
@@ -107,11 +107,76 @@ export function runTier(root: string, tier: TierName): TierResult {
   return { tier, status: tierStatus(checks), checks, durationMs: performance.now() - started };
 }
 
+/**
+ * 違反 1 件に載せる詳細の上限。
+ *
+ * 全部並べると本当の原因が量に埋もれる。切った分は件数で言う —
+ * 黙って切ると「これで全部」に読める。
+ */
+const DETAIL_LIMIT = 10;
+
+export function detailLines(items: readonly string[], limit: number): string[] {
+  if (items.length <= limit) return [...items];
+  return [...items.slice(0, limit), `…他 ${items.length - limit} 件`];
+}
+
+function indented(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => `  ${line}`)
+    .join("\n");
+}
+
+/** 見出しの下に詳細を 2 字下げでぶら下げる。`formatResult` が全体をさらに下げる。 */
+export function withDetails(head: string, items: readonly string[]): string {
+  const lines = detailLines(items, DETAIL_LIMIT);
+  return lines.length === 0 ? head : `${head}\n${indented(lines.join("\n"))}`;
+}
+
+/**
+ * 失敗の本文から、直すのに要る部分だけを残す。
+ *
+ * スタックトレースは削る — 理由（期待値と実際）を残せば、場所はテスト名で足りる。
+ * 色コードは端末でない出力にも混ざることがあるので落とす。
+ */
+export function condenseFailure(message: string, limit: number): string {
+  const ansi = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+  const lines = message
+    .replace(ansi, "")
+    .split("\n")
+    .filter((line) => !/^\s+at\s/.test(line));
+  while (lines.length > 0 && lines.at(-1)!.trim() === "") lines.pop();
+  return detailLines(lines, limit).join("\n");
+}
+
+/** 落ちたテスト 1 件を、再実行せずに直せる形で。 */
+export function testViolation(failure: TestFailure): Violation {
+  const title = `${failure.test ?? "(テストファイル自体が失敗)"}  ${failure.file}`;
+  const body = condenseFailure(failure.message, DETAIL_LIMIT);
+  return { message: body === "" ? title : `${title}\n${indented(body)}`, file: failure.file };
+}
+
+/** 「N 件が失敗」だけでは再実行しないと直せない。落ちたテストごとに理由を並べる。 */
+export function testViolations(outcome: Pick<TestOutcome, "failed" | "total" | "failures">): Violation[] {
+  const summary = `${outcome.failed} / ${outcome.total} 件が失敗:`;
+  if (outcome.failures.length === 0) {
+    return [{ message: `${summary} 詳細を取れませんでした。npx vitest run で確認してください` }];
+  }
+  const shown = outcome.failures.slice(0, DETAIL_LIMIT).map(testViolation);
+  const rest = outcome.failures.length - DETAIL_LIMIT;
+  return [
+    { message: summary },
+    ...shown,
+    ...(rest > 0 ? [{ message: `…他 ${rest} 件の失敗` }] : []),
+  ];
+}
+
 /** テストの実行はチェックの評価より前に済んでいるので、所要時間は外から渡す。 */
-export function testsCheck(outcome: Pick<TestOutcome, "passed" | "failed" | "total" | "failedFiles">, durationMs: number): CheckResult {
-  const violations = outcome.passed
-    ? []
-    : [{ message: `${outcome.failed} / ${outcome.total} 件が失敗: ${outcome.failedFiles.join(", ")}` }];
+export function testsCheck(
+  outcome: Pick<TestOutcome, "passed" | "failed" | "total" | "failures">,
+  durationMs: number,
+): CheckResult {
+  const violations = outcome.passed ? [] : testViolations(outcome);
   return {
     name: "tests",
     status: violations.length === 0 ? "pass" : "fail",
@@ -174,9 +239,30 @@ export function mutationScope(changed: Iterable<string>, coveredBy: (tests: stri
  */
 export const BASELINE_NOT_COMMITTED: Violation = {
   message:
-    `${BASELINE_FILENAME} を作りました。コミットしてください。` +
+    `${BASELINE_FILENAME} を作りました。git add -A などでコミットしてください` +
+    "（ファイル名を含む Bash コマンドは guard が止めます）。" +
     "履歴に無いと毎回いまの状態が許容値として置き直され、ラチェットが噛みません",
 };
+
+/**
+ * 後退の報告に、差分の外にある違反を名指しで添える。
+ *
+ * 記録は数だけ（DESIGN §ratchet）なので、どれが増えた分かは特定できない。
+ * それでも一覧が要る — 触った関数の違反は gateTouched が別に出すが、
+ * テストを消して**触っていない**関数の網羅率が落ちた後退は、これが無いと
+ * どの関数の話か手がかりがゼロになる。
+ */
+export function ratchetViolation(
+  report: ReturnType<typeof analyze>,
+  changed: Map<string, Set<number>>,
+  outcome: { allowed: number; actual: number },
+): Violation {
+  const head = `リポジトリ全体の違反が ${outcome.allowed} → ${outcome.actual} に増えました`;
+  const touched = new Set(touchedFunctions(report, changed));
+  const outside = repositoryViolators(report).filter((fn) => !touched.has(fn));
+  if (outside.length === 0) return { message: `${head}。増えた分は上の触った関数の違反です` };
+  return { message: withDetails(`${head}。差分の外にある違反（増えた分と、以前から許容されている分）:`, outside.map(crapText)) };
+}
 
 /**
  * リポジトリ全体のラチェットを当て、必要なら記録を更新する。
@@ -184,11 +270,11 @@ export const BASELINE_NOT_COMMITTED: Violation = {
  * 改善は自動で固定する。記録し損ねると許容値が緩いまま残り、
  * あとで同じだけ悪化させても通ってしまう。
  */
-export function applyRatchet(report: ReturnType<typeof analyze>): Violation[] {
+export function applyRatchet(report: ReturnType<typeof analyze>, changed: Map<string, Set<number>>): Violation[] {
   const baseline = loadBaseline(report.root);
   const outcome = gateRepository(report, baseline);
   if (outcome.kind === "regressed") {
-    return [{ message: `リポジトリ全体の違反が ${outcome.allowed} → ${outcome.actual} に増えました` }];
+    return [ratchetViolation(report, changed, outcome)];
   }
   if (outcome.kind !== "ok") saveBaseline(report.root, { ...EMPTY_BASELINE, ...baseline, crap: outcome.to });
   return outcome.kind === "seeded" ? [BASELINE_NOT_COMMITTED] : [];
@@ -213,7 +299,7 @@ export function crapViolations(
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
 ): Violation[] {
-  return [...gateTouched(report, changed), ...(tier === "pr" ? applyRatchet(report) : [])];
+  return [...gateTouched(report, changed), ...(tier === "pr" ? applyRatchet(report, changed) : [])];
 }
 
 /**
@@ -303,6 +389,21 @@ export function mutationScopeText(targets: number, ignored: number): string {
   return `変異対象 ${targets} ファイル${skipped}`;
 }
 
+/** 一覧の 1 行に収める。変異後のコードは複数行のことがある。 */
+export function oneLine(text: string, max: number): string {
+  const flat = text
+    .split("\n")
+    .map((part) => part.trim())
+    .join(" ");
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+}
+
+/** どの行のどんな変異が通り抜けたか。Stryker の再実行（分単位）なしで正体が分かる形に。 */
+export function describeSurvivor(mutant: SurvivedMutant): string {
+  const replacement = mutant.replacement === null ? "" : `  → ${oneLine(mutant.replacement, 60)}`;
+  return `L${mutant.line} ${mutant.mutator}${replacement}`;
+}
+
 /** 差分に関係するソースだけを変異させる。既存リポジトリ全体を一度に赤にしない。 */
 function mutationCheck(root: string, config: GauntletConfig, covered: Iterable<string>): CheckResult {
   const targets = mutationTargets(covered, listSourceFiles(root, config.source));
@@ -312,12 +413,12 @@ function mutationCheck(root: string, config: GauntletConfig, covered: Iterable<s
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
       scope: mutationScopeText(targets.length, ignored),
-      violations: gateByFile(
-        root,
-        "mutation",
-        targets,
-        countByFile(survived),
-        (entry) => `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`,
+      violations: gateByFile(root, "mutation", targets, countByFile(survived), (entry) =>
+        withDetails(
+          // 一覧は「そのファイルの生き残り全部」。記録は数だけなので、どれが増えた分かは特定できない。
+          `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`,
+          survived.filter((mutant) => mutant.file === entry.file).map(describeSurvivor),
+        ),
       ),
     };
   });
@@ -326,7 +427,7 @@ function mutationCheck(root: string, config: GauntletConfig, covered: Iterable<s
 /** ルールは対象リポジトリが持つ。gauntlet は件数を増やさせないだけ。 */
 function lintCheck(root: string, config: GauntletConfig): CheckResult {
   return timed("lint", () => {
-    const { scanned, counts } = runLint(root, config.source.include);
+    const { scanned, counts, details } = runLint(root, config.source.include);
     // ラチェットが突き合わせるのは「エラーがあったファイル ∪ 記録にあるファイル」。
     // 直して 0 件になったファイルの記録も下げる必要がある。
     const tracked = [...new Set([...Object.keys(counts), ...Object.keys(loadBaseline(root)?.lint ?? {})])];
@@ -335,7 +436,9 @@ function lintCheck(root: string, config: GauntletConfig): CheckResult {
       // リポジトリで「対象 0」になり、何も見ていないのと区別できない（hono で実測）。
       scope: `lint 対象 ${scanned} ファイル`,
       violations: gateByFile(root, "lint", tracked, counts, (entry) => {
-        return `lint エラーが ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`;
+        // Stryker disable next-line ArrayDeclaration: 後退したファイルには必ず
+        // エラーがあり、details に載る。既定値が使われる状態を作れない。
+        return withDetails(`lint エラーが ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`, details[entry.file] ?? []);
       }),
     };
   });
@@ -344,11 +447,28 @@ function lintCheck(root: string, config: GauntletConfig): CheckResult {
 export function formatResult(result: TierResult): string {
   const lines = result.checks.map((check) => {
     const mark = check.status === "pass" ? "✓" : "✗";
-    const detail = check.violations.map((violation) => `\n    ${violation.message}`).join("");
+    // 複数行の違反（tsc の診断、詳細つきの違反）も 2 行目以降ごと段に入れる。
+    // 先頭行しか下げないと、詳細がチェックの木から外れて見える。
+    const detail = check.violations.map((violation) => `\n    ${violation.message.split("\n").join("\n    ")}`).join("");
     return `  ${mark} ${check.name} (${check.durationMs.toFixed(0)}ms)  ${check.scope}${detail}`;
   });
   const header = `gauntlet ${result.tier}: ${result.status} (${result.durationMs.toFixed(0)}ms)`;
   return [header, ...lines].join("\n");
+}
+
+/** 自分で名づけているエラー。メッセージが一行の説明そのものになっている。 */
+const EXPECTED_ERRORS = new Set(["ConfigError", "GitError", "RunnerError"]);
+
+/**
+ * gauntlet 自身が走れなかったときの報告。
+ *
+ * 既知のエラー（設定・git・道具）はメッセージだけで直せる。未知のエラーは
+ * gauntlet 自身のバグなので、メッセージだけだと読み手は直しようがない —
+ * 場所（スタック）ごと出す。
+ */
+export function describeCrash(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  return EXPECTED_ERRORS.has(error.name) ? error.message : (error.stack ?? error.message);
 }
 
 export function run(argv: readonly string[], cwd: string): { output: string; result: TierResult } {

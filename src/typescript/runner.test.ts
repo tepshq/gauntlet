@@ -89,9 +89,10 @@ describe("vitestArgs", () => {
 
 describe("toOutcome", () => {
   const base = { success: true, numTotalTests: 10, numFailedTests: 0 };
+  const ROOT = "/repo";
 
   it("通っていれば passed", () => {
-    expect(toOutcome(base)).toEqual({ passed: true, total: 10, failed: 0, failedFiles: [] });
+    expect(toOutcome(base, ROOT)).toEqual({ passed: true, total: 10, failed: 0, failures: [] });
   });
 
   // success と numFailedTests のどちらかが異常なら通さない。
@@ -99,24 +100,85 @@ describe("toOutcome", () => {
     ["success が false", { ...base, success: false }],
     ["失敗件数がある", { ...base, numFailedTests: 2 }],
   ])("%s なら passed にしない", (_label, report) => {
-    expect(toOutcome(report).passed).toBe(false);
+    expect(toOutcome(report, ROOT).passed).toBe(false);
   });
 
-  it("落ちたファイルだけを挙げる", () => {
+  // ファイル名だけだと、読み手は理由を知るためにテストをもう一周回すしかない。
+  // テスト名と失敗の本文まで揃って初めて、出力だけで直せる。
+  it("落ちたテストを名前と理由つきで挙げる", () => {
     const report = {
       ...base,
       success: false,
       numFailedTests: 1,
       testResults: [
-        { name: "a.test.ts", status: "passed" },
-        { name: "b.test.ts", status: "failed" },
+        { name: "/repo/a.test.ts", status: "passed", assertionResults: [{ fullName: "a > ok", status: "passed" }] },
+        {
+          name: "/repo/b.test.ts",
+          status: "failed",
+          assertionResults: [
+            { fullName: "b > ok", status: "passed" },
+            { fullName: "b > 落ちる", status: "failed", failureMessages: ["expected 1 to be 2"] },
+          ],
+        },
       ],
     };
-    expect(toOutcome(report).failedFiles).toEqual(["b.test.ts"]);
+    expect(toOutcome(report, ROOT).failures).toEqual([
+      { file: "b.test.ts", test: "b > 落ちる", message: "expected 1 to be 2" },
+    ]);
+  });
+
+  // vitest は絶対パスで報告する。差分や baseline と同じリポジトリ相対に揃える。
+  it("相対パスの報告はそのまま使う", () => {
+    const report = {
+      ...base,
+      success: false,
+      testResults: [{ name: "b.test.ts", status: "failed", assertionResults: [] }],
+    };
+    expect(toOutcome(report, ROOT).failures[0]!.file).toBe("b.test.ts");
+  });
+
+  // 区切りを揃えないと、Windows と macOS で違反の場所が別のファイルに見える。
+  it("区切りを / に揃える", () => {
+    const report = {
+      ...base,
+      success: false,
+      testResults: [{ name: "/repo/src\\win\\a.test.ts", status: "failed", assertionResults: [] }],
+    };
+    expect(toOutcome(report, ROOT).failures[0]!.file).toBe("src/win/a.test.ts");
+  });
+
+  // 落ちた assert が無いのに failed なのは、ファイル自体が落ちた形（import エラー等）。
+  // そのときの本文はファイル側の message にしか無い。
+  it("ファイル自体が落ちたら、その本文を失敗として返す", () => {
+    const report = {
+      ...base,
+      success: false,
+      testResults: [
+        { name: "/repo/broken.test.ts", status: "failed", message: "Cannot find module './x'", assertionResults: [] },
+      ],
+    };
+    expect(toOutcome(report, ROOT).failures).toEqual([
+      { file: "broken.test.ts", test: null, message: "Cannot find module './x'" },
+    ]);
+  });
+
+  it("ファイル自体の失敗に本文が無ければ空文字", () => {
+    const report = { ...base, success: false, testResults: [{ name: "/repo/x.test.ts", status: "failed" }] };
+    expect(toOutcome(report, ROOT).failures).toEqual([{ file: "x.test.ts", test: null, message: "" }]);
+  });
+
+  // 名前や本文が欠けた JSON でも undefined を漏らさない。表示側が形を当てにする。
+  it("assert の失敗に名前と本文が無ければ null と空文字", () => {
+    const report = {
+      ...base,
+      success: false,
+      testResults: [{ name: "/repo/y.test.ts", status: "failed", assertionResults: [{ status: "failed" }] }],
+    };
+    expect(toOutcome(report, ROOT).failures).toEqual([{ file: "y.test.ts", test: null, message: "" }]);
   });
 
   // 既定を空配列にしないと、testResults の無い出力で中身のある配列が返る。
   it("testResults が無ければ空", () => {
-    expect(toOutcome(base).failedFiles).toEqual([]);
+    expect(toOutcome(base, ROOT).failures).toEqual([]);
   });
 });

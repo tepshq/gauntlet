@@ -61,14 +61,15 @@ export function measurementFaults(report: AdapterReport, testsRan: number, cover
   return [];
 }
 
-function toViolation(fn: FunctionReport): Violation {
+/** 違反の説明。gateTouched の違反にも、pr のラチェット報告の一覧にも同じ形で載る。 */
+export function crapText(fn: FunctionReport): string {
   const score = crap(fn.cc, fn.coverage).toFixed(1);
   const coverage = (fn.coverage * 100).toFixed(0);
-  return {
-    message: `CRAP ${score} (> ${CRAP_THRESHOLD})  複雑度 ${fn.cc} / 網羅率 ${coverage}%  ${describeLocation(fn.location)}`,
-    file: fn.location.file,
-    line: fn.location.startLine,
-  };
+  return `CRAP ${score} (> ${CRAP_THRESHOLD})  複雑度 ${fn.cc} / 網羅率 ${coverage}%  ${describeLocation(fn.location)}`;
+}
+
+function toViolation(fn: FunctionReport): Violation {
+  return { message: crapText(fn), file: fn.location.file, line: fn.location.startLine };
 }
 
 export interface GateResult {
@@ -87,6 +88,11 @@ export function gateTouched(report: AdapterReport, changed: Map<string, Set<numb
   return touchedFunctions(report, changed).filter(violatesThreshold).map(toViolation);
 }
 
+/** 閾値を超えている関数。ラチェットはこの数を数え、後退の報告はこの一覧を名指しする。 */
+export function repositoryViolators(report: AdapterReport): FunctionReport[] {
+  return report.functions.filter(violatesThreshold);
+}
+
 /**
  * リポジトリ全体の違反数を許容値と突き合わせる。フル実行の結果にだけ当てる。
  *
@@ -94,7 +100,7 @@ export function gateTouched(report: AdapterReport, changed: Map<string, Set<numb
  * 赤で埋めないため。以降はそこから下げる方向にしか動かない。
  */
 export function gateRepository(report: AdapterReport, baseline: Baseline | null): RatchetOutcome {
-  const actual = report.functions.filter(violatesThreshold).length;
+  const actual = repositoryViolators(report).length;
   if (baseline === null) return { kind: "seeded", to: actual };
   return ratchet(baseline, actual);
 }

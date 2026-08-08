@@ -8,7 +8,7 @@
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { capture } from "../exec.ts";
 import type { IstanbulCoverage } from "./coverage.ts";
 
@@ -19,19 +19,49 @@ export class RunnerError extends Error {
   }
 }
 
+/** テスト 1 件分の結果。`fullName` は `describe > it` を連結した全名。 */
+interface VitestAssertion {
+  fullName?: string;
+  status: string;
+  failureMessages?: string[];
+}
+
+/** ファイル 1 つ分の結果。`message` はファイル自体が落ちたとき（import エラー等）の本文。 */
+interface VitestFileResult {
+  name: string;
+  status: string;
+  message?: string;
+  assertionResults?: VitestAssertion[];
+}
+
 /** vitest の JSON reporter が返すもののうち、判定に使う部分。 */
 export interface VitestJsonReport {
   success: boolean;
   numTotalTests: number;
   numFailedTests: number;
-  testResults?: { name: string; status: string }[];
+  testResults?: VitestFileResult[];
+}
+
+/**
+ * 落ちたテスト 1 件分。
+ *
+ * ファイル名だけだと、読み手は理由を知るためにテストをもう一周回すしかない。
+ * vitest の JSON には理由（assert の期待値と実際）が既にあるので、ここで残す。
+ */
+export interface TestFailure {
+  /** リポジトリ相対。 */
+  file: string;
+  /** `describe > it` の全名。ファイル自体が落ちた（import エラー等）なら null。 */
+  test: string | null;
+  /** vitest が報告した失敗の本文。スタックを含むことがある（削るのは表示側）。 */
+  message: string;
 }
 
 export interface TestOutcome {
   passed: boolean;
   total: number;
   failed: number;
-  failedFiles: string[];
+  failures: TestFailure[];
   coverage: IstanbulCoverage;
 }
 
@@ -53,15 +83,42 @@ export function lastLines(text: string, count: number): string {
   return text.split("\n").slice(-count).join("\n").trim();
 }
 
+/** vitest は絶対パスで報告する。差分や baseline と同じリポジトリ相対に揃える。 */
+function relativeName(root: string, path: string): string {
+  return (isAbsolute(path) ? relative(root, path) : path).split("\\").join("/");
+}
+
+/**
+ * ファイル 1 つ分の失敗を取り出す。
+ *
+ * 落ちた assert が 1 つも無いのに status が failed なのは、ファイル自体が
+ * 落ちた形（import エラー、構文エラー等）。そのときの本文はファイル側の
+ * `message` にしか無い。
+ */
+function fileFailures(result: VitestFileResult, root: string): TestFailure[] {
+  const file = relativeName(root, result.name);
+  // Stryker disable next-line ArrayDeclaration: 既定値に何を入れても
+  // 直後の filter が status を見て落とすので、区別できる振る舞いが無い。
+  const failed = (result.assertionResults ?? []).filter((assertion) => assertion.status === "failed");
+  if (failed.length === 0) return [{ file, test: null, message: result.message ?? "" }];
+  return failed.map((assertion) => ({
+    file,
+    test: assertion.fullName ?? null,
+    message: assertion.failureMessages?.[0] ?? "",
+  }));
+}
+
 /** vitest の JSON reporter の出力から、判定に使う部分だけ取り出す。 */
-export function toOutcome(report: VitestJsonReport): Omit<TestOutcome, "coverage"> {
+export function toOutcome(report: VitestJsonReport, root: string): Omit<TestOutcome, "coverage"> {
   return {
     passed: report.success && report.numFailedTests === 0,
     total: report.numTotalTests,
     failed: report.numFailedTests,
     // Stryker disable next-line ArrayDeclaration: 既定値に何を入れても
     // 直後の filter が status を見て落とすので、区別できる振る舞いが無い。
-    failedFiles: (report.testResults ?? []).filter((r) => r.status === "failed").map((r) => r.name),
+    failures: (report.testResults ?? [])
+      .filter((result) => result.status === "failed")
+      .flatMap((result) => fileFailures(result, root)),
   };
 }
 
@@ -117,7 +174,7 @@ export function runTests(
     // exit code は握り潰す。閾値違反とテスト失敗が区別できないため。
     const { combined } = capture("npx", vitestArgs(base, outDir, projects, files), root);
     const report = readJson<VitestJsonReport>(join(outDir, "result.json"), "vitest の実行結果", combined);
-    const outcome = toOutcome(report);
+    const outcome = toOutcome(report, root);
 
     // **テストが落ちていれば coverage は無い。** vitest はテストが落ちると
     // coverage を書き出さない。ここで coverage の不在を報告すると、

@@ -24,6 +24,11 @@ export function shouldBlock(input: HookInput): boolean {
   return false;
 }
 
+// 「編集できません」だけだと、指示どおり `git add gauntlet.baseline.json` した
+// エージェントに矛盾した 2 つの指示が並ぶ。止まる条件（ファイル名に触れること）と
+// 正規の経路（Read / git add -A）まで言う。
 export const GUARD_MESSAGE =
-  `${BASELINE_FILENAME} は編集できません。これは許容する違反数の記録で、` +
-  `減らすのは gauntlet が自動で行います。赤を消すには違反そのものを直してください。`;
+  `${BASELINE_FILENAME} に触れる Bash コマンドと編集は止めています。` +
+  `これは許容する違反数の記録で、減らすのは gauntlet が自動で行います。` +
+  `赤を消すには違反そのものを直してください。` +
+  `読むには Read ツールを、コミットするには git add -A のようにファイル名を含まない形を使ってください。`;

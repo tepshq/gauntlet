@@ -54,7 +54,23 @@ function report(entries: Record<string, [status: string, line: number][]>): Muta
 describe("survivedFrom", () => {
   it("生き残った変異を場所つきで返す", () => {
     expect(survivedFrom(report({ "a.ts": [["Survived", 12]] }))).toEqual([
-      { file: "a.ts", line: 12, mutator: "ConditionalExpression" },
+      { file: "a.ts", line: 12, mutator: "ConditionalExpression", replacement: null },
+    ]);
+  });
+
+  // 位置と種類だけだと、正体を知るには Stryker の再実行（分単位）しかない。
+  it("変異後のコードを残す", () => {
+    const withReplacement: MutationReport = {
+      files: {
+        "a.ts": {
+          mutants: [
+            { mutatorName: "EqualityOperator", replacement: "<=", status: "Survived", location: { start: { line: 3 } } },
+          ],
+        },
+      },
+    };
+    expect(survivedFrom(withReplacement)).toEqual([
+      { file: "a.ts", line: 3, mutator: "EqualityOperator", replacement: "<=" },
     ]);
   });
 

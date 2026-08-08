@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldBlock } from "./guard.ts";
+import { GUARD_MESSAGE, shouldBlock } from "./guard.ts";
 
 describe("shouldBlock", () => {
   // 塞がなければ「赤 → baseline を緩める → 緑」が最短経路になる。
@@ -24,5 +24,19 @@ describe("shouldBlock", () => {
 
   it("空の入力で落ちない", () => {
     expect(shouldBlock({})).toBe(false);
+  });
+});
+
+describe("GUARD_MESSAGE", () => {
+  // 文言はエージェントへのフィードバックそのもの。「編集できません」だけだと、
+  // 種置きの指示どおり git add gauntlet.baseline.json した読み手に
+  // 矛盾した 2 つの指示が並ぶ。止まる条件と正規の経路まで言う。
+  it("止まる条件と正規の経路を丸ごと固定する", () => {
+    expect(GUARD_MESSAGE).toBe(
+      "gauntlet.baseline.json に触れる Bash コマンドと編集は止めています。" +
+        "これは許容する違反数の記録で、減らすのは gauntlet が自動で行います。" +
+        "赤を消すには違反そのものを直してください。" +
+        "読むには Read ツールを、コミットするには git add -A のようにファイル名を含まない形を使ってください。",
+    );
   });
 });

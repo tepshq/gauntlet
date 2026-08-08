@@ -31,6 +31,8 @@ export interface SurvivedMutant {
   file: string;
   line: number;
   mutator: string;
+  /** 変異後のコード。無いと読み手は Stryker を再実行（分単位）しないと正体が分からない。 */
+  replacement: string | null;
 }
 
 /**
@@ -43,7 +45,12 @@ export function survivedFrom(report: MutationReport): SurvivedMutant[] {
   return Object.entries(report.files).flatMap(([file, entry]) =>
     entry.mutants
       .filter((mutant) => mutant.status === "Survived")
-      .map((mutant) => ({ file, line: mutant.location.start.line, mutator: mutant.mutatorName })),
+      .map((mutant) => ({
+        file,
+        line: mutant.location.start.line,
+        mutator: mutant.mutatorName,
+        replacement: mutant.replacement ?? null,
+      })),
   );
 }
 
