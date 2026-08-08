@@ -105,12 +105,12 @@ describe("measurementFaults", () => {
   const bare: FunctionReport = fn("a.ts", 1, 5, 1, 0);
 
   it("測れていれば何も言わない", () => {
-    expect(measurementFaults(reportOf([covered]), 10)).toEqual([]);
+    expect(measurementFaults(reportOf([covered]), 10, true)).toEqual([]);
   });
 
   // メッセージだけ読んで直せる必要がある。原因の場所を名指しする。
   it("対象が 1 つも無ければ、どこを見るべきか言う", () => {
-    expect(measurementFaults(reportOf([]), 10)).toEqual([
+    expect(measurementFaults(reportOf([]), 10, true)).toEqual([
       {
         message:
           "測る対象が 1 つもありません。gauntlet.config.json の source.include が" +
@@ -122,7 +122,7 @@ describe("measurementFaults", () => {
   // 「テストが無いから 0%」と「coverage 設定が噛み合っていない」を区別できないまま
   // 全関数を違反にしてはいけない。件数を出すと、どちらか判断しやすい。
   it("テストが走ったのに誰も覆われていなければ、件数つきで落とす", () => {
-    expect(measurementFaults(reportOf([bare, bare]), 3822)).toEqual([
+    expect(measurementFaults(reportOf([bare, bare]), 3822, true)).toEqual([
       {
         message:
           "テストが 3822 件走ったのに、どの関数も覆われていません。" +
@@ -132,10 +132,20 @@ describe("measurementFaults", () => {
   });
 
   it("テストが 0 件なら網羅率 0 でも咎めない", () => {
-    expect(measurementFaults(reportOf([bare]), 0)).toEqual([]);
+    expect(measurementFaults(reportOf([bare]), 0, true)).toEqual([]);
   });
 
   it("1 つでも覆われていれば咎めない", () => {
-    expect(measurementFaults(reportOf([bare, covered]), 10)).toEqual([]);
+    expect(measurementFaults(reportOf([bare, covered]), 10, true)).toEqual([]);
+  });
+
+  // vitest は `--changed` のとき coverage を変更ファイルだけに絞るので、設定だけの
+  // 差分では「全テストが走って coverage が空」が正常（hono で誤検知して踏んだ）。
+  it("coverage を期待しない実行では、全員 0 でも咎めない", () => {
+    expect(measurementFaults(reportOf([bare, bare]), 4795, false)).toEqual([]);
+  });
+
+  it("coverage を期待しなくても、対象が空なのは設定の誤りとして言う", () => {
+    expect(measurementFaults(reportOf([]), 10, false)).toHaveLength(1);
   });
 });

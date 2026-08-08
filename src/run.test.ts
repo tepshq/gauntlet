@@ -454,6 +454,21 @@ describe("crapCheckViolations", () => {
     expect(violations).toHaveLength(1);
     expect(violations[0]!.message).toContain("coverage.include");
   });
+
+  // vitest は `--changed` のとき coverage を変更ファイルだけに絞る。設定だけの差分では
+  // 全テストが選ばれて走るが、変更されたソースが無いので coverage は空が正常。
+  // hono（4795 テスト・触った関数 0）で「噛み合っていない」と誤検知して落ちた。
+  it("turn で触った関数が 0 なら、coverage が空でも通す", () => {
+    const untouched: AdapterReport = { ...report, functions: [{ ...good, coverage: 0 }] };
+    expect(crapCheckViolations("turn", untouched, new Map(), { passed: true, total: 4795 })).toEqual([]);
+  });
+
+  // pr はフル実行なので、触った関数が 0 でも coverage が空なのは設定のずれ。
+  it("pr では触った関数が 0 でも coverage の空を咎める", () => {
+    const untouched: AdapterReport = { ...report, functions: [{ ...good, coverage: 0 }] };
+    const violations = crapCheckViolations("pr", untouched, new Map(), { passed: true, total: 4795 });
+    expect(violations[0]!.message).toContain("coverage.include");
+  });
 });
 
 describe("mutationScopeText", () => {

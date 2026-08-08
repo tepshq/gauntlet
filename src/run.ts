@@ -223,7 +223,10 @@ export function crapCheckViolations(
   outcome: Pick<TestOutcome, "passed" | "total">,
 ): Violation[] {
   if (!outcome.passed) return [CRAP_NEEDS_TESTS];
-  const faults = measurementFaults(report, outcome.total);
+  // `turn` は部分実行で、vitest は coverage を変更ファイルに絞る。触った関数が
+  // 0 なら coverage は空が正常（hono で実測）。`pr` はフル実行なので常に期待する。
+  const coverageExpected = tier === "pr" || touchedFunctions(report, changed).length > 0;
+  const faults = measurementFaults(report, outcome.total, coverageExpected);
   return faults.length === 0 ? crapViolations(tier, report, changed) : faults;
 }
 
@@ -317,13 +320,15 @@ function mutationCheck(root: string, config: GauntletConfig, covered: Iterable<s
 /** ルールは対象リポジトリが持つ。gauntlet は件数を増やさせないだけ。 */
 function lintCheck(root: string, config: GauntletConfig): CheckResult {
   return timed("lint", () => {
-    const counts = runLint(root, config.source.include);
-    // 対象は「エラーがあったファイル」ではなく「今回 lint したファイル」。
+    const { scanned, counts } = runLint(root, config.source.include);
+    // ラチェットが突き合わせるのは「エラーがあったファイル ∪ 記録にあるファイル」。
     // 直して 0 件になったファイルの記録も下げる必要がある。
-    const scanned = [...new Set([...Object.keys(counts), ...Object.keys(loadBaseline(root)?.lint ?? {})])];
+    const tracked = [...new Set([...Object.keys(counts), ...Object.keys(loadBaseline(root)?.lint ?? {})])];
     return {
-      scope: `lint 対象 ${scanned.length} ファイル`,
-      violations: gateByFile(root, "lint", scanned, counts, (entry) => {
+      // scope は eslint が実際に見たファイル数。エラーのあった数だと、綺麗な
+      // リポジトリで「対象 0」になり、何も見ていないのと区別できない（hono で実測）。
+      scope: `lint 対象 ${scanned} ファイル`,
+      violations: gateByFile(root, "lint", tracked, counts, (entry) => {
         return `lint エラーが ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`;
       }),
     };

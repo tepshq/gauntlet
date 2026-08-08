@@ -20,13 +20,15 @@ describe("RunnerError", () => {
 // 変異が有効になる前に計算が終わっていて、テストが変異を検知できない。
 describe("vitestArgs", () => {
   // 引数は丸ごと固定する。部分一致で見ると、コマンド名や出力先が変わっても気づかない。
-  it("pr は全部走らせる", () => {
+  // integration project は pr でも除外する。gauntlet はこの project を一切見ない。
+  it("pr は integration project 以外を全部走らせる", () => {
     expect(vitestArgs(null, "/tmp/out")).toEqual([
       "vitest",
       "run",
       "--coverage",
       "--coverage.provider=v8",
       "--coverage.reporter=json",
+      `--project=!${INTEGRATION_PROJECT}`,
       "--coverage.reportsDirectory=/tmp/out/coverage",
       "--reporter=json",
       "--outputFile=/tmp/out/result.json",
@@ -41,8 +43,8 @@ describe("vitestArgs", () => {
       "--coverage",
       "--coverage.provider=v8",
       "--coverage.reporter=json",
-      "--changed=abc123",
       `--project=!${INTEGRATION_PROJECT}`,
+      "--changed=abc123",
       "--coverage.reportsDirectory=/tmp/out/coverage",
       "--reporter=json",
       "--outputFile=/tmp/out/result.json",
@@ -50,6 +52,8 @@ describe("vitestArgs", () => {
   });
 
   // 位置引数がフラグの前に来ると vitest が読み取れない。
+  // 選択が 0 件になる組み合わせ（全部 integration 等）に特別なフラグは要らない —
+  // 呼び出し元（mutationScope）は coverage しか読まず、coverage は空に潰れる。
   it("指定したテストファイルだけに絞る", () => {
     expect(vitestArgs(null, "/tmp/out", ["a.test.ts", "b.test.ts"])).toEqual([
       "vitest",
@@ -57,6 +61,7 @@ describe("vitestArgs", () => {
       "--coverage",
       "--coverage.provider=v8",
       "--coverage.reporter=json",
+      `--project=!${INTEGRATION_PROJECT}`,
       "--coverage.reportsDirectory=/tmp/out/coverage",
       "--reporter=json",
       "--outputFile=/tmp/out/result.json",

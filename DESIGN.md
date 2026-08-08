@@ -29,6 +29,29 @@ Robert C. Martin が 2026年7月に述べた方針（コードは読まず、テ
 
 番号ではなく起動点で呼ぶ。中間の tier（commit 時など）は作らない。
 
+### integration テストは見ない
+
+**外部サービスを要するテスト（vitest の `integration` project）は、どの tier も見ない。**
+実行しない・coverage に数えない・mutation に参加させない。中途半端に残すと
+「殺せないテストが変異対象だけ広げる」歪みが出るので、束で外す。
+
+- **flaky** — 手元や CI に DB が無いだけで答えが変わる。mutation では並列実行下の
+  timeout 揺れの主因になる（duct で 11 変異中 8 timeout）。
+- **gameable** — integration の coverage は「通りすがりに実行しただけ」の行を
+  テスト済みに見せ、CRAP を薄める。実行は検証ではない。
+- **CI の分離が完成する** — workflow を配らない判断（§4）の続き。gauntlet の `pr` を
+  回す job にサービスコンテナ・migrate・seed が要らなくなる。wiring の検証は
+  各リポジトリの既存 CI の仕事。
+- **代償は小さい** — duct の実測で、integration でしか覆われていない関数は
+  6669 中 32（0.5%）、リポジトリ全体の CRAP 違反 +11（761 → 772）。しかもその多くは
+  ユニットテスト可能な純粋ヘルパーで、要求される圧力は健全な側。
+
+Stryker の vitest runner には project フィルタが無いので、mutation では
+リポジトリの vitest 設定を import して `integration` project だけ濾した一時設定を
+生成して渡す。規約は「インラインの project に `integration` と名づける」
+（setup skill が案内する）。glob 文字列で別ファイルを指す project は名前が読めないため
+濾せない — 規約の側で保証する。
+
 ### 差分の起点
 
 **両 tier とも「デフォルトブランチとの merge-base」。** 両者が違う集合を判定すると flaky になる。
@@ -121,6 +144,11 @@ mutation が独自に捕まえるのは「テストは通るが assert が弱い
 - **`source.include` が 1 ファイルも掴まない** — 実在しないパスを指している
 - **テストが走ったのに 1 関数も覆われていない** — vitest の coverage 設定が噛み合っていない
 - **baseline が履歴に無い** — ラチェットが一度も噛まない（下の「種を置いた回は通さない」）
+
+2 つ目は **coverage が出るはずの実行にだけ**当てる。vitest は `--changed` のとき coverage を
+変更ファイルだけに絞るので、触った関数が 0 の `turn` では「全テストが走って coverage が空」が
+正常な状態。hono の再生実験で、設定だけの差分（`--changed` が全 4795 テストを選ぶ）を
+「噛み合っていない」と誤検知して落ちた。フル実行の `pr` では常に当てる。
 
 **判定を足せない残りは、数を出す。** どのチェックも「何を見たか」を必ず 1 行で言う
 （`CheckResult.scope`。任意にしない — 出し忘れが「何も見ていない」と区別できなくなる）。
@@ -267,8 +295,14 @@ TypeScript の更新自体は良い投資なので、gauntlet と切り離して
 3. **`--inPlace` は実ファイルを書き換える。** mutation を CI 限定にしているので作業ツリーは
    使い捨てだが、CI 上で Stryker が異常終了すると変異したファイルが残りうる。
 4. **CRAP ≤ 8 が TypeScript でどれだけ厳しいか未検証。** dogfooding が最初の実測になる。
+   hono の再生実験（PLAN.md）で実例が 1 件出た: メンテナがマージ済みの修正が、網羅率 100% でも
+   CC 12 で絶対閾値に落ちる。テストでは救えない領域（CC > 8）に実務のコードが普通に入ってくる。
 5. **`turn` は触った関数しか見ない。** 触っていない箇所の劣化は `pr` のラチェットまで表に出ない。
 6. **`oxc-parser` は 0.x。** TypeScript 公式 conformance の AST パースは 9779/9779 だが、AST の形は安定化作業中。上がるときに CC の値が動く可能性がある。
+7. **integration テストの assert を弱める差分は、gauntlet の何も検知しない。**
+   integration を見ない判断（§2）の代償。mutation の網は「gauntlet が走らせるテスト」の
+   範囲にしか張れない。integration テストの正しさは、それを走らせる各リポジトリの CI と
+   エージェントのコードレビューに委ねる。
 
 ## 参考
 

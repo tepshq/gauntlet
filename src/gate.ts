@@ -30,8 +30,14 @@ function violatesThreshold(fn: FunctionReport): boolean {
  *
  * 設定が現実とずれると、gauntlet は「違反ゼロ」を報告する。走らなかったゲートが
  * 緑に見えるのは、設計で `flaky` として避けた形そのもの。落として理由を言う。
+ *
+ * `coverageExpected` — vitest は `--changed` のとき coverage を**変更ファイルだけに絞る**
+ * （hue の実測。unchanged は丸ごと欠落する）。だから触った関数が 0 の `turn` では、
+ * テストが何千件走っても coverage が空なのが正常で、設定のずれとは区別できる。
+ * フル実行の `pr` では常に true（hono で誤検知して入れた。設定だけの差分で全テストが
+ * 選ばれ、正しく空の coverage を「噛み合っていない」と誤認して落ちた）。
  */
-export function measurementFaults(report: AdapterReport, testsRan: number): Violation[] {
+export function measurementFaults(report: AdapterReport, testsRan: number, coverageExpected: boolean): Violation[] {
   if (report.functions.length === 0) {
     return [
       {
@@ -43,7 +49,7 @@ export function measurementFaults(report: AdapterReport, testsRan: number): Viol
   }
   // テストが走ったのに 1 関数も覆われていないなら、coverage の設定が噛み合っていない。
   // 「テストが無いから 0%」と区別がつかないまま全関数を違反にしてはいけない。
-  if (testsRan > 0 && report.functions.every((fn) => fn.coverage === 0)) {
+  if (coverageExpected && testsRan > 0 && report.functions.every((fn) => fn.coverage === 0)) {
     return [
       {
         message:

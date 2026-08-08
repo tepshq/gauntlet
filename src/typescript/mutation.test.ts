@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { REPORT_PATH, type MutationReport, ignoredCount, strykerArgs, survivedFrom } from "./mutation.ts";
+import { REPORT_PATH, type MutationReport, findRepoVitestConfig, ignoredCount, strykerConfig, strykerFiles, strykerVitestWrapper, survivedFrom } from "./mutation.ts";
 import { lastLines } from "./runner.ts";
 
 // レポートが出ていないときは Stryker の出力が唯一の手がかりになる。
@@ -96,27 +99,97 @@ describe("ignoredCount", () => {
 
 // 呼び出しは必ず it の中で行う。describe の直下で値を作ると、
 // 変異が有効になる前に計算が終わっていて、テストが変異を検知できない。
-describe("strykerArgs", () => {
-  // 引数は丸ごと固定する。1 つ欠けると duct で踏んだ形（退避先をリポジトリ内に作り、
+describe("strykerConfig", () => {
+  // 設定は丸ごと固定する。1 つ欠けると duct で踏んだ形（退避先をリポジトリ内に作り、
   // その中のテストを vitest が拾って coverage 解析が壊れる）に戻る。
   it("丸ごと固定する", () => {
-    expect(strykerArgs(["a.ts", "b.ts"], "/tmp/out")).toEqual([
-      "run",
-      "--testRunner",
-      "vitest",
-      "--inPlace",
-      "--tempDirName",
-      "/tmp/out",
-      "--ignoreStatic",
-      "--reporters",
-      "json",
-      "--mutate",
-      "a.ts,b.ts",
-    ]);
+    expect(strykerConfig(["a.ts", "b.ts"], "/tmp/out", "/conf/vitest.config.mjs")).toEqual({
+      testRunner: "vitest",
+      inPlace: true,
+      tempDirName: "/tmp/out",
+      ignoreStatic: true,
+      reporters: ["json"],
+      mutate: ["a.ts", "b.ts"],
+      vitest: { configFile: "/conf/vitest.config.mjs" },
+    });
   });
 
-  // 退避先がリポジトリ内だと、対象リポジトリの vitest がコピーをテストとして拾う。
-  it("退避先を渡す", () => {
-    expect(strykerArgs([], "/elsewhere")).toContain("/elsewhere");
+  // リポジトリに vitest 設定が無ければラッパーも無い。既定の解決に任せる。
+  it("ラッパーが無ければ vitest キーを足さない", () => {
+    expect(strykerConfig([], "/tmp/out", null)).not.toHaveProperty("vitest");
+  });
+});
+
+describe("strykerVitestWrapper", () => {
+  // 生成する JS は丸ごと固定する。ここが 1 文字ずれても Stryker の vitest は
+  // 黙って別の設定で走り、「integration を除いたつもり」の緑になる。
+  it("生成する設定を丸ごと固定する", () => {
+    expect(strykerVitestWrapper("/repo/vitest.config.ts", "/repo")).toBe(
+      [
+        "// gauntlet が生成した一時ファイル。リポジトリの vitest 設定から integration project を除く。",
+        'import base from "/repo/vitest.config.ts";',
+        'const config = (await (typeof base === "function" ? base({ command: "serve", mode: "test" }) : base)) ?? {};',
+        'config.root ??= "/repo";',
+        "if (Array.isArray(config.test?.projects)) {",
+        "  config.test.projects = config.test.projects.filter(",
+        '    (project) => typeof project === "string" || project?.test?.name !== "integration",',
+        "  );",
+        "}",
+        "export default config;",
+        "",
+      ].join("\n"),
+    );
+  });
+});
+
+describe("strykerFiles", () => {
+  it("先頭が Stryker に渡す設定で、ラッパーの場所を指している", () => {
+    const files = strykerFiles("/conf", "/tmp/out", "/repo", "/repo/vitest.config.ts", ["a.ts"]);
+    expect(files.map((file) => file.path)).toEqual(["/conf/stryker.conf.json", "/conf/vitest.config.mjs"]);
+    expect(JSON.parse(files[0]!.content)).toEqual(strykerConfig(["a.ts"], "/tmp/out", "/conf/vitest.config.mjs"));
+    expect(files[0]!.content).toBe(JSON.stringify(strykerConfig(["a.ts"], "/tmp/out", "/conf/vitest.config.mjs"), null, 2));
+    expect(files[1]!.content).toBe(strykerVitestWrapper("/repo/vitest.config.ts", "/repo"));
+  });
+
+  // リポジトリに vitest 設定が無ければ、濾すべき projects も無い。
+  it("リポジトリに設定が無ければラッパーを作らない", () => {
+    const files = strykerFiles("/conf", "/tmp/out", "/repo", null, ["a.ts"]);
+    expect(files.map((file) => file.path)).toEqual(["/conf/stryker.conf.json"]);
+    expect(JSON.parse(files[0]!.content)).toEqual(strykerConfig(["a.ts"], "/tmp/out", null));
+  });
+});
+
+describe("findRepoVitestConfig", () => {
+  function withDir(body: (root: string) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-conf-"));
+    try {
+      body(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("vitest.config を vite.config より先に見る", () => {
+    withDir((root) => {
+      writeFileSync(join(root, "vite.config.ts"), "");
+      writeFileSync(join(root, "vitest.config.ts"), "");
+      expect(findRepoVitestConfig(root)).toBe(join(root, "vitest.config.ts"));
+    });
+  });
+
+  it.each(["vitest.config.mts", "vitest.config.cts", "vitest.config.js", "vitest.config.mjs", "vitest.config.cjs", "vite.config.mjs"])(
+    "%s を見つける",
+    (name) => {
+      withDir((root) => {
+        writeFileSync(join(root, name), "");
+        expect(findRepoVitestConfig(root)).toBe(join(root, name));
+      });
+    },
+  );
+
+  it("無ければ null", () => {
+    withDir((root) => {
+      expect(findRepoVitestConfig(root)).toBe(null);
+    });
   });
 });

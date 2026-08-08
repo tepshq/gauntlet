@@ -4,7 +4,17 @@ import { countErrors, parseLintOutput } from "./lint.ts";
 describe("parseLintOutput", () => {
   it("eslint の JSON を数に直す", () => {
     const stdout = JSON.stringify([{ filePath: "/repo/src/a.ts", errorCount: 2 }]);
-    expect(parseLintOutput(stdout, "/repo")).toEqual({ "src/a.ts": 2 });
+    expect(parseLintOutput(stdout, "/repo")).toEqual({ scanned: 1, counts: { "src/a.ts": 2 } });
+  });
+
+  // scope が言うのは「見たファイル数」。エラーのあった数だと、綺麗なリポジトリで
+  // 「対象 0」になり、何も見ていないのと区別できない（hono の 309 ファイル 0 エラーで実測）。
+  it("エラー 0 のファイルも scanned に数える", () => {
+    const stdout = JSON.stringify([
+      { filePath: "/repo/src/a.ts", errorCount: 0 },
+      { filePath: "/repo/src/b.ts", errorCount: 0 },
+    ]);
+    expect(parseLintOutput(stdout, "/repo")).toEqual({ scanned: 2, counts: {} });
   });
 
   // 出力が読めないまま 0 件として通すと、lint が実質無効になっても緑になる。

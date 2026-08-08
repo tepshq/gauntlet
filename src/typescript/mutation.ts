@@ -7,11 +7,11 @@
  * 実ファイルを書き換えることになるが、mutation は CI でしか走らせないので作業ツリーは使い捨て。
  */
 
-import { existsSync, globSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { capture } from "../exec.ts";
-import { RunnerError, lastLines } from "./runner.ts";
+import { INTEGRATION_PROJECT, RunnerError, lastLines } from "./runner.ts";
 
 /** Stryker の json reporter の固定出力先。CLI からファイル名を変えられない。 */
 export const REPORT_PATH = "reports/mutation/mutation.json";
@@ -72,7 +72,8 @@ function strykerBin(root: string): string {
 }
 
 /**
- * Stryker に渡す引数。
+ * Stryker に渡す設定。CLI 引数ではなく生成した設定ファイルで渡す —
+ * vitest runner の `configFile`（下のラッパー）は CLI から指定できないため。
  *
  * **退避先をリポジトリの外に出す。** `--inPlace` は実ファイルを書き換えるので、
  * まず元ファイルを退避ディレクトリへ丸ごとコピーする。それが既定ではリポジトリ内の
@@ -90,20 +91,90 @@ function strykerBin(root: string): string {
  * timeout は違反に数えないので**分単位を払って何も分からない**状態だったこと、
  * そして duct の CI が既に 13 分に達していること。失った分は `ignoredCount` で件数を出す。
  */
-export function strykerArgs(files: readonly string[], tempDir: string): string[] {
+export function strykerConfig(
+  files: readonly string[],
+  tempDir: string,
+  vitestConfigFile: string | null,
+): Record<string, unknown> {
+  return {
+    testRunner: "vitest",
+    inPlace: true,
+    tempDirName: tempDir,
+    ignoreStatic: true,
+    reporters: ["json"],
+    mutate: [...files],
+    ...(vitestConfigFile === null ? {} : { vitest: { configFile: vitestConfigFile } }),
+  };
+}
+
+/** vitest が設定として解決する名前。vitest 優先は vitest 自身の解決順に合わせている。 */
+const CONFIG_CANDIDATES = ["vitest.config", "vite.config"].flatMap((base) =>
+  ["ts", "mts", "cts", "js", "mjs", "cjs"].map((ext) => `${base}.${ext}`),
+);
+
+/** リポジトリの vitest 設定。Stryker のラッパーが import する相手。 */
+export function findRepoVitestConfig(root: string): string | null {
+  const found = CONFIG_CANDIDATES.find((name) => existsSync(join(root, name)));
+  return found === undefined ? null : join(root, found);
+}
+
+/**
+ * Stryker に渡す vitest 設定のラッパー。
+ *
+ * Stryker の vitest runner には project フィルタが無い（`dir` / `related` /
+ * `configFile` のみ）。integration project を除くには設定ごと差し替えるしかないので、
+ * リポジトリの設定を import して projects だけ濾したものを一時ファイルとして渡す。
+ *
+ * project の指定が別ファイルへの glob 文字列（`./x/*\/vitest.config.ts`）だと名前が
+ * 読めないので濾せない。gauntlet の規約は「インラインの project に `integration` と
+ * 名づける」（init の skill が案内する形）で、そこだけを保証する。
+ *
+ * `root` を明示するのは、設定ファイルがリポジトリの外（一時ディレクトリ）に
+ * 置かれるため。vitest が設定の場所から root を推測すると探索が壊れる。
+ */
+export function strykerVitestWrapper(repoConfigPath: string, root: string): string {
   return [
-    "run",
-    "--testRunner",
-    "vitest",
-    "--inPlace",
-    "--tempDirName",
-    tempDir,
-    "--ignoreStatic",
-    "--reporters",
-    "json",
-    "--mutate",
-    files.join(","),
-  ];
+    "// gauntlet が生成した一時ファイル。リポジトリの vitest 設定から integration project を除く。",
+    `import base from ${JSON.stringify(repoConfigPath)};`,
+    'const config = (await (typeof base === "function" ? base({ command: "serve", mode: "test" }) : base)) ?? {};',
+    `config.root ??= ${JSON.stringify(root)};`,
+    "if (Array.isArray(config.test?.projects)) {",
+    "  config.test.projects = config.test.projects.filter(",
+    `    (project) => typeof project === "string" || project?.test?.name !== ${JSON.stringify(INTEGRATION_PROJECT)},`,
+    "  );",
+    "}",
+    "export default config;",
+    "",
+  ].join("\n");
+}
+
+export interface GeneratedFile {
+  path: string;
+  content: string;
+}
+
+/**
+ * Stryker 起動に要るファイル一式。**先頭が Stryker に渡す設定。**
+ * 組み立ては純粋に行い、書くのは呼び出し側。ここをテストで固定して、
+ * プロセスを起動する殻（`runMutation`）には判断を残さない。
+ */
+function confFile(confDir: string, tempDir: string, files: readonly string[], wrapper: string | null): GeneratedFile {
+  return {
+    path: join(confDir, "stryker.conf.json"),
+    content: JSON.stringify(strykerConfig(files, tempDir, wrapper), null, 2),
+  };
+}
+
+export function strykerFiles(
+  confDir: string,
+  tempDir: string,
+  root: string,
+  repoConfig: string | null,
+  files: readonly string[],
+): GeneratedFile[] {
+  if (repoConfig === null) return [confFile(confDir, tempDir, files, null)];
+  const wrapper = join(confDir, "vitest.config.mjs");
+  return [confFile(confDir, tempDir, files, wrapper), { path: wrapper, content: strykerVitestWrapper(repoConfig, root) }];
 }
 
 export interface MutationOutcome {
@@ -116,8 +187,13 @@ export interface MutationOutcome {
 export function runMutation(root: string, files: readonly string[]): MutationOutcome {
   const bin = strykerBin(root);
   const tempDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-"));
+  // 設定は退避先と別のディレクトリに置く。Stryker は tempDirName の中身を管理する
+  // （作成・掃除）ので、同居させると設定ファイルごと消されうる。
+  const confDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-conf-"));
   try {
-    const { combined } = capture(bin, strykerArgs(files, tempDir), root);
+    const launch = strykerFiles(confDir, tempDir, root, findRepoVitestConfig(root), files);
+    launch.forEach((file) => writeFileSync(file.path, file.content));
+    const { combined } = capture(bin, ["run", launch[0]!.path], root);
 
     const path = join(root, REPORT_PATH);
     if (!existsSync(path)) {
@@ -129,6 +205,7 @@ export function runMutation(root: string, files: readonly string[]): MutationOut
     return { survived: survivedFrom(report), ignored: ignoredCount(report) };
   } finally {
     rmSync(tempDir, { recursive: true, force: true });
+    rmSync(confDir, { recursive: true, force: true });
   }
 }
 

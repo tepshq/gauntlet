@@ -56,8 +56,12 @@ export function lastLines(text: string, count: number): string {
 /**
  * 外部サービス（DB・ネットワーク・実ファイルシステム）を要するテストを置く vitest project の名前。
  *
- * `turn` はこの project を除外する。開発者の手元に DB が無いだけで毎ターン赤になると、
- * ゲートが環境によって答えを変えることになる（flaky）。`pr` では走らせる。
+ * **gauntlet はこの project を一切見ない**（`turn` も `pr` も。実行・coverage・mutation 全部）。
+ * 手元に DB が無いだけで赤になるのは flaky であり、integration テストの coverage は
+ * 「通りすがりに実行しただけ」の行を「テスト済み」に見せて CRAP を薄める（gameable）。
+ * wiring の検証は各リポジトリの CI の仕事で、そこにはサービスコンテナや migrate など
+ * gauntlet から見えないものが要る（DESIGN §2）。duct の実測では、integration でしか
+ * 覆われていない関数は 6669 中 32 で、除外の代償は小さい。
  *
  * **glob の `--exclude` ではなく project 名で指定する。** `--exclude` は vitest の
  * `projects` に伝わらず、project を使うリポジトリでは黙って無効になる（duct で実測）。
@@ -83,7 +87,8 @@ export function toOutcome(report: VitestJsonReport): Omit<TestOutcome, "coverage
 
 export function vitestArgs(base: string | null, outDir: string, files: readonly string[] = []): string[] {
   const args = ["vitest", "run", "--coverage", "--coverage.provider=v8", "--coverage.reporter=json"];
-  if (base !== null) args.push(`--changed=${base}`, `--project=!${INTEGRATION_PROJECT}`);
+  args.push(`--project=!${INTEGRATION_PROJECT}`);
+  if (base !== null) args.push(`--changed=${base}`);
   args.push(`--coverage.reportsDirectory=${join(outDir, "coverage")}`);
   args.push("--reporter=json", `--outputFile=${join(outDir, "result.json")}`);
   // 位置引数はテストファイルの絞り込み。フラグの後ろに置く。
@@ -100,6 +105,9 @@ export function vitestArgs(base: string | null, outDir: string, files: readonly 
  *
  * `files` を渡すとそのテストファイルだけを走らせる。どのソースを覆っているかを
  * 知るために使う（`mutationScope`）。`base` とは併用しない。
+ * 渡したテストが全部 integration project で選択が 0 件になっても、特別扱いは要らない
+ * — vitest は `success: false` を返すが、呼び出し元は coverage しか読まず、
+ * coverage は空に潰れる（duct の vitest 3.2.7 で実測）。
  */
 export function runTests(root: string, base: string | null, files: readonly string[] = []): TestOutcome {
   const outDir = mkdtempSync(join(tmpdir(), "gauntlet-"));
