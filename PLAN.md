@@ -398,7 +398,24 @@ GitHub Packages の認証経路がこれで検証できた（パッケージ設�
   `init` を叩く」流れに書き直した（DESIGN §4）。tsconfig の `include` から機械的に導けるかを
   3 本で試したが、hue は正解・teps と duct は不正解で、判断が要ることが確認できた。
 
-### duct（CI 緑、`try-gauntlet` ブランチ / tepshq/duct#563 — マージ待ち）
+### duct 第 2 期（tepshq/duct#564 — 全チェック緑、マージ待ち）
+
+0.9.0（integration 除外 + public npm）での導入 PR。gauntlet job は**認証もサービスコンテナも
+無い最小 workflow**（checkout + setup-node 22 + `npm ci` + `npx gauntlet run --tier=pr`）で
+**14 分 50 秒 pass**。依存は exact pin。baseline は 761 → 773 の明示的後退 2 回
+（integration の coverage 剥離 32 関数 +11、隠れ DB テスト 2 本の移動 +1）。
+
+ここで見つかったこと:
+
+- **隠れ DB 依存の unit テスト 2 ファイル**（`lib/validation/__tests__/` の 2 本）。ファイル内に
+  prisma への直接参照が無い間接依存で grep では見つからず、手元は Postgres が動いているので
+  常に緑だった。**DB の無い CI が初めて炙り出した** — skill の「実行で確定させる」手順の
+  検出漏れを補う形。`*.integration.test.ts` へリネームで解消。
+- **Vercel の preview デプロイが private パッケージの 4 例目の被害者だった。** PR を作った
+  瞬間に Vercel の `npm install` が 401。public npm への移行（0.9.0）で解消し、
+  #563 / #559 が滞留していた一因もこれで説明がつく可能性が高い。
+
+### duct 第 1 期（`try-gauntlet` ブランチ / tepshq/duct#563 — #564 に置き換わる見込み）
 
 **唯一、リポジトリの持ち主が導入ガイドに沿って自分で入れた例**（skill はまだ実地で
 試されていない — 開発者が読んだのはアーティファクトのガイド）。こちらが用意した
