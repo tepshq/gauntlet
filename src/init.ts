@@ -64,6 +64,9 @@ description: gauntlet をこのリポジトリに導入する、または測る�
 - \`tsconfig.json\` の \`include\` — ただし鵜呑みにしない。生成物（\`.next/types\`）、
   設定ファイル（\`next.config.ts\`, \`vitest.config.ts\`）、e2e が混ざっていることが多い
 - TypeScript が置かれている最上位ディレクトリを実際に列挙する
+- **ルート直下の \`.ts\` も 1 つずつ分類する。** 設定ファイルに紛れて製品コードが
+  置かれていることがある（duct ではルートの \`proxy.ts\` が Auth0 の認証ゲート本体で、
+  最初の導入はこれを測り漏らした）。\`init\` の取りこぼし報告はディレクトリしか挙げない
 - テストファイルの命名規則（\`*.test.ts\` / \`*.spec.ts\` / \`__tests__/\`）
 - 既定ブランチ（\`git symbolic-ref --short HEAD\` や \`origin/HEAD\`）
 
@@ -80,6 +83,12 @@ DB・ネットワーク・実ファイルシステムに触れるテストを探
 - \`PrismaClient\` / \`new Pool(\` / \`$queryRaw\` / \`createClient(\` の import
 - \`beforeAll\` での接続や \`listen(\`
 - 「ローカル DB に接続できません」のようなガード
+
+**確定させるのは grep ではなく実行。** 候補が出そろったら、\`.env\` / \`.env.local\` を
+一時的に別の場所へ退避して unit テストを走らせる。落ちるものだけが本物。
+環境変数を unset するだけでは足りない — テストファイルが自前で dotenv を読む設計は
+普通にある（duct で実測。grep は 16 候補中 15 が偽陽性で、本物 1 件を取りこぼしていた。
+取りこぼしは後の「DB 無しで \`turn\` が通ること」の確認で捕まえた）。
 
 **規約: そういうテストは \`*.integration.test.ts\` と名付ける。** gauntlet は \`turn\` でこれを
 除外し、\`pr\` でのみ走らせる。設定項目は無い。名前が合っていないファイルは**リネームしてもらう**。
@@ -157,10 +166,15 @@ npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glo
 \`\`\`ts
 projects: [
   { extends: true, test: { name: "unit", include: ["**/*.test.ts"],
-    exclude: ["**/node_modules/**", "**/*.integration.test.ts"] } },
-  { extends: true, test: { name: "integration", include: ["**/*.integration.test.ts"] } },
+    exclude: ["**/node_modules/**", "**/.claude/**", "**/*.integration.test.ts"] } },
+  { extends: true, test: { name: "integration", include: ["**/*.integration.test.ts"],
+    exclude: ["**/node_modules/**", "**/.claude/**"] } },
 ]
 \`\`\`
+
+\`**/.claude/**\` の除外は全 project に入れる。Claude Code の worktree が
+\`.claude/worktrees/\` にリポジトリ丸ごとのコピーを作ることがあり、
+その中のテストまで拾うと件数が倍増する（duct で 600 ファイル拾った実例）。
 
 **b. 命名が合っていないファイルをリネームする。** 外部サービスを要するのに
 \`*.integration.test.*\` でないものは \`turn\` に入ってしまう。

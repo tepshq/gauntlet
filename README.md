@@ -85,13 +85,28 @@ gauntlet は private パッケージなので、消費側リポジトリの `sec
 ```
 
 ```bash
-npm i -D @tepshq/gauntlet @vitest/coverage-v8 @stryker-mutator/core @stryker-mutator/vitest-runner
+V=$(node -p "require('vitest/package.json').version")
+npm i -D @tepshq/gauntlet "@vitest/coverage-v8@$V" @stryker-mutator/core @stryker-mutator/vitest-runner
 ```
+
+**`@vitest/coverage-v8` はリポジトリの vitest とバージョンを揃えます**（上の 1 行目）。
+無指定だと最新（4.x）が入り、vitest 3.x のリポジトリでは peer 依存の衝突で
+`npm i` 自体が失敗します（duct で実測）。
+
+入れたら、そのまま一度叩きます:
+
+```bash
+npx gauntlet init
+```
+
+これが skill（`.claude/skills/gauntlet`）を含む 4 ファイルを置きます。この時点の
+測る範囲は既定値なので、たいてい「測る対象: 0 ファイル」と警告が出ます — それで正常です。
+範囲は次の手順で決めます。
 
 ### 3. 測る範囲を決める
 
-**Claude Code で `.claude/skills/gauntlet` を使ってください。** 推測で入れると測る範囲が
-狭いまま緑になり、それが一番気づけない失敗になります。
+**Claude Code で `.claude/skills/gauntlet` を使ってください**（手順 2 の `init` が
+置いたものです）。推測で入れると測る範囲が狭いまま緑になり、それが一番気づけない失敗になります。
 
 エージェントがリポジトリを読み、理由つきで範囲を提案し、合意してから `init` を叩く流れです。
 `tsconfig.json` の `include` は当てになりません（生成物・設定ファイル・e2e が混ざります）。
