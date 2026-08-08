@@ -29,7 +29,7 @@ export const INIT_DEFAULTS: InitOptions = {
 
 function configFor(options: InitOptions): GauntletConfig & { $schema: string } {
   return {
-    $schema: "./node_modules/@tepshq/gauntlet/schema/gauntlet.config.schema.json",
+    $schema: "./node_modules/@teps/gauntlet/schema/gauntlet.config.schema.json",
     schemaVersion: 1,
     adapter: "typescript",
     runner: "vitest",

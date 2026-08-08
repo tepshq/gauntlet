@@ -209,11 +209,13 @@ CRAP と違って単一の数にできないのは、mutation が差分に関係
 
 - **public npm（registry.npmjs.org）で配布する。** 0.0.13 までの GitHub Packages
   （private）は、開発者ごとの `.npmrc`・workflow ごとの `NODE_AUTH_TOKEN`・
-  リポジトリごとの Manage Actions access という 3 種の手続きを要し、パイロット 3 本で
-  401/403 系の導入事故を 3 回起こした。gauntlet に依存した瞬間、無関係な workflow の
-  `npm ci` まで巻き添えで壊れる形が特に悪い。パッケージに秘匿すべきものは無い
-  （計測結果・baseline・config は各リポジトリ側にある）ので、公開して認証を丸ごと消す。
-- `npx @tepshq/gauntlet init` が**薄いファイルだけ**置く:
+  リポジトリごとの Manage Actions access という 3 種の手続きを要し、401/403 系の
+  導入事故を 4 回起こした（hue と duct の CI、そして duct では **Vercel のデプロイ**も
+  — gauntlet を devDependency に足した瞬間、認証を持たない `npm install` が全部落ちる）。
+  gauntlet に依存した瞬間、無関係な workflow まで巻き添えで壊れる形が特に悪い。
+  パッケージに秘匿すべきものは無い（計測結果・baseline・config は各リポジトリ側にある）ので、
+  公開して認証を丸ごと消す。
+- `npx @teps/gauntlet init` が**薄いファイルだけ**置く:
   `.claude/settings.json` のフックエントリ / `gauntlet.config.json` / setup skill 1 枚 / `.gitignore` の追記。
   ロジックはすべて npm パッケージ側にあり、生成物にロジックを持たせない。
 - **CI の workflow は置かない。** 以前は雛形を書いていたが、CI が要るものは gauntlet からは

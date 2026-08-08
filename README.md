@@ -76,7 +76,7 @@ Robert C. Martin が 2026 年 7 月に「自分はもうエージェントのコ
 
 ```bash
 V=$(node -p "require('vitest/package.json').version")
-npm i -D @tepshq/gauntlet "@vitest/coverage-v8@$V" @stryker-mutator/core @stryker-mutator/vitest-runner
+npm i -D @teps/gauntlet "@vitest/coverage-v8@$V" @stryker-mutator/core @stryker-mutator/vitest-runner
 ```
 
 **`@vitest/coverage-v8` はリポジトリの vitest とバージョンを揃えます**（上の 1 行目）。
@@ -147,8 +147,9 @@ npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/*
 ## 規約: 外部サービスを要するテストは `integration` project に置く
 
 DB・ネットワーク・実ファイルシステムに触れるテストは、vitest の `projects` で `integration` と
-いう名前の project にまとめてください。gauntlet は **`turn` でこれを除外し、`pr` でのみ
-走らせます**。設定項目はありません。
+いう名前の project にまとめてください。gauntlet は **これを一切見ません**（`turn` も `pr` も。
+実行・coverage・mutation すべて）。integration テストを走らせる場所は各リポジトリの既存 CI です。
+設定項目はありません。
 
 ```ts
 projects: [
@@ -192,10 +193,10 @@ npx gauntlet run --tier=pr
 
 | repo | テスト数 | `turn` | `pr` |
 | --- | --- | --- | --- |
-| gauntlet 自身 | 241 | 1.0 秒 | 12 秒 |
+| gauntlet 自身 | 337 | 1.0 秒 | 22 秒 |
 | hue | 412 | 5.5 秒 | 24 秒（CI） |
 | teps | 3822 | 10.4 秒 | 199 秒（CI） |
-| duct | 3770 | 20 秒 | 未計測 |
+| duct | 7221 | 64 秒 | 75 秒（手元） |
 
 `turn` は差分に関係するテストだけを走らせるので、変更したファイルによって前後します。
 

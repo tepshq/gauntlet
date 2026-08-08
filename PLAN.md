@@ -176,6 +176,8 @@ gauntlet turn: fail (670ms)
 これは crap 側が網羅率 0 として捕まえるので穴にはならないが、2 つのチェックの合わせ技で成立している。
 
 パッケージ名は **`@tepshq/gauntlet`**。開発中止した旧 gauntlet と同名で、registry 上のものは作り直す。
+→ 0.0.14 の public npm 移行で **`@teps/gauntlet`** に改名（npmjs の org 名を teps に合わせた。
+GitHub Packages の 0.0.13 以前は旧名のまま残る）。
 
 ### 6. mutation testing（`pr` のみ）— 完了
 

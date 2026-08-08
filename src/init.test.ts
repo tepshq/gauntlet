@@ -81,7 +81,7 @@ describe("init", () => {
   it("同梱スキーマへの $schema を書く", () => {
     init(root);
     expect(JSON.parse(read("gauntlet.config.json"))).toMatchObject({
-      $schema: "./node_modules/@tepshq/gauntlet/schema/gauntlet.config.schema.json",
+      $schema: "./node_modules/@teps/gauntlet/schema/gauntlet.config.schema.json",
     });
   });
 
