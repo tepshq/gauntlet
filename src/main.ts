@@ -26,7 +26,7 @@ function initCommand(argv: readonly string[]): number {
     unmatched.length === 0
       ? ""
       : `\n対象外に TypeScript があります: ${unmatched.join(", ")}\n` +
-        `測る範囲が正しいか gauntlet.config.json の source を確認してください（.claude/skills/gauntlet）。\n`;
+        `測る範囲が正しいか gauntlet.config.json の source を確認してください（.claude/skills/gauntlet-setup）。\n`;
   process.stderr.write(`${written.map((path) => `  ${path}`).join("\n")}\n\n測る対象: ${matched} ファイル\n${notice}`);
   return EXIT_PASS;
 }

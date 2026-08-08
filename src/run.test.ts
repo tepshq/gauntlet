@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, parseTier, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, parseTier, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -709,6 +709,30 @@ describe("crapCheckViolations", () => {
   });
 });
 
+describe("coveredFiles", () => {
+  const entry = (counts: Record<string, number>) => ({ statementMap: {}, s: counts });
+
+  // vitest は coverage.include に合致する未ロードのファイルもゼロ行で載せる。
+  // キーの存在で判定すると、mutation の範囲が include の全ファイルに膨張する（実測）。
+  it("1 文も実行されていないファイルは触れられていない", () => {
+    expect(coveredFiles("/repo", { "/repo/src/main.ts": entry({ "0": 0, "1": 0 }) })).toEqual([]);
+  });
+
+  it("1 文でも実行されたファイルをリポジトリ相対で返す", () => {
+    expect(
+      coveredFiles("/repo", {
+        "/repo/src/run.ts": entry({ "0": 3, "1": 0 }),
+        "/repo/src/dead.ts": entry({ "0": 0 }),
+      }),
+    ).toEqual(["src/run.ts"]);
+  });
+
+  // Windows の区切りが混ざったキーも POSIX に揃える。
+  it("バックスラッシュ区切りを直す", () => {
+    expect(coveredFiles("/repo", { "/repo/src\\win\\a.ts": entry({ "0": 1 }) })).toEqual(["src/win/a.ts"]);
+  });
+});
+
 describe("mutationScopeText", () => {
   it("対象のファイル数を出す", () => {
     expect(mutationScopeText(3, 0)).toBe("変異対象 3 ファイル");
@@ -718,6 +742,20 @@ describe("mutationScopeText", () => {
   // 「そこは見ていない」を意味していることが伝わらない。
   it("測らなかった件数があれば添える", () => {
     expect(mutationScopeText(3, 10)).toBe("変異対象 3 ファイル（静的な変異 10 件は測っていません）");
+  });
+
+  // テストが触れないファイルは変異させても全部 NoCoverage（数えない）な上、
+  // Stryker が「No tests were executed」で落ちる。外すが、外した数は言う。
+  it("テストが触れないファイルを外した数を添える", () => {
+    expect(mutationScopeText(0, 0, 1)).toBe(
+      "変異対象 0 ファイル（テストが触れない 1 ファイルは対象外 — 網羅率 0 は CRAP が見る）",
+    );
+  });
+
+  it("外した数と静的変異は並ぶ", () => {
+    expect(mutationScopeText(2, 5, 1)).toBe(
+      "変異対象 2 ファイル（テストが触れない 1 ファイルは対象外 — 網羅率 0 は CRAP が見る）（静的な変異 5 件は測っていません）",
+    );
   });
 
   it("対象が無くても形は同じ", () => {

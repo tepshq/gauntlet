@@ -19,6 +19,7 @@ import {
 } from "./tier.ts";
 import { analyze, listSourceFiles } from "./typescript/adapter.ts";
 import { runLint } from "./typescript/lint.ts";
+import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { type SurvivedMutant, runMutation } from "./typescript/mutation.ts";
 import { type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
@@ -99,6 +100,8 @@ export function runTier(root: string, tier: TierName): TierResult {
         root,
         config,
         mutationScope(changed.keys(), (tests) => coveredFiles(root, runTests(root, null, projects, tests).coverage)),
+        // フル実行の coverage に現れたファイル = 何かのテストが触れるファイル。
+        new Set(coveredFiles(root, outcome.coverage)),
       ),
     lint: () => lintCheck(root, config),
   };
@@ -187,12 +190,18 @@ export function testsCheck(
 }
 
 /**
- * この実行で実際に走ったテストが触れたソース。
+ * この実行で実際に走ったテストが触れた（= 1 文でも実行された）ソース。
  *
+ * **「coverage に現れた」では足りない。** vitest は `coverage.include` に合致する
+ * 未ロードのファイルもゼロ行の項目として載せる（gauntlet 自身の main.ts で実測）。
+ * キーの存在で判定すると、mutation の探索範囲が「include の全ファイル」に膨張し、
+ * テストが触れないファイルまで変異させる（gauntlet 自身で毎回 22 ファイルになっていた）。
  * coverage-final.json は絶対パスをキーに持つので、リポジトリ相対に直す。
  */
-function coveredFiles(root: string, coverage: Record<string, unknown>): string[] {
-  return Object.keys(coverage).map((absolute) => relative(root, absolute).split("\\").join("/"));
+export function coveredFiles(root: string, coverage: IstanbulCoverage): string[] {
+  return Object.entries(coverage)
+    .filter(([, entry]) => Object.values(entry.s).some((count) => count > 0))
+    .map(([absolute]) => relative(root, absolute).split("\\").join("/"));
 }
 
 export function isTestFile(file: string): boolean {
@@ -384,9 +393,10 @@ function gateByFile(
  * `--ignoreStatic` で外した分を黙って落とすと、緑が「弱いテストが無い」ではなく
  * 「そこは見ていない」を意味していることが読み手に伝わらない。
  */
-export function mutationScopeText(targets: number, ignored: number): string {
+export function mutationScopeText(targets: number, ignored: number, untested = 0): string {
+  const bare = untested === 0 ? "" : `（テストが触れない ${untested} ファイルは対象外 — 網羅率 0 は CRAP が見る）`;
   const skipped = ignored === 0 ? "" : `（静的な変異 ${ignored} 件は測っていません）`;
-  return `変異対象 ${targets} ファイル${skipped}`;
+  return `変異対象 ${targets} ファイル${bare}${skipped}`;
 }
 
 /** 一覧の 1 行に収める。変異後のコードは複数行のことがある。 */
@@ -405,14 +415,24 @@ export function describeSurvivor(mutant: SurvivedMutant): string {
 }
 
 /** 差分に関係するソースだけを変異させる。既存リポジトリ全体を一度に赤にしない。 */
-function mutationCheck(root: string, config: GauntletConfig, covered: Iterable<string>): CheckResult {
-  const targets = mutationTargets(covered, listSourceFiles(root, config.source));
+function mutationCheck(
+  root: string,
+  config: GauntletConfig,
+  covered: Iterable<string>,
+  tested: ReadonlySet<string>,
+): CheckResult {
+  const inScope = mutationTargets(covered, listSourceFiles(root, config.source));
+  // テストが 1 つも触れないファイルは変異させない。全変異が NoCoverage（数えない —
+  // 網羅率 0 は CRAP の担当）になる上、Stryker は「No tests were executed」で
+  // 落ちる（gauntlet 自身の main.ts だけの差分で実測）。外した数は scope に出す。
+  const targets = inScope.filter((file) => tested.has(file));
+  const untested = inScope.length - targets.length;
   return timed("mutation", () => {
-    if (targets.length === 0) return { scope: mutationScopeText(0, 0), violations: [] };
+    if (targets.length === 0) return { scope: mutationScopeText(0, 0, untested), violations: [] };
     const { survived, ignored } = runMutation(root, targets, declaredProjects(config));
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
-      scope: mutationScopeText(targets.length, ignored),
+      scope: mutationScopeText(targets.length, ignored, untested),
       violations: gateByFile(root, "mutation", targets, countByFile(survived), (entry) =>
         withDetails(
           // 一覧は「そのファイルの生き残り全部」。記録は数だけなので、どれが増えた分かは特定できない。
