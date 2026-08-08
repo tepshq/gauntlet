@@ -178,6 +178,9 @@ gauntlet turn: fail (670ms)
 パッケージ名は **`@tepshq/gauntlet`**。開発中止した旧 gauntlet と同名で、registry 上のものは作り直す。
 → 0.0.14 の public npm 移行で **`@teps/gauntlet`** に改名（npmjs の org 名を teps に合わせた。
 GitHub Packages の 0.0.13 以前は旧名のまま残る）。
+→ npmjs の `@teps/gauntlet` には削除済みの旧 gauntlet のバージョン番号が焼け跡として残っていて
+再利用できない（0.0.14 が「publish 済み」で拒否された。旧版は 0.8.0 まで存在）。
+**0.9.0 に跳んで回避**。以降のバージョンはここから続ける。
 
 ### 6. mutation testing（`pr` のみ）— 完了
 
