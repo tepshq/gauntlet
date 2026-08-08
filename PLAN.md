@@ -509,12 +509,26 @@ GitHub Packages の認証経路がこれで検証できた（パッケージ設�
   validation の rules → registry、channels の barrel（`index.ts` の再輸出）が
   ハブになっていて、どこを触っても逆依存の閉包が数千テストに膨らむ。
   hono（実差分でテスト 17 件・2.2 秒）との差はスイートの大きさではなく**依存の形**。
-- Stop フックとして毎ターン 50〜80 秒は成立しない水準。速くする経路は
-  (a) duct 側 `commands.typecheck` を incremental にする（8.5s → 1s 台、1 行）、
-  (b) duct 側で barrel / registry のハブを解体して閉包そのものを狭める（根本策）、
-  (c) gauntlet 側でテストを間引く — ただしこれは緑の意味が差分サイズで変わる
-  （flaky）ので、やるなら DESIGN の判断が要る。転送だけ速くしても (a)(b) 抜きで
-  10 秒は届かない。
+  なお channels の barrel は f03 の設計文書が定める **public boundary**（外から内部を
+  直接 import してはならない）なので、解体は機械的な作業ではなく設計判断になる。
+- **coverage は犯人ではない。** 同じ 1,658 件選択を coverage なしの素の vitest で
+  回して 37.7 秒（coverage ありは 40.0 秒）。gauntlet が上乗せしているコストは
+  誤差の範囲で、遅いのは選ばれたテスト集合そのもの。
+- **テスト本体の大半は「本物のタイマー待ち」。** vitest の内訳（worker 累積）は
+  transform 3.6s / setup 6.4s / collect 39.6s / **tests 70.8s** / environment 27.7s。
+  1〜2 秒かかるテストは `withRetry`（`lib/channels/shared/retry.ts`、
+  `baseDelayMs: 200` の指数 backoff、実 `setTimeout`）を fake timers なしで
+  待っている（`yahoo/client.test.ts` に `useFakeTimers` が 0 件、実測 1004ms /
+  2003ms のテストあり）。ほかに jsdom 構築 27.7s、テストファイル import
+  （collect）39.6s — barrel 経由の巨大な import 閉包がここにも効いている。
+- Stop フックとして毎ターン 50〜80 秒は成立しない水準。速くする経路は効果順に
+  (a) duct 側でテストの実タイマー待ちを排す（fake timers か sleep 注入。
+  スイート全体と CI も速くなる）、
+  (b) duct 側 `commands.typecheck` を incremental にする（8.5s → 1s 台、1 行）、
+  (c) duct 側で barrel / registry の境界を per-channel に割って閉包を狭める
+  （根本策だが public boundary の設計判断）、
+  (d) gauntlet 側でテストを間引く — 緑の意味が差分サイズで変わる（flaky）ので
+  やるなら DESIGN の判断。(a)(b) で 15〜25 秒圏、10 秒を切るには (c) まで要る見込み。
 
 ### duct 第 1 期（`try-gauntlet` ブランチ / tepshq/duct#563 — #564 に置き換えて close 済み）
 
