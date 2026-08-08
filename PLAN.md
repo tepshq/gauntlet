@@ -436,7 +436,11 @@ GitHub Packages の認証経路がこれで検証できた（パッケージ設�
   `init` を叩く」流れに書き直した（DESIGN §4）。tsconfig の `include` から機械的に導けるかを
   3 本で試したが、hue は正解・teps と duct は不正解で、判断が要ることが確認できた。
 
-### duct 第 2 期（tepshq/duct#564 — 全チェック緑、マージ待ち）
+### duct 第 2 期（tepshq/duct#564 — 全チェック緑を確認後、検証完了として close）
+
+導入 PR は 3 本とも閉じた（#559 / #563 / #564）。duct の main に gauntlet は入っていない。
+0.10.0 が public npm にあるので、本導入は main からいつでも数分でやり直せる
+（`npx @teps/gauntlet init` → skill の対話。新規クローン通しで実測済み）。
 
 0.9.0（integration 除外 + public npm）での導入 PR。gauntlet job は**認証もサービスコンテナも
 無い最小 workflow**（checkout + setup-node 22 + `npm ci` + `npx gauntlet run --tier=pr`）で
