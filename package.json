@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "bin": {
-    "gauntlet": "./dist/cli.js"
+    "gauntlet": "dist/cli.js"
   },
   "exports": {
     ".": "./dist/index.js"
