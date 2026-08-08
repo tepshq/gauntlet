@@ -349,6 +349,19 @@ vitest project だけ**を走らせる正の選択にした（DESIGN §2）。�
 - **内部エラー** — 既知（ConfigError / GitError / RunnerError）はメッセージのみ、
   未知は gauntlet 自身のバグなのでスタックごと出す（`describeCrash`）
 
+### 0.10.1: 「テストが触れた」の判定を実行実績に直す（2026-08-08）
+
+README 監査のついでに、main.ts（どのテストも import しない）だけがソース差分の
+`pr` を回したら Stryker が「No tests were executed」で落ちた。掘ると根が深かった:
+
+- **vitest は `coverage.include` に合致する未ロードのファイルもゼロ行で coverage に載せる。**
+  `coveredFiles` がキーの存在で「テストが触れた」を判定していたため、mutation の探索範囲が
+  **include の全ファイルに膨張**していた（gauntlet 自身の `pr` が差分に関係なく毎回
+  22 ファイルを変異させていた正体）。「1 文でも実行された」判定に直して 22 → 12 ファイル。
+- テストが触れないファイルは変異させても全部 NoCoverage（数えない）なので対象から外し、
+  外した数を scope に出す（`変異対象 12 ファイル（テストが触れない 1 ファイルは対象外 …）`）。
+- init の警告文に残っていた旧 skill 名（`.claude/skills/gauntlet`）を直した。
+
 ### 一巡したら決めたいこと
 
 **~~mutation が「0 件検査して緑」と「検査して問題なし」を区別していない。~~ 解決（0.0.10）。**
@@ -470,6 +483,38 @@ GitHub Packages の認証経路がこれで検証できた（パッケージ設�
   → 誤り。#564 の branch は導入コミット（f3a94aa）で**リネーム済み**だった。この実験は
   main の（branch 以前の）状態を見ていた。skill 駆動の導入が独立に同じ結論に達していた、
   という手順の検証としては良い結果。
+
+### duct の実差分 turn は 48〜83 秒（2026-08-08、使い捨て clone で実測）
+
+ソース 1 ファイルだけの差分での `turn`（`adopt-gauntlet-skill` を起点に、ファイル末尾へ
+1 行追加して計測。0.10.0、`tests.projects` = node / dom）:
+
+| 差分 | 選ばれたテスト | tests | typecheck | 合計 |
+| --- | --- | --- | --- | --- |
+| なし（config のみ） | 0 件 | 5.0s | 8.5s | **14.3s** |
+| `lib/crypto/aes-gcm.ts` | 3,132 件 | 70.8s | 10.2s | **83.3s** |
+| `lib/channels/index.ts` | 3,364 件 | 40.4s | 6.7s | **47.8s** |
+| `lib/channels/rakuten/attr-name-resolve.ts` | 1,658 件 | 40.0s | 7.7s | **48.5s** |
+
+（aes-gcm の 70.8s は最初の重い実行 = vitest の transform キャッシュが冷えた状態。
+温まった 2 回目以降は 1.6〜3.4k 件で 40 秒前後に落ち着く）
+
+分かったこと:
+
+- **床が 14 秒ある。** typecheck（`tsc --noEmit` 全体で 7〜10s）+ vitest の起動と
+  モジュールグラフ解決（選択 0 件でも 5s）。テスト選択をどれだけ絞っても、
+  duct ではここより下がらない。
+- **`--changed` の逆依存選択が、duct のアーキテクチャでは実質「全部」に近い。**
+  直接 import が 2 ファイルしかない葉（attr-name-resolve）でも 1,658 件が選ばれる。
+  validation の rules → registry、channels の barrel（`index.ts` の再輸出）が
+  ハブになっていて、どこを触っても逆依存の閉包が数千テストに膨らむ。
+  hono（実差分でテスト 17 件・2.2 秒）との差はスイートの大きさではなく**依存の形**。
+- Stop フックとして毎ターン 50〜80 秒は成立しない水準。速くする経路は
+  (a) duct 側 `commands.typecheck` を incremental にする（8.5s → 1s 台、1 行）、
+  (b) duct 側で barrel / registry のハブを解体して閉包そのものを狭める（根本策）、
+  (c) gauntlet 側でテストを間引く — ただしこれは緑の意味が差分サイズで変わる
+  （flaky）ので、やるなら DESIGN の判断が要る。転送だけ速くしても (a)(b) 抜きで
+  10 秒は届かない。
 
 ### duct 第 1 期（`try-gauntlet` ブランチ / tepshq/duct#563 — #564 に置き換えて close 済み）
 
