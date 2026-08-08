@@ -258,7 +258,11 @@ teps（2222 テスト）と duct はさらに大きい。実数が出てから�
 `--concurrency` を CI のコア数に合わせる / 対象を触った関数の行範囲まで絞る（保留していた案）/
 mutation を別ジョブにして PR のブロックから外す。
 
-### private パッケージのアクセス（GitHub の手続き）
+### ~~private パッケージのアクセス（GitHub の手続き）~~ 0.0.14 で public npm に移行して解消
+
+以下は GitHub Packages（〜0.0.13）時代の記録。認証事故のクラスごと消すため
+public npm へ移行した（DESIGN §4）。消費側は `.npmrc` の scope 行と workflow の
+認証（gauntlet のためだけのもの）を外す必要がある。
 
 消費側リポジトリの `secrets.GITHUB_TOKEN` は、別リポジトリが所有する private パッケージを読めない。
 hue の CI が `403 permission_denied: read_package` で落ちて判明した。

@@ -168,13 +168,26 @@ describe("init", () => {
     ["pr tier を回す", "--tier=pr"],
     ["履歴を全部取る（merge-base に要る）", "fetch-depth: 0"],
     ["Node は 22 以上（node:fs の globSync）", "node-version: 22"],
-    ["registry を指す", "registry-url: https://npm.pkg.github.com"],
-    ["scope を指す", 'scope: "@tepshq"'],
-    ["トークンを渡す", "NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}"],
-    ["packages の読み取り権限を取る", "packages: read"],
   ])("skill の CI 雛形は %s", (_label, expected) => {
     init(root);
     expect(read(".claude/skills/gauntlet/SKILL.md")).toContain(expected);
+  });
+
+  // 0.0.14 から public npm。認証の雛形が残っていると、それを写した導入先が
+  // GitHub Packages を見に行って新しいバージョンが取れなくなる。
+  // 語そのものは「古い設定を外せ」の案内に出てくるので、yaml の設定形（コロン付き）だけを禁じる。
+  it.each([
+    ["registry の指定", "registry-url:"],
+    ["トークンの受け渡し", "NODE_AUTH_TOKEN:"],
+  ])("skill の CI 雛形に %s は無い", (_label, gone) => {
+    init(root);
+    expect(read(".claude/skills/gauntlet/SKILL.md")).not.toContain(gone);
+  });
+
+  // 逆に「古い認証を見つけたら外す」案内は要る。移行期の導入先はまだ残している。
+  it("skill は古い認証設定の掃除を案内する", () => {
+    init(root);
+    expect(read(".claude/skills/gauntlet/SKILL.md")).toContain("@tepshq:registry=https://npm.pkg.github.com");
   });
 
   // 既に動いている job に足すのが基本。生成ファイルは重複を生む。

@@ -100,27 +100,13 @@ DB・ネットワーク・実ファイルシステムに触れるテストを探
 
 \`.github/workflows/\` を全部見る。\`pr\` をどこで回すかを 3 で決めるための材料を集める。
 
-**a. \`npm ci\` / \`npm install\` を叩く workflow を全て挙げる。** \`@tepshq/gauntlet\` は
-GitHub Packages の private パッケージなので、**gauntlet に依存した瞬間、認証を持たない
-workflow の \`npm ci\` が 401 で落ちる**（duct の \`ci.yml\` で実際に壊れた）。
-gauntlet を回さない workflow も含めて、全てに認証が要る:
+**a. 古い認証設定が残っていないか。** \`@tepshq/gauntlet\` は 0.0.14 から public npm
+（registry.npmjs.org）にあり、**認証は要らない**。GitHub Packages 時代の名残があると
+逆に壊れるので、見つけたら外す:
 
-\`\`\`yaml
-    permissions:
-      contents: read
-      packages: read
-    steps:
-      - uses: actions/setup-node@v4
-        with:
-          registry-url: https://npm.pkg.github.com
-          scope: "@tepshq"
-      - run: npm ci
-        env:
-          NODE_AUTH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
-\`\`\`
-
-加えて、パッケージ設定の **Manage Actions access** にそのリポジトリを Read で追加してもらう
-（これが無いと 401 ではなく 403 になる）。組織の設定なので、リポジトリの持ち主に依頼する。
+- \`.npmrc\` の \`@tepshq:registry=https://npm.pkg.github.com\` の行
+- workflow の \`registry-url\` / \`scope\` / \`NODE_AUTH_TOKEN\`（gauntlet のためだけに
+  入っていた場合。他の private パッケージが使っているなら残す）
 
 **b. \`pr\` を足せる job があるか。** 次を全て満たす job を探す。lint / 型チェック /
 テストを回している job が普通は該当する。
@@ -200,7 +186,9 @@ projects: [
 ### 足せる job が無い場合
 
 作る。以後これは**リポジトリのファイル**で、gauntlet は二度と触らない。
-外部サービスを要するテストがあるなら \`services:\` と初期化の手順を足すのを忘れない。
+gauntlet は integration テストを走らせないので、\`services:\` も DB の初期化も要らない。
+ただし \`postinstall\` が環境変数を形式上要求する場合（Prisma の \`generate\` 等）は
+ダミー値を \`env:\` に置く。
 
 \`\`\`yaml
 name: gauntlet
@@ -209,10 +197,6 @@ on: pull_request
 jobs:
   gauntlet:
     runs-on: ubuntu-latest
-    # @tepshq/gauntlet は GitHub Packages の private パッケージ。
-    permissions:
-      contents: read
-      packages: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -222,11 +206,7 @@ jobs:
         with:
           # gauntlet は node:fs の globSync を使うので 22 以上。
           node-version: 22
-          registry-url: https://npm.pkg.github.com
-          scope: "@tepshq"
       - run: npm ci
-        env:
-          NODE_AUTH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
       - run: npx gauntlet run --tier=pr
 \`\`\`
 

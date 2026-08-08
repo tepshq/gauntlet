@@ -65,24 +65,14 @@ Robert C. Martin が 2026 年 7 月に「自分はもうエージェントのコ
 
 ## 導入
 
-### 1. パッケージのアクセス許可（リポジトリごとに一度だけ）
+### 1. 入れる
 
-gauntlet は private パッケージなので、消費側リポジトリの `secrets.GITHUB_TOKEN` は既定では読めません。
+0.0.14 から public npm（registry.npmjs.org）で配布しています。認証は要りません。
 
-[パッケージ設定](https://github.com/orgs/tepshq/packages/npm/gauntlet/settings) →
-**Manage Actions access** → 導入先リポジトリを **Read** で追加。
-
-飛ばすと CI の `npm ci` が `403 permission_denied: read_package` で落ちます。
-
-> `Internal` 可視性ならこの手順は要りませんが、Team プランでは使えません。
-
-### 2. 入れる
-
-`.npmrc` に scope の指定が要ります（無いと npmjs.com を見て 404 になります）。
-
-```
-@tepshq:registry=https://npm.pkg.github.com
-```
+> 0.0.13 以前を GitHub Packages から入れていたリポジトリは、`.npmrc` の
+> `@tepshq:registry=https://npm.pkg.github.com` の行と、workflow の
+> `registry-url` / `scope` / `NODE_AUTH_TOKEN`（gauntlet のためだけのもの）を消してください。
+> 残っていると新しいバージョンが見えません。
 
 ```bash
 V=$(node -p "require('vitest/package.json').version")
@@ -103,9 +93,9 @@ npx gauntlet init
 測る範囲は既定値なので、たいてい「測る対象: 0 ファイル」と警告が出ます — それで正常です。
 範囲は次の手順で決めます。
 
-### 3. 測る範囲を決める
+### 2. 測る範囲を決める
 
-**Claude Code で `.claude/skills/gauntlet` を使ってください**（手順 2 の `init` が
+**Claude Code で `.claude/skills/gauntlet` を使ってください**（手順 1 の `init` が
 置いたものです）。推測で入れると測る範囲が狭いまま緑になり、それが一番気づけない失敗になります。
 
 エージェントがリポジトリを読み、理由つきで範囲を提案し、合意してから `init` を叩く流れです。
@@ -125,8 +115,8 @@ npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/*
 | `gauntlet.config.json` | このリポジトリの事実。閾値は入りません |
 | `.gitignore` | 足りない行だけ追記 |
 
-**CI の workflow は置きません。** CI が要るもの（DB などのサービス、マイグレーション、
-Node のバージョン、private パッケージの認証）は gauntlet からは見えないので、
+**CI の workflow は置きません。** CI が要るもの（Node のバージョン、`postinstall` が
+要求する環境変数など）は gauntlet からは見えないので、
 **既に動いている job に 1 行足す**のが基本形です。
 
 ```yaml
