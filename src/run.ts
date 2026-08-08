@@ -60,7 +60,16 @@ function timed(name: CheckName, body: () => Examined): CheckResult {
   };
 }
 
-export const DEFAULT_TYPECHECK = "tsc --noEmit";
+/**
+ * 既定の型チェック。`--incremental` は前回の検査結果（.tsbuildinfo、init が
+ * .gitignore に足す）を使い、変更の影響範囲だけを再検査する — duct の実測で
+ * 8.5s → 1.9s。診断の内容は同じで、速さだけが変わる。
+ *
+ * キャッシュという状態を持ち込むが、緑の意味は変えない — 権威ある判定である
+ * `pr` は CI の使い捨てコンテナで走るので、必ずコールド（キャッシュ無し）になる。
+ * `turn` の速さのためだけにキャッシュが効く。
+ */
+export const DEFAULT_TYPECHECK = "tsc --noEmit --incremental";
 
 /** tsc は診断を標準出力に出す。出ていなければ通っている。 */
 export function typecheckViolations(result: Captured): Violation[] {

@@ -5,3 +5,4 @@ coverage/
 .stryker-tmp/
 stryker-setup-*.js
 reports/
+*.tsbuildinfo

@@ -564,8 +564,12 @@ GitHub Packages の認証経路がこれで検証できた（パッケージ設�
 **(a)+(b) を使い捨て clone で実際に入れて再計測（同日）: 48.5 秒 → 30.0 秒。**
 (a) は main 起点の PR にした — **tepshq/duct#565**（setup 1 枚 + config 1 行。
 main での実測: `lib/channels` 35.24s → 1.42s、node project 全体 38.5s → 16.8s、
-pass / fail / skip は前後で完全一致）。(b) は gauntlet 導入 PR に入れる 1 行なので
-本導入時に。以下は clone 上の実験の記録:
+pass / fail / skip は前後で完全一致）。(b) は **gauntlet の既定にした** —
+`DEFAULT_TYPECHECK` を `tsc --noEmit --incremental` に変え、`init` が
+`*.tsbuildinfo` を .gitignore に足す。診断は変わらず速さだけ変わり、
+権威ある判定の `pr` は CI で必ずコールドなので緑の意味も変わらない。
+導入済みリポジトリはバージョンを上げるだけで効く（duct の本導入は
+init が生成する config がそのまま既定を使う）。以下は clone 上の実験の記録:
 
 - 実タイマーの主犯は retry ではなく **rate-limiter だった**（Yahoo は
   `capacity: 1, refillPerSecond: 1` = 1 QPS。テストが 2 リクエスト目で 1 秒、

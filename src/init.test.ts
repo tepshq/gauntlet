@@ -8,7 +8,8 @@ import { INIT_DEFAULTS, init, mergeGitignore, parseInitOptions, scopeReport } fr
 
 // 出力の体裁ごと固定する。部分一致で見ると、改行の数や区切りが崩れても気づかない。
 describe("mergeGitignore", () => {
-  const ADDED = "# gauntlet の出力\ncoverage/\nreports/\n.stryker-tmp/\n";
+  // *.tsbuildinfo は既定の型チェック（tsc --noEmit --incremental）の検査キャッシュ。
+  const ADDED = "# gauntlet の出力\ncoverage/\nreports/\n.stryker-tmp/\n*.tsbuildinfo\n";
 
   it("何も無ければ全部足す", () => {
     expect(mergeGitignore(null)).toBe(ADDED);
@@ -28,17 +29,18 @@ describe("mergeGitignore", () => {
   });
 
   it("全部揃っていれば一字も変えない", () => {
-    const existing = "coverage/\nreports/\n.stryker-tmp/\n";
+    const existing = "coverage/\nreports/\n.stryker-tmp/\n*.tsbuildinfo\n";
     expect(mergeGitignore(existing)).toBe(existing);
   });
 
   it("足りないものだけ足す", () => {
-    expect(mergeGitignore("coverage/\n")).toBe("coverage/\n\n# gauntlet の出力\nreports/\n.stryker-tmp/\n");
+    expect(mergeGitignore("coverage/\n")).toBe("coverage/\n\n# gauntlet の出力\nreports/\n.stryker-tmp/\n*.tsbuildinfo\n");
   });
 
   // 既存の .gitignore は字下げされていることがある。
   it("前後の空白を無視して既存判定する", () => {
-    expect(mergeGitignore("  coverage/  \nreports/\n.stryker-tmp/\n")).toBe("  coverage/  \nreports/\n.stryker-tmp/\n");
+    const existing = "  coverage/  \nreports/\n.stryker-tmp/\n*.tsbuildinfo\n";
+    expect(mergeGitignore(existing)).toBe(existing);
   });
 });
 
@@ -176,7 +178,7 @@ describe("init", () => {
   it("既にある .gitignore を残して足す", () => {
     writeFileSync(join(root, ".gitignore"), "node_modules/\n");
     init(root);
-    expect(read(".gitignore")).toBe("node_modules/\n\n# gauntlet の出力\ncoverage/\nreports/\n.stryker-tmp/\n");
+    expect(read(".gitignore")).toBe("node_modules/\n\n# gauntlet の出力\ncoverage/\nreports/\n.stryker-tmp/\n*.tsbuildinfo\n");
   });
 
   // CI の雛形は skill が持つ。ここが欠けると導入した CI が動かない。

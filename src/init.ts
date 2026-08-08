@@ -79,7 +79,11 @@ description: gauntlet をこのリポジトリに導入する、または測る�
 
 \`package.json\` の \`typecheck\` / \`type-check\` スクリプトを読む。**tsconfig が複数ある場合は要注意** —
 \`tsc -p tsconfig.src.json --noEmit && tsc --noEmit\` のように 2 パスのことがある（teps が実例）。
-gauntlet の既定は \`tsc --noEmit\` だけなので、そのままだと**半分しか見ない**。
+gauntlet の既定は \`tsc --noEmit --incremental\` だけなので、そのままだと**半分しか見ない**。
+
+\`commands.typecheck\` で上書きする場合も \`--incremental\` を付けたままにする —
+2 回目以降の \`turn\` が数秒速くなる（duct 実測 8.5s → 1.9s）。キャッシュ
+（\`*.tsbuildinfo\`、\`init\` が .gitignore に足す）は速さだけを変え、診断は変えない。
 
 ### 外部サービスを要するテストはどれか
 
@@ -257,8 +261,9 @@ npx gauntlet run --tier=pr
  *
  * `coverage/` と `.stryker-tmp/` は実行のたびに作られる。放っておくと
  * 導入した全リポジトリで未追跡のゴミになるので、こちらで面倒を見る。
+ * `*.tsbuildinfo` は既定の型チェック（`tsc --noEmit --incremental`）の検査キャッシュ。
  */
-const IGNORED = ["coverage/", "reports/", ".stryker-tmp/"];
+const IGNORED = ["coverage/", "reports/", ".stryker-tmp/", "*.tsbuildinfo"];
 
 /** 既にある行は足さない。既存の .gitignore を並べ替えたり消したりもしない。 */
 export function mergeGitignore(existing: string | null): string {

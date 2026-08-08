@@ -562,8 +562,10 @@ describe("typecheckViolations", () => {
   });
 
   // 既定は tsc。プロジェクトが上書きしなければこれが走る。
+  // --incremental はキャッシュで速くするだけで診断は変えない。pr は CI で
+  // 毎回コールドに走るので、緑の意味も変わらない（duct 実測 8.5s → 1.9s）。
   it("既定の型チェックコマンド", () => {
-    expect(DEFAULT_TYPECHECK).toBe("tsc --noEmit");
+    expect(DEFAULT_TYPECHECK).toBe("tsc --noEmit --incremental");
   });
 
   // 前後の空白を落とさないと、報告に無駄な改行が混ざる。
