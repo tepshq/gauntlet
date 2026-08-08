@@ -1,9 +1,9 @@
 /**
  * レポートに閾値を当てる。言語に依らない。
  *
- * `turn` は触った関数だけを見る。部分実行の coverage は触っていないファイルを
+ * `quick` は触った関数だけを見る。部分実行の coverage は触っていないファイルを
  * 網羅率 0 として報告するので、全体に当てると偽陽性が大量に出る（hue で 201 件）。
- * リポジトリ全体のラチェットはフル実行のある `pr` でだけ判定する。
+ * リポジトリ全体のラチェットはフル実行のある `full` でだけ判定する。
  */
 
 import { type RatchetOutcome, ratchet } from "./baseline.ts";
@@ -32,9 +32,9 @@ function violatesThreshold(fn: FunctionReport): boolean {
  * 緑に見えるのは、設計で `flaky` として避けた形そのもの。落として理由を言う。
  *
  * `coverageExpected` — vitest は `--changed` のとき coverage を**変更ファイルだけに絞る**
- * （hue の実測。unchanged は丸ごと欠落する）。だから触った関数が 0 の `turn` では、
+ * （hue の実測。unchanged は丸ごと欠落する）。だから触った関数が 0 の `quick` では、
  * テストが何千件走っても coverage が空なのが正常で、設定のずれとは区別できる。
- * フル実行の `pr` では常に true（hono で誤検知して入れた。設定だけの差分で全テストが
+ * フル実行の `full` では常に true（hono で誤検知して入れた。設定だけの差分で全テストが
  * 選ばれ、正しく空の coverage を「噛み合っていない」と誤認して落ちた）。
  */
 export function measurementFaults(report: AdapterReport, testsRan: number, coverageExpected: boolean): Violation[] {
@@ -74,7 +74,7 @@ function toViolation(fn: FunctionReport): Violation {
 
 export interface GateResult {
   violations: Violation[];
-  /** `pr` でだけ判定する。`turn` では null。 */
+  /** `full` でだけ判定する。`quick` では null。 */
   ratchet: RatchetOutcome | null;
 }
 

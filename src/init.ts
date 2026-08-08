@@ -45,7 +45,7 @@ function configFor(options: InitOptions): GauntletConfig & { $schema: string } {
 
 /** `Stop` は exit 2 で停止を阻止し、`PreToolUse` は exit 2 でツールを実行前に止める。 */
 const HOOKS = {
-  Stop: [{ hooks: [{ type: "command", command: "npx gauntlet run --tier=turn" }] }],
+  Stop: [{ hooks: [{ type: "command", command: "npx gauntlet quick" }] }],
   PreToolUse: [
     {
       matcher: "Edit|Write|NotebookEdit|Bash",
@@ -56,7 +56,7 @@ const HOOKS = {
 
 const SKILL = `---
 name: gauntlet-setup
-description: gauntlet をこのリポジトリに導入する、または測る範囲・走らせるテストの宣言を直す。導入直後、gauntlet.config.json を作る・直すとき、turn が意図しない範囲を測っているときに使う。
+description: gauntlet をこのリポジトリに導入する、または測る範囲・走らせるテストの宣言を直す。導入直後、gauntlet.config.json を作る・直すとき、quick が意図しない範囲を測っているときに使う。
 ---
 
 # gauntlet の導入
@@ -82,7 +82,7 @@ description: gauntlet をこのリポジトリに導入する、または測る�
 gauntlet の既定は \`tsc --noEmit --incremental\` だけなので、そのままだと**半分しか見ない**。
 
 \`commands.typecheck\` で上書きする場合も \`--incremental\` を付けたままにする —
-2 回目以降の \`turn\` が数秒速くなる（duct 実測 8.5s → 1.9s）。キャッシュ
+2 回目以降の \`quick\` が数秒速くなる（duct 実測 8.5s → 1.9s）。キャッシュ
 （\`*.tsbuildinfo\`、\`init\` が .gitignore に足す）は速さだけを変え、診断は変えない。
 
 ### 外部サービスを要するテストはどれか
@@ -97,7 +97,7 @@ DB・ネットワーク・実ファイルシステムに触れるテストを探
 一時的に別の場所へ退避して unit テストを走らせる。落ちるものだけが本物。
 環境変数を unset するだけでは足りない — テストファイルが自前で dotenv を読む設計は
 普通にある（duct で実測。grep は 16 候補中 15 が偽陽性で、本物 1 件を取りこぼしていた。
-取りこぼしは後の「DB 無しで \`turn\` が通ること」の確認で捕まえた）。
+取りこぼしは後の「DB 無しで \`quick\` が通ること」の確認で捕まえた）。
 
 **外部サービスを要するテストは、gauntlet の世界の外に置く。** gauntlet は
 \`gauntlet.config.json\` の \`tests.projects\` に**宣言された vitest project だけ**を走らせる
@@ -109,7 +109,7 @@ coverage は「通りすがりに実行しただけ」の行をテスト済み�
 
 ### CI はどうなっているか
 
-\`.github/workflows/\` を全部見る。\`pr\` をどこで回すかを 3 で決めるための材料を集める。
+\`.github/workflows/\` を全部見る。\`full\` をどこで回すかを 3 で決めるための材料を集める。
 
 **a. 古い認証設定が残っていないか。** gauntlet は 0.9.0 から \`@teps/gauntlet\` として public npm
 （registry.npmjs.org）にあり、**認証は要らない**。GitHub Packages 時代の名残があると
@@ -119,18 +119,18 @@ coverage は「通りすがりに実行しただけ」の行をテスト済み�
 - workflow の \`registry-url\` / \`scope\` / \`NODE_AUTH_TOKEN\`（gauntlet のためだけに
   入っていた場合。他の private パッケージが使っているなら残す）
 
-**b. \`pr\` を足せる job があるか。** 次を全て満たす job を探す。lint / 型チェック /
+**b. \`full\` を足せる job があるか。** 次を全て満たす job を探す。lint / 型チェック /
 テストを回している job が普通は該当する。
 
 - \`actions/checkout\` に \`fetch-depth: 0\`（merge-base を取るのに全履歴が要る）
 - Node が **22 以上**（gauntlet が \`node:fs\` の \`globSync\` を使う）
 
-gauntlet は宣言されたテストしか走らせないので、**\`pr\` の job にサービスコンテナや
+gauntlet は宣言されたテストしか走らせないので、**\`full\` の job にサービスコンテナや
 DB の初期化は要らない**。宣言外のテストは既存 CI の job がそのまま担う。
 
 **完了条件** — TypeScript を含む最上位ディレクトリを 1 つ残らず挙げ、それぞれについて
 「製品コードか、テストか、生成物か、設定か」を言えること。型チェックのコマンド、
-外部サービスを要するテストの一覧、そして \`pr\` を足せる job があるかどうかを言えること。
+外部サービスを要するテストの一覧、そして \`full\` を足せる job があるかどうかを言えること。
 
 ## 2. 提案してユーザーに確認する
 
@@ -183,7 +183,7 @@ projects: [
 \`.claude/worktrees/\` にリポジトリ丸ごとのコピーを作ることがあり、
 その中のテストまで拾うと件数が倍増する（duct で 600 ファイル拾った実例）。
 
-## 4. CI で \`pr\` を回す
+## 4. CI で \`full\` を回す
 
 **\`init\` は workflow を作らない。** CI が要るものは gauntlet からは見えない
 （サービスコンテナ、マイグレーション、Node のバージョン、認証）。既に動いている job には
@@ -194,7 +194,7 @@ projects: [
 その job の最後に足す。それだけ。
 
 \`\`\`yaml
-      - run: npx gauntlet run --tier=pr
+      - run: npx gauntlet full
 \`\`\`
 
 ### 足せる job が無い場合
@@ -221,23 +221,23 @@ jobs:
           # gauntlet は node:fs の globSync を使うので 22 以上。
           node-version: 22
       - run: npm ci
-      - run: npx gauntlet run --tier=pr
+      - run: npx gauntlet full
 \`\`\`
 
 **job の Node が 22 未満なら、そこには足せない。** 上の別 job を作るか、
 リポジトリの持ち主に CI の Node を上げてもらうか。どちらにするかは訊く
 （アプリが載る Node を変える話なので、gauntlet の都合で決めてよいことではない）。
 
-**完了条件** — \`npx gauntlet run --tier=turn\` が通り、測った件数が想定と一致していること。
-外部サービスが無い状態でも \`turn\` と \`pr\` が通ること（宣言が効いている証拠）。
-\`pr\` を回す job が 1 つあり、それが上の 2 条件（全履歴・Node 22 以上）を満たすこと。
+**完了条件** — \`npx gauntlet quick\` が通り、測った件数が想定と一致していること。
+外部サービスが無い状態でも \`quick\` と \`full\` が通ること（宣言が効いている証拠）。
+\`full\` を回す job が 1 つあり、それが上の 2 条件（全履歴・Node 22 以上）を満たすこと。
 
 ## 5. ラチェットの種を置く
 
-\`pr\` を**手元で一度回して**、できた \`gauntlet.baseline.json\` をコミットする。
+\`full\` を**手元で一度回して**、できた \`gauntlet.baseline.json\` をコミットする。
 
 \`\`\`
-npx gauntlet run --tier=pr
+npx gauntlet full
 \`\`\`
 初回は「\`gauntlet.baseline.json\` を作りました。…コミットしてください」で**落ちる**。
 これが正常。ファイルはできているので、コミットしてもう一度回せば通る。
@@ -247,7 +247,7 @@ npx gauntlet run --tier=pr
 **CI に任せてはいけない。** CI が置いた種はコンテナの中に書かれて捨てられる。
 毎 PR がその PR の状態を許容値として置き直すことになり、ラチェットが一度も噛まない。
 
-**完了条件** — \`gauntlet.baseline.json\` が履歴にあり、\`npx gauntlet run --tier=pr\` が通ること。
+**完了条件** — \`gauntlet.baseline.json\` が履歴にあり、\`npx gauntlet full\` が通ること。
 
 ## 触らないもの
 

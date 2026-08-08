@@ -5,39 +5,9 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, duplicationViolations, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, parseTier, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, duplicationViolations, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
-
-describe("parseTier", () => {
-  it.each([
-    ["--tier=turn", "turn"],
-    ["--tier=pr", "pr"],
-  ] as const)("%s を読む", (arg, expected) => {
-    expect(parseTier([arg])).toBe(expected);
-  });
-
-  // 他の引数に紛れていても拾えないと、`gauntlet run --tier=turn` が動かない。
-  it("tier 以外の引数は読み飛ばす", () => {
-    expect(parseTier(["run", "--tier=pr"])).toBe("pr");
-  });
-
-  // 「無い」と「知らない値」を同じ扱いにすると、原因の違う 2 つが同じ文言になる。
-  it.each([
-    ["指定が無い", []],
-    ["値が空", ["--tier="]],
-  ])("%s なら「必要です」と落ちる", (_label, argv) => {
-    expect(() => parseTier(argv)).toThrow(/--tier が必要です（turn \| pr）/);
-  });
-
-  it("未対応の tier なら「未対応」と落ちる", () => {
-    expect(() => parseTier(["--tier=commit"])).toThrow(/--tier=commit は未対応です（turn \| pr）/);
-  });
-
-  it("落ちるときは ConfigError", () => {
-    expect(() => parseTier([])).toThrow(ConfigError);
-  });
-});
 
 function check(name: CheckResult["name"], status: CheckResult["status"], message?: string): CheckResult {
   return {
@@ -50,7 +20,7 @@ function check(name: CheckResult["name"], status: CheckResult["status"], message
 }
 
 function result(checks: CheckResult[]): TierResult {
-  return { tier: "turn", status: "fail", checks, durationMs: 34 };
+  return { tier: "quick", status: "fail", checks, durationMs: 34 };
 }
 
 describe("applyRatchet", () => {
@@ -497,7 +467,7 @@ describe("formatResult", () => {
   // 部分一致で見ると、改行やインデントが崩れても気づかない。
   it("落ちたチェックとその理由を出す", () => {
     expect(formatResult(result([check("crap", "fail", "CRAP 30.0  a.ts:10 f")]))).toBe(
-      ["gauntlet turn: fail (34ms)", "  ✗ crap (12ms)  対象 1 件", "    CRAP 30.0  a.ts:10 f"].join("\n"),
+      ["gauntlet quick: fail (34ms)", "  ✗ crap (12ms)  対象 1 件", "    CRAP 30.0  a.ts:10 f"].join("\n"),
     );
   });
 
@@ -505,7 +475,7 @@ describe("formatResult", () => {
   it("通ったチェックも、何を見たかを添えて出す", () => {
     const scoped: CheckResult = { ...check("mutation", "pass"), scope: "変異対象 0 ファイル" };
     expect(formatResult(result([scoped]))).toBe(
-      ["gauntlet turn: fail (34ms)", "  ✓ mutation (12ms)  変異対象 0 ファイル"].join("\n"),
+      ["gauntlet quick: fail (34ms)", "  ✓ mutation (12ms)  変異対象 0 ファイル"].join("\n"),
     );
   });
 
@@ -518,7 +488,7 @@ describe("formatResult", () => {
   it("違反が複数あれば 1 行ずつ並べる", () => {
     const many: CheckResult = { ...check("crap", "fail"), violations: [{ message: "一つ目" }, { message: "二つ目" }] };
     expect(formatResult(result([many]))).toBe(
-      ["gauntlet turn: fail (34ms)", "  ✗ crap (12ms)  対象 1 件", "    一つ目", "    二つ目"].join("\n"),
+      ["gauntlet quick: fail (34ms)", "  ✗ crap (12ms)  対象 1 件", "    一つ目", "    二つ目"].join("\n"),
     );
   });
 
@@ -527,7 +497,7 @@ describe("formatResult", () => {
   it("複数行の違反は全行を段に入れる", () => {
     const multiline: CheckResult = { ...check("tests", "fail"), violations: [{ message: "見出し\n  詳細" }] };
     expect(formatResult(result([multiline]))).toBe(
-      ["gauntlet turn: fail (34ms)", "  ✗ tests (12ms)  対象 1 件", "    見出し", "      詳細"].join("\n"),
+      ["gauntlet quick: fail (34ms)", "  ✗ tests (12ms)  対象 1 件", "    見出し", "      詳細"].join("\n"),
     );
   });
 });
@@ -603,26 +573,26 @@ describe("crapViolations", () => {
   const touched = new Map([["a.ts", new Set([15])]]);
 
   it("触った関数の違反を出す", () => {
-    expect(crapViolations("turn", report, touched)[0]!.message).toContain("CRAP 30.0");
+    expect(crapViolations("quick", report, touched)[0]!.message).toContain("CRAP 30.0");
   });
 
-  // turn は差分に関係するテストしか走らせないので、全体の数字は当てにならない。
-  it("turn ではリポジトリ全体を見ない", () => {
-    expect(crapViolations("turn", report, touched)).toHaveLength(1);
+  // quick は差分に関係するテストしか走らせないので、全体の数字は当てにならない。
+  it("quick ではリポジトリ全体を見ない", () => {
+    expect(crapViolations("quick", report, touched)).toHaveLength(1);
   });
 
-  it("触っていなければ turn では何も出ない", () => {
-    expect(crapViolations("turn", report, new Map())).toEqual([]);
+  it("触っていなければ quick では何も出ない", () => {
+    expect(crapViolations("quick", report, new Map())).toEqual([]);
   });
 
-  // pr はフル実行なのでリポジトリ全体のラチェットも当てる。
+  // full はフル実行なのでリポジトリ全体のラチェットも当てる。
   // turn と同じ扱いにすると、全体の悪化が誰にも止められなくなる。
-  it("pr ではリポジトリ全体のラチェットも当てる", () => {
+  it("full ではリポジトリ全体のラチェットも当てる", () => {
     const root = mkdtempSync(join(tmpdir(), "gauntlet-crap-"));
     try {
       saveBaseline(root, { crap: 0, mutation: {}, lint: {} });
       const scoped = { ...report, root };
-      const messages = crapViolations("pr", scoped, new Map()).map((v) => v.message);
+      const messages = crapViolations("full", scoped, new Map()).map((v) => v.message);
       expect(messages).toEqual([
         "リポジトリ全体の違反が 0 → 1 に増えました。差分の外にある違反（増えた分と、以前から許容されている分）:\n" +
           "  CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f",
@@ -656,22 +626,22 @@ describe("crapCheckViolations", () => {
   const green = { passed: true, total: 10 };
 
   it("測れていて違反が無ければ通す", () => {
-    expect(crapCheckViolations("turn", report, new Map(), green)).toEqual([]);
+    expect(crapCheckViolations("quick", report, new Map(), green)).toEqual([]);
   });
 
   // テストが落ちていれば coverage が無い。偽の違反で本当の原因を埋もれさせない。
   it("テストが落ちていればそう言う", () => {
-    expect(crapCheckViolations("turn", report, new Map(), { passed: false, total: 10 })).toEqual([CRAP_NEEDS_TESTS]);
+    expect(crapCheckViolations("quick", report, new Map(), { passed: false, total: 10 })).toEqual([CRAP_NEEDS_TESTS]);
   });
 
   // 設定が現実とずれていると「違反ゼロ」に見える。走らなかったゲートを緑にしない。
   it("対象が空なら閾値を当てずに落とす", () => {
-    const violations = crapCheckViolations("turn", empty, new Map(), green);
+    const violations = crapCheckViolations("quick", empty, new Map(), green);
     expect(violations[0]!.message).toContain("source.include");
   });
 
   it("テスト失敗の方が設定のずれより先に出る", () => {
-    expect(crapCheckViolations("turn", empty, new Map(), { passed: false, total: 10 })).toEqual([CRAP_NEEDS_TESTS]);
+    expect(crapCheckViolations("quick", empty, new Map(), { passed: false, total: 10 })).toEqual([CRAP_NEEDS_TESTS]);
   });
 
   // 測れていることを確かめたら、次は閾値を当てる。ここを飛ばすと
@@ -680,7 +650,7 @@ describe("crapCheckViolations", () => {
     const violating: FunctionReport = { ...good, location: { ...good.location, name: "g" }, cc: 5, coverage: 0 };
     // good（網羅率 1）が居るので「どの関数も覆われていない」には当たらない。
     const mixed: AdapterReport = { ...report, functions: [good, violating] };
-    const violations = crapCheckViolations("turn", mixed, new Map([["a.ts", new Set([1])]]), green);
+    const violations = crapCheckViolations("quick", mixed, new Map([["a.ts", new Set([1])]]), green);
     expect(violations).toHaveLength(1);
     expect(violations[0]!.message).toContain("CRAP 30.0");
   });
@@ -690,7 +660,7 @@ describe("crapCheckViolations", () => {
   it("設定のずれがあれば閾値の違反は出さない", () => {
     const violating: FunctionReport = { ...good, cc: 5, coverage: 0 };
     const broken: AdapterReport = { ...report, functions: [violating] };
-    const violations = crapCheckViolations("turn", broken, new Map([["a.ts", new Set([1])]]), green);
+    const violations = crapCheckViolations("quick", broken, new Map([["a.ts", new Set([1])]]), green);
     expect(violations).toHaveLength(1);
     expect(violations[0]!.message).toContain("coverage.include");
   });
@@ -698,15 +668,15 @@ describe("crapCheckViolations", () => {
   // vitest は `--changed` のとき coverage を変更ファイルだけに絞る。設定だけの差分では
   // 全テストが選ばれて走るが、変更されたソースが無いので coverage は空が正常。
   // hono（4795 テスト・触った関数 0）で「噛み合っていない」と誤検知して落ちた。
-  it("turn で触った関数が 0 なら、coverage が空でも通す", () => {
+  it("quick で触った関数が 0 なら、coverage が空でも通す", () => {
     const untouched: AdapterReport = { ...report, functions: [{ ...good, coverage: 0 }] };
-    expect(crapCheckViolations("turn", untouched, new Map(), { passed: true, total: 4795 })).toEqual([]);
+    expect(crapCheckViolations("quick", untouched, new Map(), { passed: true, total: 4795 })).toEqual([]);
   });
 
-  // pr はフル実行なので、触った関数が 0 でも coverage が空なのは設定のずれ。
-  it("pr では触った関数が 0 でも coverage の空を咎める", () => {
+  // full はフル実行なので、触った関数が 0 でも coverage が空なのは設定のずれ。
+  it("full では触った関数が 0 でも coverage の空を咎める", () => {
     const untouched: AdapterReport = { ...report, functions: [{ ...good, coverage: 0 }] };
-    const violations = crapCheckViolations("pr", untouched, new Map(), { passed: true, total: 4795 });
+    const violations = crapCheckViolations("full", untouched, new Map(), { passed: true, total: 4795 });
     expect(violations[0]!.message).toContain("coverage.include");
   });
 });

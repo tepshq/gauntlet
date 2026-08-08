@@ -3,7 +3,7 @@
  */
 
 import { relative } from "node:path";
-import { ConfigError, type GauntletConfig, loadConfig } from "./config.ts";
+import { type GauntletConfig, loadConfig } from "./config.ts";
 import { BASELINE_FILENAME, loadBaseline, ratchetByFile, ratchetNumber, saveBaseline } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
 import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, touchedFunctions } from "./gate.ts";
@@ -24,23 +24,6 @@ import { runDuplication } from "./typescript/duplication.ts";
 import { type SurvivedMutant, runMutation } from "./typescript/mutation.ts";
 import { type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
-const TIER_NAMES: readonly TierName[] = ["turn", "pr"];
-
-function isTierName(value: string): value is TierName {
-  return (TIER_NAMES as readonly string[]).includes(value);
-}
-
-export function parseTier(argv: readonly string[]): TierName {
-  const flag = argv.find((arg) => arg.startsWith("--tier="));
-  const value = flag?.slice("--tier=".length);
-  if (value === undefined || value === "") {
-    throw new ConfigError(`--tier が必要です（${TIER_NAMES.join(" | ")}）`);
-  }
-  if (!isTierName(value)) {
-    throw new ConfigError(`--tier=${value} は未対応です（${TIER_NAMES.join(" | ")}）`);
-  }
-  return value;
-}
 
 /** どのチェックも「何を見たか」と「違反」を返す。任意にすると出し忘れが緑に見える。 */
 interface Examined {
@@ -66,8 +49,8 @@ function timed(name: CheckName, body: () => Examined): CheckResult {
  * 8.5s → 1.9s。診断の内容は同じで、速さだけが変わる。
  *
  * キャッシュという状態を持ち込むが、緑の意味は変えない — 権威ある判定である
- * `pr` は CI の使い捨てコンテナで走るので、必ずコールド（キャッシュ無し）になる。
- * `turn` の速さのためだけにキャッシュが効く。
+ * `full` は CI の使い捨てコンテナで走るので、必ずコールド（キャッシュ無し）になる。
+ * `quick` の速さのためだけにキャッシュが効く。
  */
 export const DEFAULT_TYPECHECK = "tsc --noEmit --incremental";
 
@@ -93,9 +76,9 @@ export function runTier(root: string, tier: TierName): TierResult {
   const base = mergeBase(root, config.defaultBranch);
   const projects = declaredProjects(config);
 
-  // turn は差分に関係するテストだけ、pr は全体を走らせる。
+  // quick は差分に関係するテストだけ、full は全体を走らせる。
   const testsStarted = performance.now();
-  const outcome = runTests(root, tier === "turn" ? base : null, projects);
+  const outcome = runTests(root, tier === "quick" ? base : null, projects);
   const testsMs = performance.now() - testsStarted;
 
   const report = analyze(root, config, outcome.coverage);
@@ -231,7 +214,7 @@ export function isTestFile(file: string): boolean {
  * を触る差分では全テストが選ばれる。duct の実測では全 664 テストファイルが走り、
  * 変異対象が 520 ファイルになった。Dependabot の更新でも同じことが起きる。
  * そして gauntlet を導入する PR 自身が必ず設定ファイルを触るので、
- * **baseline の種を置くための最初の `pr` が最も回らない**という形になっていた。
+ * **baseline の種を置くための最初の `full` が最も回らない**という形になっていた。
  *
  * 代わりに差分から直接決める:
  *
@@ -251,7 +234,7 @@ export function mutationScope(changed: Iterable<string>, coveredBy: (tests: stri
 /**
  * 種を置いただけの回は通さない。
  *
- * `pr` を CI でしか回さないと、置いた種はコンテナの中に書かれて捨てられる。
+ * `full` を CI でしか回さないと、置いた種はコンテナの中に書かれて捨てられる。
  * 毎 PR が自分の状態から許容値を置き直すことになり、**どれだけ悪化しても通る**
  * （duct で実測。導入して数回 CI を回してもファイルが履歴に無かった）。
  *
@@ -313,13 +296,13 @@ export function declaredProjects(config: GauntletConfig): string[] {
   return config.tests?.projects ?? [];
 }
 
-/** リポジトリ全体のラチェットはフル実行のある `pr` でだけ判定する。 */
+/** リポジトリ全体のラチェットはフル実行のある `full` でだけ判定する。 */
 export function crapViolations(
   tier: TierName,
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
 ): Violation[] {
-  return [...gateTouched(report, changed), ...(tier === "pr" ? applyRatchet(report, changed) : [])];
+  return [...gateTouched(report, changed), ...(tier === "full" ? applyRatchet(report, changed) : [])];
 }
 
 /**
@@ -335,9 +318,9 @@ export function crapCheckViolations(
   outcome: Pick<TestOutcome, "passed" | "total">,
 ): Violation[] {
   if (!outcome.passed) return [CRAP_NEEDS_TESTS];
-  // `turn` は部分実行で、vitest は coverage を変更ファイルに絞る。触った関数が
-  // 0 なら coverage は空が正常（hono で実測）。`pr` はフル実行なので常に期待する。
-  const coverageExpected = tier === "pr" || touchedFunctions(report, changed).length > 0;
+  // `quick` は部分実行で、vitest は coverage を変更ファイルに絞る。触った関数が
+  // 0 なら coverage は空が正常（hono で実測）。`full` はフル実行なので常に期待する。
+  const coverageExpected = tier === "full" || touchedFunctions(report, changed).length > 0;
   const faults = measurementFaults(report, outcome.total, coverageExpected);
   return faults.length === 0 ? crapViolations(tier, report, changed) : faults;
 }
@@ -535,7 +518,8 @@ export function describeCrash(error: unknown): string {
   return EXPECTED_ERRORS.has(error.name) ? error.message : (error.stack ?? error.message);
 }
 
-export function run(argv: readonly string[], cwd: string): { output: string; result: TierResult } {
-  const result = runTier(cwd, parseTier(argv));
+/** tier はサブコマンド名から確定して渡される（`gauntlet quick` / `gauntlet full`）。 */
+export function run(tier: TierName, cwd: string): { output: string; result: TierResult } {
+  const result = runTier(cwd, tier);
   return { output: formatResult(result), result };
 }

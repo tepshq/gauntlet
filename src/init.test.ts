@@ -132,7 +132,7 @@ describe("init", () => {
   it("Stop フックの中身を丸ごと固定する", () => {
     init(root);
     expect(settings().hooks.Stop).toEqual([
-      { hooks: [{ type: "command", command: "npx gauntlet run --tier=turn" }] },
+      { hooks: [{ type: "command", command: "npx gauntlet quick" }] },
     ]);
   });
 
@@ -183,7 +183,7 @@ describe("init", () => {
 
   // CI の雛形は skill が持つ。ここが欠けると導入した CI が動かない。
   it.each([
-    ["pr tier を回す", "--tier=pr"],
+    ["full tier を回す", "npx gauntlet full"],
     ["履歴を全部取る（merge-base に要る）", "fetch-depth: 0"],
     ["Node は 22 以上（node:fs の globSync）", "node-version: 22"],
   ])("skill の CI 雛形は %s", (_label, expected) => {

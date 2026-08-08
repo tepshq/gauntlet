@@ -20,4 +20,4 @@ export {
   exitCodeFor,
   tierStatus,
 } from "./tier.ts";
-export { formatResult, parseTier, run, runTier } from "./run.ts";
+export { formatResult, run, runTier } from "./run.ts";

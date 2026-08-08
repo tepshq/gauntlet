@@ -1,7 +1,7 @@
 # gauntlet
 
 エージェントが書いたコードを、人間がコードを読まずに機械的な制約で縛る、チーム共用の品質ゲート。
-coverage・CRAP・mutation testing を `turn`（Claude Code の `Stop` フック）と `pr`（CI）の 2 tier で回す。
+coverage・CRAP・mutation testing を `quick`（差分に閉じた検査。起動点は Stop フック / pre-commit / 手動をリポジトリが選ぶ）と `full`（全量 + ラチェット + mutation。CI）の 2 tier で回す。
 
 ## 設計を貫く 2 つの語
 

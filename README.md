@@ -15,10 +15,10 @@ Robert C. Martin が 2026 年 7 月に「自分はもうエージェントのコ
 
 | | いつ | 何が起きる |
 | --- | --- | --- |
-| `turn` | Claude Code が応答を終えるたび | 赤ならエージェントが**終了できず**、そのまま直しにいく |
-| `pr` | CI | 赤なら**マージできない** |
+| `quick` | Stop フック（既定）、または pre-commit・手動 | 赤ならエージェントが**先に進めず**、そのまま直しにいく |
+| `full` | CI | 赤なら**マージできない** |
 
-`turn` が効くのが一番の違いです。人間が「テスト通してね」と言わなくても、エージェントは
+`quick` が効くのが一番の違いです。人間が「テスト通してね」と言わなくても、エージェントは
 緑になるまで終われません。数秒で終わるように作ってあります（実測: 5.5〜20 秒）。
 
 ## 何を見るか
@@ -48,7 +48,7 @@ Robert C. Martin が 2026 年 7 月に「自分はもうエージェントのコ
 ### 重複 — コピペを見る唯一のゲート
 
 テストごと複製されたコードは CRAP も mutation も通ります。jscpd で重複トークン数を測り、
-**増やさないこと**だけを要求します（絶対閾値なし・`pr` のみ・減れば自動で締まる）。
+**増やさないこと**だけを要求します（絶対閾値なし・`full` のみ・減れば自動で締まる）。
 jscpd は gauntlet が同梱するので、対象リポジトリに入れるものはありません。
 
 ### lint と型チェック
@@ -127,7 +127,7 @@ npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/*
 **既に動いている job に 1 行足す**のが基本形です。
 
 ```yaml
-      - run: npx gauntlet run --tier=pr
+      - run: npx gauntlet full
 ```
 
 その job には `fetch-depth: 0`（差分の起点に全履歴が要る）と **Node 22 以上**が必要です。
@@ -138,7 +138,7 @@ npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/*
 `init` は `.claude/settings.json` にフックを 2 つ足します。**このリポジトリで Claude Code を
 使う全員に効きます。**
 
-**`Stop` フック** — エージェントが応答を終えようとするたびに `gauntlet run --tier=turn` が走り、
+**`Stop` フック** — エージェントが応答を終えようとするたびに `gauntlet quick` が走り、
 赤なら**終了できずに直しにいきます**。人間が「テスト通してね」と言わなくてよくなる代わりに、
 毎ターン数秒〜数十秒かかります（実測は下の表）。
 
@@ -193,8 +193,8 @@ projects: [
 ## 使う
 
 ```bash
-npx gauntlet run --tier=turn
-npx gauntlet run --tier=pr
+npx gauntlet quick
+npx gauntlet full
 ```
 
 通れば exit 0、違反または gauntlet 自身が走れなければ exit 2 です。**「走れなかった」を緑に
@@ -209,14 +209,14 @@ npx gauntlet run --tier=pr
 
 ## 実測
 
-| repo | テスト数 | `turn` | `pr` |
+| repo | テスト数 | `quick` | `full` |
 | --- | --- | --- | --- |
 | gauntlet 自身 | 398 | 1.0 秒 | 20 秒 |
 | hue | 412 | 5.5 秒 | 24 秒（CI） |
 | teps | 3822 | 10.4 秒 | 199 秒（CI） |
 | duct | 7213 | 64 秒 | 75 秒（手元） |
 
-`turn` は差分に関係するテストだけを走らせるので、変更したファイルによって前後します。
+`quick` は差分に関係するテストだけを走らせるので、変更したファイルによって前後します。
 
 ## 設計
 

@@ -14,20 +14,20 @@ function check(name: CheckResult["name"], status: CheckResult["status"]): CheckR
 }
 
 describe("TIER_CHECKS", () => {
-  it("turn は壊していないかだけを見る", () => {
-    expect(TIER_CHECKS.turn).toEqual(["typecheck", "tests", "crap"]);
+  it("quick は壊していないかだけを見る", () => {
+    expect(TIER_CHECKS.quick).toEqual(["typecheck", "tests", "crap"]);
   });
 
-  // mutation は turn の予算に収まらないので pr にのみ置く。
-  it("mutation は pr にのみある", () => {
-    expect(TIER_CHECKS.pr).toContain("mutation");
-    expect(TIER_CHECKS.turn).not.toContain("mutation");
+  // mutation は quick の予算に収まらないので full にのみ置く。
+  it("mutation は full にのみある", () => {
+    expect(TIER_CHECKS.full).toContain("mutation");
+    expect(TIER_CHECKS.quick).not.toContain("mutation");
   });
 
-  // turn で緑・pr で赤が頻発すると turn が信用されなくなる。
-  it("turn のチェックは全て pr にも含まれる", () => {
-    for (const name of TIER_CHECKS.turn) {
-      expect(TIER_CHECKS.pr).toContain(name);
+  // quick で緑・full で赤が頻発すると quick が信用されなくなる。
+  it("quick のチェックは全て full にも含まれる", () => {
+    for (const name of TIER_CHECKS.quick) {
+      expect(TIER_CHECKS.full).toContain(name);
     }
   });
 });
@@ -52,7 +52,7 @@ describe("exitCodeFor", () => {
     ["pass", EXIT_PASS],
     ["fail", EXIT_BLOCKED],
   ] as const)("%s → %i", (status, expected) => {
-    const result: TierResult = { tier: "turn", status, checks: [], durationMs: 0 };
+    const result: TierResult = { tier: "quick", status, checks: [], durationMs: 0 };
     expect(exitCodeFor(result)).toBe(expected);
   });
 

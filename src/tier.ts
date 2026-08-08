@@ -5,21 +5,28 @@
  * フックも CI も同じコマンドを呼ぶので、この契約が両者の唯一の接点になる。
  */
 
-/** 起動点で呼ぶ。番号は使わない（中間の tier を作らないため）。 */
-export type TierName = "turn" | "pr";
+/**
+ * 検査範囲で名づける。番号は使わない（中間の tier を作らないため）。
+ *
+ * 0.11 までは起動点（`turn` = Stop フック、`pr` = CI）で名づけていたが、
+ * 起動点はリポジトリが選ぶ配備の詳細になった（速いリポジトリは Stop、
+ * 遅いリポジトリは pre-commit、手動もある）ので、名前が嘘になった。
+ * `quick` / `full` は「何を検査したか」を言う。
+ */
+export type TierName = "quick" | "full";
 
 export type CheckName = "typecheck" | "tests" | "crap" | "lint" | "duplication" | "mutation";
 
 /**
  * 各 tier が走らせるチェック。
  *
- * `turn` は「壊していないか」、`pr` は「壊していないか + 危なくないか」。
+ * `quick` は「壊していないか」、`full` は「壊していないか + 危なくないか」。
  * mutation はエージェントが自分のテストで自分を採点する構造の穴を塞ぐため、
- * `pr` にのみ置く（`turn` の予算に収まらない）。
+ * `full` にのみ置く（`quick` の予算に収まらない）。
  */
 export const TIER_CHECKS: Record<TierName, readonly CheckName[]> = {
-  turn: ["typecheck", "tests", "crap"],
-  pr: ["typecheck", "tests", "crap", "lint", "duplication", "mutation"],
+  quick: ["typecheck", "tests", "crap"],
+  full: ["typecheck", "tests", "crap", "lint", "duplication", "mutation"],
 };
 
 export interface Violation {
@@ -65,7 +72,8 @@ export const EXIT_PASS = 0;
  *
  * 両方を同じ code にしているのは、Claude Code の `Stop` フックが
  * exit 2 のみを「停止を阻止」として扱い、それ以外を非ブロックとして
- * 素通しするため。走れなかった gauntlet が黙って緑になると flaky になる。
+ * 素通しするため（git の pre-commit は非ゼロ全般で止まるので、この値で両立する）。
+ * 走れなかった gauntlet が黙って緑になると flaky になる。
  * 違反と内部エラーの区別は code ではなくメッセージで伝える。
  */
 export const EXIT_BLOCKED = 2;
