@@ -29,28 +29,40 @@ Robert C. Martin が 2026年7月に述べた方針（コードは読まず、テ
 
 番号ではなく起動点で呼ぶ。中間の tier（commit 時など）は作らない。
 
-### integration テストは見ない
+### gauntlet は宣言されたテストだけを走らせる
 
-**外部サービスを要するテスト（vitest の `integration` project）は、どの tier も見ない。**
-実行しない・coverage に数えない・mutation に参加させない。中途半端に残すと
-「殺せないテストが変異対象だけ広げる」歪みが出るので、束で外す。
+**`tests.projects` に宣言された vitest project が gauntlet の世界のすべて。**
+宣言に無い project は、実行されず・coverage に数えられず・mutation にも参加しない
+（この束は設定できない — 中途半端に残すと「殺せないテストが変異対象だけ広げる」歪みが出る）。
+宣言が無ければ全部走らせる。project を使っていないリポジトリはこちら。
+
+外部サービス（DB・ネットワーク）を要するテストは、宣言外の project に分けることで
+gauntlet の外に出す。gauntlet 自身は「integration テスト」という概念を持たない —
+どのテストが外部サービスを要するかは**リポジトリの事実**なので、閾値（全社共通の
+ポリシー）とは違い、config に属する。
 
 - **flaky** — 手元や CI に DB が無いだけで答えが変わる。mutation では並列実行下の
   timeout 揺れの主因になる（duct で 11 変異中 8 timeout）。
-- **gameable** — integration の coverage は「通りすがりに実行しただけ」の行を
+- **gameable** — そういうテストの coverage は「通りすがりに実行しただけ」の行を
   テスト済みに見せ、CRAP を薄める。実行は検証ではない。
 - **CI の分離が完成する** — workflow を配らない判断（§4）の続き。gauntlet の `pr` を
   回す job にサービスコンテナ・migrate・seed が要らなくなる。wiring の検証は
   各リポジトリの既存 CI の仕事。
-- **代償は小さい** — duct の実測で、integration でしか覆われていない関数は
-  6669 中 32（0.5%）、リポジトリ全体の CRAP 違反 +11（761 → 772）。しかもその多くは
-  ユニットテスト可能な純粋ヘルパーで、要求される圧力は健全な側。
+- **代償は小さい** — duct の実測で、外部サービス系テストでしか覆われていない関数は
+  6669 中 32（0.5%）、リポジトリ全体の CRAP 違反 +11。多くはユニットテスト可能な
+  純粋ヘルパーで、要求される圧力は健全な側。
+
+**正の選択（除外リストではなく）なのは 2 つの実測から。** 固定名 `integration` の除外は
+hono（runtime project が 5 つ。名前は一意なので 1 つの固定名に集約できない）で詰み、
+duct main では「名前だけの規約」が機構なしに放置されていた。負の選択は vitest の複数
+`--project=!x` の意味論が怪しいのに対し、正の複数 `--project=x` は基本機能。
+宣言し忘れた新 project は gauntlet の世界に入らず、coverage が付かないので触った関数が
+CRAP で赤になる — 黙って緑にはならない方向に倒れる。
 
 Stryker の vitest runner には project フィルタが無いので、mutation では
-リポジトリの vitest 設定を import して `integration` project だけ濾した一時設定を
-生成して渡す。規約は「インラインの project に `integration` と名づける」
-（setup skill が案内する）。glob 文字列で別ファイルを指す project は名前が読めないため
-濾せない — 規約の側で保証する。
+リポジトリの vitest 設定を import して宣言された project だけ残した一時設定を
+生成して渡す。glob 文字列で別ファイルを指す project は名前が読めないため宣言できない
+— gauntlet の世界に入れる project はインラインで書く（setup skill が案内する）。
 
 ### 差分の起点
 
@@ -322,10 +334,10 @@ TypeScript の更新自体は良い投資なので、gauntlet と切り離して
    CC 12 で絶対閾値に落ちる。テストでは救えない領域（CC > 8）に実務のコードが普通に入ってくる。
 5. **`turn` は触った関数しか見ない。** 触っていない箇所の劣化は `pr` のラチェットまで表に出ない。
 6. **`oxc-parser` は 0.x。** TypeScript 公式 conformance の AST パースは 9779/9779 だが、AST の形は安定化作業中。上がるときに CC の値が動く可能性がある。
-7. **integration テストの assert を弱める差分は、gauntlet の何も検知しない。**
-   integration を見ない判断（§2）の代償。mutation の網は「gauntlet が走らせるテスト」の
-   範囲にしか張れない。integration テストの正しさは、それを走らせる各リポジトリの CI と
-   エージェントのコードレビューに委ねる。
+7. **宣言外のテストの assert を弱める差分は、gauntlet の何も検知しない。**
+   宣言されたテストだけを見る判断（§2）の代償。mutation の網は「gauntlet が走らせる
+   テスト」の範囲にしか張れない。宣言外のテストの正しさは、それを走らせる各リポジトリの
+   CI とエージェントのコードレビューに委ねる。
 
 ## 参考
 

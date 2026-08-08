@@ -11,7 +11,7 @@ import { existsSync, globSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { capture } from "../exec.ts";
-import { INTEGRATION_PROJECT, RunnerError, lastLines } from "./runner.ts";
+import { RunnerError, lastLines } from "./runner.ts";
 
 /** Stryker の json reporter の固定出力先。CLI からファイル名を変えられない。 */
 export const REPORT_PATH = "reports/mutation/mutation.json";
@@ -122,25 +122,27 @@ export function findRepoVitestConfig(root: string): string | null {
  * Stryker に渡す vitest 設定のラッパー。
  *
  * Stryker の vitest runner には project フィルタが無い（`dir` / `related` /
- * `configFile` のみ）。integration project を除くには設定ごと差し替えるしかないので、
- * リポジトリの設定を import して projects だけ濾したものを一時ファイルとして渡す。
+ * `configFile` のみ）。宣言（`tests.projects`）を効かせるには設定ごと差し替えるしか
+ * ないので、リポジトリの設定を import して宣言にある project だけ残したものを
+ * 一時ファイルとして渡す。
  *
- * project の指定が別ファイルへの glob 文字列（`./x/*\/vitest.config.ts`）だと名前が
- * 読めないので濾せない。gauntlet の規約は「インラインの project に `integration` と
- * 名づける」（init の skill が案内する形）で、そこだけを保証する。
+ * 別ファイルへの glob 文字列（`./x/*\/vitest.config.ts`）で参照された project は
+ * 名前が読めないため、宣言があるときは**残せない**（= 宣言できるのはインラインの
+ * project だけ）。gauntlet の世界に入れたい project はインラインで書いてもらう。
  *
  * `root` を明示するのは、設定ファイルがリポジトリの外（一時ディレクトリ）に
  * 置かれるため。vitest が設定の場所から root を推測すると探索が壊れる。
  */
-export function strykerVitestWrapper(repoConfigPath: string, root: string): string {
+export function strykerVitestWrapper(repoConfigPath: string, root: string, projects: readonly string[]): string {
   return [
-    "// gauntlet が生成した一時ファイル。リポジトリの vitest 設定から integration project を除く。",
+    "// gauntlet が生成した一時ファイル。リポジトリの vitest 設定から、宣言された project だけを残す。",
     `import base from ${JSON.stringify(repoConfigPath)};`,
     'const config = (await (typeof base === "function" ? base({ command: "serve", mode: "test" }) : base)) ?? {};',
     `config.root ??= ${JSON.stringify(root)};`,
-    "if (Array.isArray(config.test?.projects)) {",
+    `const declared = ${JSON.stringify([...projects])};`,
+    "if (declared.length > 0 && Array.isArray(config.test?.projects)) {",
     "  config.test.projects = config.test.projects.filter(",
-    `    (project) => typeof project === "string" || project?.test?.name !== ${JSON.stringify(INTEGRATION_PROJECT)},`,
+    '    (project) => typeof project !== "string" && declared.includes(project?.test?.name),',
     "  );",
     "}",
     "export default config;",
@@ -170,11 +172,15 @@ export function strykerFiles(
   tempDir: string,
   root: string,
   repoConfig: string | null,
+  projects: readonly string[],
   files: readonly string[],
 ): GeneratedFile[] {
   if (repoConfig === null) return [confFile(confDir, tempDir, files, null)];
   const wrapper = join(confDir, "vitest.config.mjs");
-  return [confFile(confDir, tempDir, files, wrapper), { path: wrapper, content: strykerVitestWrapper(repoConfig, root) }];
+  return [
+    confFile(confDir, tempDir, files, wrapper),
+    { path: wrapper, content: strykerVitestWrapper(repoConfig, root, projects) },
+  ];
 }
 
 export interface MutationOutcome {
@@ -184,14 +190,14 @@ export interface MutationOutcome {
 }
 
 /** 変異させる対象が 1 つ以上あることは呼び出し側が保証する。 */
-export function runMutation(root: string, files: readonly string[]): MutationOutcome {
+export function runMutation(root: string, files: readonly string[], projects: readonly string[]): MutationOutcome {
   const bin = strykerBin(root);
   const tempDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-"));
   // 設定は退避先と別のディレクトリに置く。Stryker は tempDirName の中身を管理する
   // （作成・掃除）ので、同居させると設定ファイルごと消されうる。
   const confDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-conf-"));
   try {
-    const launch = strykerFiles(confDir, tempDir, root, findRepoVitestConfig(root), files);
+    const launch = strykerFiles(confDir, tempDir, root, findRepoVitestConfig(root), projects, files);
     launch.forEach((file) => writeFileSync(file.path, file.content));
     const { combined } = capture(bin, ["run", launch[0]!.path], root);
 

@@ -18,6 +18,8 @@ export interface GauntletConfig {
   runner: "vitest";
   defaultBranch: string;
   source: { include: string[]; exclude?: string[] };
+  /** gauntlet が走らせる vitest project の宣言。無ければ全部走らせる。 */
+  tests?: { projects: string[] };
   commands?: { typecheck?: string };
 }
 

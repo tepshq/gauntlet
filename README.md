@@ -67,7 +67,8 @@ Robert C. Martin が 2026 年 7 月に「自分はもうエージェントのコ
 
 ### 1. 入れる
 
-0.0.14 から public npm（registry.npmjs.org）で配布しています。認証は要りません。
+0.9.0 から public npm（registry.npmjs.org）で `@teps/gauntlet` として配布しています。
+認証は要りません。
 
 > 0.0.13 以前を GitHub Packages から入れていたリポジトリは、`.npmrc` の
 > `@tepshq:registry=https://npm.pkg.github.com` の行と、workflow の
@@ -89,13 +90,13 @@ npm i -D @teps/gauntlet "@vitest/coverage-v8@$V" @stryker-mutator/core @stryker-
 npx gauntlet init
 ```
 
-これが skill（`.claude/skills/gauntlet`）を含む 4 ファイルを置きます。この時点の
+これが skill（`.claude/skills/gauntlet-setup`）を含む 4 ファイルを置きます。この時点の
 測る範囲は既定値なので、たいてい「測る対象: 0 ファイル」と警告が出ます — それで正常です。
 範囲は次の手順で決めます。
 
 ### 2. 測る範囲を決める
 
-**Claude Code で `.claude/skills/gauntlet` を使ってください**（手順 1 の `init` が
+**Claude Code で `.claude/skills/gauntlet-setup` を使ってください**（手順 1 の `init` が
 置いたものです）。推測で入れると測る範囲が狭いまま緑になり、それが一番気づけない失敗になります。
 
 エージェントがリポジトリを読み、理由つきで範囲を提案し、合意してから `init` を叩く流れです。
@@ -111,7 +112,7 @@ npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/*
 | 置くもの | 内容 |
 | --- | --- |
 | `.claude/settings.json` | **フック 2 つ**（下記）。既存の設定は壊しません |
-| `.claude/skills/gauntlet/SKILL.md` | 測る範囲を決め直すときに使う skill |
+| `.claude/skills/gauntlet-setup/SKILL.md` | 測る範囲を決め直すときに使う skill |
 | `gauntlet.config.json` | このリポジトリの事実。閾値は入りません |
 | `.gitignore` | 足りない行だけ追記 |
 
@@ -141,36 +142,45 @@ npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/*
 既に `.claude/settings.json` がある場合、**既存のフックやプラグイン設定はそのまま残ります**
 （追記するだけで、同じものは二度足しません）。
 
-また `.claude/skills/gauntlet/` に skill が 1 枚入ります。測る範囲を決め直すときに
+また `.claude/skills/gauntlet-setup/` に skill が 1 枚入ります。測る範囲を決め直すときに
 「gauntlet の設定を見直して」と言えば起動します。
 
-## 規約: 外部サービスを要するテストは `integration` project に置く
+## gauntlet が走らせるテストは宣言する
 
-DB・ネットワーク・実ファイルシステムに触れるテストは、vitest の `projects` で `integration` と
-いう名前の project にまとめてください。gauntlet は **これを一切見ません**（`turn` も `pr` も。
-実行・coverage・mutation すべて）。integration テストを走らせる場所は各リポジトリの既存 CI です。
-設定項目はありません。
+gauntlet は `gauntlet.config.json` の `tests.projects` に**宣言された vitest project だけ**を
+走らせます（実行・coverage・mutation すべて。宣言が無ければ全部走ります）。
+
+DB・ネットワーク・実ファイルシステムに触れるテストは、専用の project に分けて**宣言から
+外して**ください。そういうテストを走らせる場所は各リポジトリの既存 CI です。project の
+名前も分け方も自由です — gauntlet に「integration テスト」という概念はありません。
 
 ```ts
+// vitest.config.ts — 分け方の例
 projects: [
   { extends: true, test: { name: "unit", include: ["**/*.test.ts"],
-    exclude: ["**/node_modules/**", "**/*.integration.test.ts"] } },
-  { extends: true, test: { name: "integration", include: ["**/*.integration.test.ts"] } },
+    exclude: ["**/node_modules/**", "**/*.db.test.ts"] } },
+  { extends: true, test: { name: "db", include: ["**/*.db.test.ts"] } },
 ]
+```
+
+```json
+// gauntlet.config.json — この例なら unit だけを宣言する
+"tests": { "projects": ["unit"] }
 ```
 
 **手元に DB が無いだけで毎ターン赤になると、ゲートが環境によって答えを変えます。** それが数回
 起きると、緑の意味が信じられなくなって誰も見なくなります。mutation も同じで、変異ごとに DB
 テストを走らせると実行不能になります。
 
-`projects` を使っていないリポジトリでは何もしなくて構いません（統合テストが増えるまで無害です）。
+`projects` を使っていないリポジトリでは何もしなくて構いません（宣言なし = 全部）。
 
-> JS/TS にはこれといった標準がありません（Java の `*IT.java`、Go のビルドタグ、pytest の
-> マーカーに相当するものが無い）。ファイル名だけで除外する案は**動きません** — vitest の
-> `--exclude` は `projects` に伝わらず、project を使うリポジトリで黙って無効になります。
+> glob でファイル名を除外する案は**動きません** — vitest の `--exclude` は `projects` に
+> 伝わらず、project を使うリポジトリで黙って無効になります。project が vitest の選択を
+> 正しく解釈する唯一の境界です。
 >
-> **誰も強制しません。** project に入れ忘れた DB テストは `turn` に入り、DB を持たない人の
-> 環境でだけ落ちます。そのときは project を直してください。
+> **宣言し忘れは黙って通りません。** 新しい project を作って宣言し忘れると、そのテストの
+> coverage が gauntlet に届かず、触った関数が CRAP で赤になります。そのとき宣言を直して
+> ください。
 
 ## 使う
 

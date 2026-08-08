@@ -80,10 +80,11 @@ export function runTier(root: string, tier: TierName): TierResult {
   const started = performance.now();
   const config = loadConfig(root);
   const base = mergeBase(root, config.defaultBranch);
+  const projects = declaredProjects(config);
 
   // turn は差分に関係するテストだけ、pr は全体を走らせる。
   const testsStarted = performance.now();
-  const outcome = runTests(root, tier === "turn" ? base : null);
+  const outcome = runTests(root, tier === "turn" ? base : null, projects);
   const testsMs = performance.now() - testsStarted;
 
   const report = analyze(root, config, outcome.coverage);
@@ -97,7 +98,7 @@ export function runTier(root: string, tier: TierName): TierResult {
       mutationCheck(
         root,
         config,
-        mutationScope(changed.keys(), (tests) => coveredFiles(root, runTests(root, null, tests).coverage)),
+        mutationScope(changed.keys(), (tests) => coveredFiles(root, runTests(root, null, projects, tests).coverage)),
       ),
     lint: () => lintCheck(root, config),
   };
@@ -201,6 +202,11 @@ export function applyRatchet(report: ReturnType<typeof analyze>): Violation[] {
  */
 export const CRAP_NEEDS_TESTS: Violation = { message: "テストが落ちているため計測できません" };
 
+/** gauntlet が走らせる vitest project の宣言。空 = 宣言なし（全部走らせる。DESIGN §2）。 */
+export function declaredProjects(config: GauntletConfig): string[] {
+  return config.tests?.projects ?? [];
+}
+
 /** リポジトリ全体のラチェットはフル実行のある `pr` でだけ判定する。 */
 export function crapViolations(
   tier: TierName,
@@ -302,7 +308,7 @@ function mutationCheck(root: string, config: GauntletConfig, covered: Iterable<s
   const targets = mutationTargets(covered, listSourceFiles(root, config.source));
   return timed("mutation", () => {
     if (targets.length === 0) return { scope: mutationScopeText(0, 0), violations: [] };
-    const { survived, ignored } = runMutation(root, targets);
+    const { survived, ignored } = runMutation(root, targets, declaredProjects(config));
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
       scope: mutationScopeText(targets.length, ignored),

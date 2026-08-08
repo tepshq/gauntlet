@@ -61,6 +61,25 @@
         }
       }
     },
+    "tests": {
+      "description": "gauntlet が走らせる vitest project の宣言。書かなければ全部走らせる。外部サービスを要するテストの project をここから外すことで、gauntlet の世界から出す。",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projects"
+      ],
+      "properties": {
+        "projects": {
+          "description": "project 名の一覧。ここに無い project は実行も coverage も mutation もされない。",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
     "commands": {
       "description": "型チェックのコマンド。プロジェクトが標準から外れている場合にのみ書く。",
       "type": "object",

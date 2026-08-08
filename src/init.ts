@@ -11,7 +11,7 @@
  * 「1 行足す先」は skill が案内する。CI について知っている場所を 1 つに保つ。
  */
 
-import { globSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { globSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONFIG_FILENAME, type GauntletConfig } from "./config.ts";
 
@@ -19,12 +19,15 @@ export interface InitOptions {
   defaultBranch: string;
   include: string[];
   exclude: string[];
+  /** gauntlet が走らせる vitest project の宣言。空 = 宣言なし（全部走らせる）。 */
+  testProjects: string[];
 }
 
 export const INIT_DEFAULTS: InitOptions = {
   defaultBranch: "main",
   include: ["src/**/*.ts"],
   exclude: ["src/**/*.test.ts"],
+  testProjects: [],
 };
 
 function configFor(options: InitOptions): GauntletConfig & { $schema: string } {
@@ -35,6 +38,7 @@ function configFor(options: InitOptions): GauntletConfig & { $schema: string } {
     runner: "vitest",
     defaultBranch: options.defaultBranch,
     source: { include: options.include, exclude: options.exclude },
+    ...(options.testProjects.length === 0 ? {} : { tests: { projects: options.testProjects } }),
   };
 }
 
@@ -50,8 +54,8 @@ const HOOKS = {
 };
 
 const SKILL = `---
-name: gauntlet
-description: gauntlet をこのリポジトリに導入する、または測る範囲を直す。導入直後、gauntlet.config.json を作る・直すとき、turn が意図しない範囲を測っているときに使う。
+name: gauntlet-setup
+description: gauntlet をこのリポジトリに導入する、または測る範囲・走らせるテストの宣言を直す。導入直後、gauntlet.config.json を作る・直すとき、turn が意図しない範囲を測っているときに使う。
 ---
 
 # gauntlet の導入
@@ -90,17 +94,19 @@ DB・ネットワーク・実ファイルシステムに触れるテストを探
 普通にある（duct で実測。grep は 16 候補中 15 が偽陽性で、本物 1 件を取りこぼしていた。
 取りこぼしは後の「DB 無しで \`turn\` が通ること」の確認で捕まえた）。
 
-**規約: そういうテストは \`*.integration.test.ts\` と名付ける。** gauntlet はこれを
-**一切見ない**（\`turn\` も \`pr\` も。実行・coverage・mutation 全部）。設定項目は無い。
-名前が合っていないファイルは**リネームしてもらう**。手元に DB が無いだけで赤になるのは
-環境で答えが変わるゲートであり、integration の coverage は「通りすがりに実行しただけ」の
-行をテスト済みに見せる。integration テストを回す場所は各リポジトリの既存 CI。
+**外部サービスを要するテストは、gauntlet の世界の外に置く。** gauntlet は
+\`gauntlet.config.json\` の \`tests.projects\` に**宣言された vitest project だけ**を走らせる
+（実行・coverage・mutation 全部。宣言が無ければ全部走らせる）。外部サービスを要する
+テストを宣言外の project に分ければ、gauntlet からは存在しなくなる。
+手元に DB が無いだけで赤になるのは環境で答えが変わるゲートであり、そういうテストの
+coverage は「通りすがりに実行しただけ」の行をテスト済みに見せる。
+それらを回す場所は各リポジトリの既存 CI。project の名前や分け方はリポジトリの自由。
 
 ### CI はどうなっているか
 
 \`.github/workflows/\` を全部見る。\`pr\` をどこで回すかを 3 で決めるための材料を集める。
 
-**a. 古い認証設定が残っていないか。** \`@tepshq/gauntlet\` は 0.0.14 から public npm
+**a. 古い認証設定が残っていないか。** gauntlet は 0.9.0 から \`@teps/gauntlet\` として public npm
 （registry.npmjs.org）にあり、**認証は要らない**。GitHub Packages 時代の名残があると
 逆に壊れるので、見つけたら外す:
 
@@ -114,8 +120,8 @@ DB・ネットワーク・実ファイルシステムに触れるテストを探
 - \`actions/checkout\` に \`fetch-depth: 0\`（merge-base を取るのに全履歴が要る）
 - Node が **22 以上**（gauntlet が \`node:fs\` の \`globSync\` を使う）
 
-gauntlet は integration テストを見ないので、**\`pr\` の job にサービスコンテナや
-DB の初期化は要らない**。integration テストは既存 CI の job がそのまま担う。
+gauntlet は宣言されたテストしか走らせないので、**\`pr\` の job にサービスコンテナや
+DB の初期化は要らない**。宣言外のテストは既存 CI の job がそのまま担う。
 
 **完了条件** — TypeScript を含む最上位ディレクトリを 1 つ残らず挙げ、それぞれについて
 「製品コードか、テストか、生成物か、設定か」を言えること。型チェックのコマンド、
@@ -128,46 +134,49 @@ DB の初期化は要らない**。integration テストは既存 CI の job が
 > \`src\` と \`bin\` を測ります。\`e2e\` は Playwright の受け入れテストなので外します。
 > \`scripts\` は 3 ファイルありますが、リリース作業用で本体ではないので外します。
 > 型チェックは 2 パスなので \`commands.typecheck\` で上書きします。
-> \`lib/import/session.test.ts\` は DB が要るので \`*.integration.test.ts\` へのリネームをお願いします。
+> \`lib/import/session.test.ts\` は DB が要るので、宣言から外す project への分離をお願いします。
 
 **判断が割れる場所は必ず訊く。** 迷わず決められる場所だけ黙って含める。
 
-**完了条件** — ユーザーが範囲・型チェック・リネーム対象に同意していること。
+**完了条件** — ユーザーが範囲・型チェック・走らせる project の宣言に同意していること。
 
 ## 3. 入れる
 
 \`\`\`
-npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glob,glob>
+npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glob,glob> --test-projects=<name,name>
 \`\`\`
 
 出力の「測る対象: N ファイル」が想定と合っているか確かめる。
 「対象外に TypeScript があります」が出たら、それが意図した除外か確認する。
+\`--test-projects\` は project を使っていないリポジトリでは省略する（全部走る）。
 
 型チェックの上書きが要る場合は \`gauntlet.config.json\` の \`commands.typecheck\` に書く
 （\`init\` にフラグは無い。config はスキーマ検証されるので、間違えれば起動時に落ちる）。
 
 ### 外部サービスを要するテストがあった場合
 
-\`init\` は**これを自動ではやらない**。1 で見つけていたら、ここで両方行う。
+\`init\` は**これを自動ではやらない**。1 で見つけていたら、ここで整理する。
 
-**a. vitest に \`integration\` project を作る。** 既存の project があれば、そこから
-\`*.integration.test.*\` を除外して二重に走らないようにする。
+**外部サービスを要するテストを専用の vitest project に分け、それを宣言から外す。**
+project の名前も分け方もリポジトリの自由（そういうテストはどのみち専用の
+\`environment\` / \`setupFiles\` / env 変数が要ることが多く、本来引くべき境界と一致する）。
+分け方の例:
 
 \`\`\`ts
 projects: [
   { extends: true, test: { name: "unit", include: ["**/*.test.ts"],
-    exclude: ["**/node_modules/**", "**/.claude/**", "**/*.integration.test.ts"] } },
-  { extends: true, test: { name: "integration", include: ["**/*.integration.test.ts"],
+    exclude: ["**/node_modules/**", "**/.claude/**", "**/*.db.test.ts"] } },
+  { extends: true, test: { name: "db", include: ["**/*.db.test.ts"],
     exclude: ["**/node_modules/**", "**/.claude/**"] } },
 ]
 \`\`\`
 
+この例なら宣言は \`--test-projects=unit\`。**宣言できるのはインラインの project だけ**
+（別ファイルへの glob 参照は名前が読めないため、mutation で残せない）。
+
 \`**/.claude/**\` の除外は全 project に入れる。Claude Code の worktree が
 \`.claude/worktrees/\` にリポジトリ丸ごとのコピーを作ることがあり、
 その中のテストまで拾うと件数が倍増する（duct で 600 ファイル拾った実例）。
-
-**b. 命名が合っていないファイルをリネームする。** 外部サービスを要するのに
-\`*.integration.test.*\` でないものは \`turn\` に入ってしまう。
 
 ## 4. CI で \`pr\` を回す
 
@@ -186,7 +195,7 @@ projects: [
 ### 足せる job が無い場合
 
 作る。以後これは**リポジトリのファイル**で、gauntlet は二度と触らない。
-gauntlet は integration テストを走らせないので、\`services:\` も DB の初期化も要らない。
+gauntlet は宣言されたテストしか走らせないので、\`services:\` も DB の初期化も要らない。
 ただし \`postinstall\` が環境変数を形式上要求する場合（Prisma の \`generate\` 等）は
 ダミー値を \`env:\` に置く。
 
@@ -215,9 +224,8 @@ jobs:
 （アプリが載る Node を変える話なので、gauntlet の都合で決めてよいことではない）。
 
 **完了条件** — \`npx gauntlet run --tier=turn\` が通り、測った件数が想定と一致していること。
-外部サービスが無い状態でも \`turn\` と \`pr\` が通ること（\`integration\` project の除外が
-効いている証拠）。\`pr\` を回す job が 1 つあり、それが上の 2 条件（全履歴・Node 22 以上）を
-満たすこと。
+外部サービスが無い状態でも \`turn\` と \`pr\` が通ること（宣言が効いている証拠）。
+\`pr\` を回す job が 1 つあり、それが上の 2 条件（全履歴・Node 22 以上）を満たすこと。
 
 ## 5. ラチェットの種を置く
 
@@ -312,12 +320,22 @@ export function scopeReport(root: string, source: InitOptions): { matched: numbe
   return { matched: matched.length, unmatched };
 }
 
+/**
+ * 0.9.x 以前が置いた skill。名前が「gauntlet の全部」を名乗る大きさなのに中身は
+ * 導入手順だけで、無関係な gauntlet の質問まで吸い込んでいた。gauntlet-setup に
+ * 改名したので、置き直すときに古い方を片付ける。
+ */
+function removeLegacySkill(root: string): void {
+  rmSync(join(root, ".claude/skills/gauntlet"), { recursive: true, force: true });
+}
+
 /** 書いたファイルの一覧を返す。 */
 export function init(root: string, options: InitOptions = INIT_DEFAULTS): string[] {
+  removeLegacySkill(root);
   return [
     write(root, CONFIG_FILENAME, `${JSON.stringify(configFor(options), null, 2)}\n`),
     write(root, ".claude/settings.json", mergeSettings(readIfPresent(root, ".claude/settings.json"))),
-    write(root, ".claude/skills/gauntlet/SKILL.md", SKILL),
+    write(root, ".claude/skills/gauntlet-setup/SKILL.md", SKILL),
     write(root, ".gitignore", mergeGitignore(readIfPresent(root, ".gitignore"))),
   ];
 }
@@ -333,5 +351,6 @@ export function parseInitOptions(argv: readonly string[]): InitOptions {
     defaultBranch: value("default-branch") ?? INIT_DEFAULTS.defaultBranch,
     include: list("include", INIT_DEFAULTS.include),
     exclude: list("exclude", INIT_DEFAULTS.exclude),
+    testProjects: list("test-projects", INIT_DEFAULTS.testProjects),
   };
 }

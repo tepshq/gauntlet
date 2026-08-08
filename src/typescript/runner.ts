@@ -53,26 +53,6 @@ export function lastLines(text: string, count: number): string {
   return text.split("\n").slice(-count).join("\n").trim();
 }
 
-/**
- * 外部サービス（DB・ネットワーク・実ファイルシステム）を要するテストを置く vitest project の名前。
- *
- * **gauntlet はこの project を一切見ない**（`turn` も `pr` も。実行・coverage・mutation 全部）。
- * 手元に DB が無いだけで赤になるのは flaky であり、integration テストの coverage は
- * 「通りすがりに実行しただけ」の行を「テスト済み」に見せて CRAP を薄める（gameable）。
- * wiring の検証は各リポジトリの CI の仕事で、そこにはサービスコンテナや migrate など
- * gauntlet から見えないものが要る（DESIGN §2）。duct の実測では、integration でしか
- * 覆われていない関数は 6669 中 32 で、除外の代償は小さい。
- *
- * **glob の `--exclude` ではなく project 名で指定する。** `--exclude` は vitest の
- * `projects` に伝わらず、project を使うリポジトリでは黙って無効になる（duct で実測）。
- * `--project=!<name>` は project を使っていないリポジトリでは無害なので、
- * 1 つの仕組みで両方に効く。
- *
- * 設定項目にはしない。リポジトリごとに表現を変えられるようにすると、
- * 「速いループが外部サービスを要さない」という性質が repo ごとに違う意味を持つ。
- */
-export const INTEGRATION_PROJECT = "integration";
-
 /** vitest の JSON reporter の出力から、判定に使う部分だけ取り出す。 */
 export function toOutcome(report: VitestJsonReport): Omit<TestOutcome, "coverage"> {
   return {
@@ -85,9 +65,26 @@ export function toOutcome(report: VitestJsonReport): Omit<TestOutcome, "coverage
   };
 }
 
-export function vitestArgs(base: string | null, outDir: string, files: readonly string[] = []): string[] {
+/**
+ * `projects` は gauntlet が走らせる vitest project の宣言（`tests.projects`）。
+ *
+ * **正の選択。** gauntlet に「外部サービスを要するテスト」という概念は無い —
+ * 開発者が「これが gauntlet の世界のテスト」と宣言し、宣言に無い project は
+ * 実行も coverage も mutation もされない。空なら全部走らせる（project を
+ * 使っていないリポジトリはこちら）。
+ *
+ * **glob の `--exclude` ではなく project 名なのは、`--exclude` が vitest の
+ * `projects` に伝わらないため**（duct で実測）。project は vitest が選択を
+ * 正しく解釈する唯一の一級境界。
+ */
+export function vitestArgs(
+  base: string | null,
+  outDir: string,
+  projects: readonly string[],
+  files: readonly string[] = [],
+): string[] {
   const args = ["vitest", "run", "--coverage", "--coverage.provider=v8", "--coverage.reporter=json"];
-  args.push(`--project=!${INTEGRATION_PROJECT}`);
+  args.push(...projects.map((name) => `--project=${name}`));
   if (base !== null) args.push(`--changed=${base}`);
   args.push(`--coverage.reportsDirectory=${join(outDir, "coverage")}`);
   args.push("--reporter=json", `--outputFile=${join(outDir, "result.json")}`);
@@ -105,15 +102,20 @@ export function vitestArgs(base: string | null, outDir: string, files: readonly 
  *
  * `files` を渡すとそのテストファイルだけを走らせる。どのソースを覆っているかを
  * 知るために使う（`mutationScope`）。`base` とは併用しない。
- * 渡したテストが全部 integration project で選択が 0 件になっても、特別扱いは要らない
+ * 渡したテストが全部宣言外の project で選択が 0 件になっても、特別扱いは要らない
  * — vitest は `success: false` を返すが、呼び出し元は coverage しか読まず、
  * coverage は空に潰れる（duct の vitest 3.2.7 で実測）。
  */
-export function runTests(root: string, base: string | null, files: readonly string[] = []): TestOutcome {
+export function runTests(
+  root: string,
+  base: string | null,
+  projects: readonly string[],
+  files: readonly string[] = [],
+): TestOutcome {
   const outDir = mkdtempSync(join(tmpdir(), "gauntlet-"));
   try {
     // exit code は握り潰す。閾値違反とテスト失敗が区別できないため。
-    const { combined } = capture("npx", vitestArgs(base, outDir, files), root);
+    const { combined } = capture("npx", vitestArgs(base, outDir, projects, files), root);
     const report = readJson<VitestJsonReport>(join(outDir, "result.json"), "vitest の実行結果", combined);
     const outcome = toOutcome(report);
 

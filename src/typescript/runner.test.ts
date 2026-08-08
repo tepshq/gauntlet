@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { INTEGRATION_PROJECT, RunnerError, toOutcome, vitestArgs } from "./runner.ts";
+import { RunnerError, toOutcome, vitestArgs } from "./runner.ts";
 
 // 道具が落ちたのか違反があったのかを、呼び出し側が型で見分けられる必要がある。
 describe("RunnerError", () => {
@@ -20,30 +20,43 @@ describe("RunnerError", () => {
 // 変異が有効になる前に計算が終わっていて、テストが変異を検知できない。
 describe("vitestArgs", () => {
   // 引数は丸ごと固定する。部分一致で見ると、コマンド名や出力先が変わっても気づかない。
-  // integration project は pr でも除外する。gauntlet はこの project を一切見ない。
-  it("pr は integration project 以外を全部走らせる", () => {
-    expect(vitestArgs(null, "/tmp/out")).toEqual([
+  it("宣言が無ければ全部走らせる", () => {
+    expect(vitestArgs(null, "/tmp/out", [])).toEqual([
       "vitest",
       "run",
       "--coverage",
       "--coverage.provider=v8",
       "--coverage.reporter=json",
-      `--project=!${INTEGRATION_PROJECT}`,
       "--coverage.reportsDirectory=/tmp/out/coverage",
       "--reporter=json",
       "--outputFile=/tmp/out/result.json",
     ]);
   });
 
-  // 手元に DB が無いだけで毎ターン赤になると、環境によって答えが変わる（flaky）。
-  it("turn は差分に絞り、integration project を除外する", () => {
-    expect(vitestArgs("abc123", "/tmp/out")).toEqual([
+  // 宣言は正の選択。宣言に無い project は gauntlet の世界に存在しない。
+  it("宣言された project だけを走らせる", () => {
+    expect(vitestArgs(null, "/tmp/out", ["node", "dom"])).toEqual([
       "vitest",
       "run",
       "--coverage",
       "--coverage.provider=v8",
       "--coverage.reporter=json",
-      `--project=!${INTEGRATION_PROJECT}`,
+      "--project=node",
+      "--project=dom",
+      "--coverage.reportsDirectory=/tmp/out/coverage",
+      "--reporter=json",
+      "--outputFile=/tmp/out/result.json",
+    ]);
+  });
+
+  it("turn は差分に絞る", () => {
+    expect(vitestArgs("abc123", "/tmp/out", ["node"])).toEqual([
+      "vitest",
+      "run",
+      "--coverage",
+      "--coverage.provider=v8",
+      "--coverage.reporter=json",
+      "--project=node",
       "--changed=abc123",
       "--coverage.reportsDirectory=/tmp/out/coverage",
       "--reporter=json",
@@ -52,16 +65,15 @@ describe("vitestArgs", () => {
   });
 
   // 位置引数がフラグの前に来ると vitest が読み取れない。
-  // 選択が 0 件になる組み合わせ（全部 integration 等）に特別なフラグは要らない —
+  // 選択が 0 件になる組み合わせ（全部宣言外の project 等）に特別なフラグは要らない —
   // 呼び出し元（mutationScope）は coverage しか読まず、coverage は空に潰れる。
   it("指定したテストファイルだけに絞る", () => {
-    expect(vitestArgs(null, "/tmp/out", ["a.test.ts", "b.test.ts"])).toEqual([
+    expect(vitestArgs(null, "/tmp/out", [], ["a.test.ts", "b.test.ts"])).toEqual([
       "vitest",
       "run",
       "--coverage",
       "--coverage.provider=v8",
       "--coverage.reporter=json",
-      `--project=!${INTEGRATION_PROJECT}`,
       "--coverage.reportsDirectory=/tmp/out/coverage",
       "--reporter=json",
       "--outputFile=/tmp/out/result.json",
@@ -71,11 +83,7 @@ describe("vitestArgs", () => {
   });
 
   it("ファイル指定が無ければ位置引数を足さない", () => {
-    expect(vitestArgs(null, "/tmp/out")).toEqual(vitestArgs(null, "/tmp/out", []));
-  });
-
-  it("規約は integration という project 名", () => {
-    expect(INTEGRATION_PROJECT).toBe("integration");
+    expect(vitestArgs(null, "/tmp/out", [])).toEqual(vitestArgs(null, "/tmp/out", [], []));
   });
 });
 

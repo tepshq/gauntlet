@@ -311,6 +311,18 @@ teps で見つけて直したもの:
 - **`tsc` は出力に実行ビットを付けない。** ローカルパス install で `Permission denied` になる。
   ビルドで `chmod +x` する。
 
+### 0.10.0: 走らせるテストは宣言制（2026-08-08）
+
+integration という概念を gauntlet から完全に排除し、`tests.projects` に**宣言された
+vitest project だけ**を走らせる正の選択にした（DESIGN §2）。固定名 `integration` の
+除外規約は、hono（runtime project 5 つで固定名に集約不能）と duct main（名前だけの
+規約が機構なしに放置）で破れたため。skill も `gauntlet` → `gauntlet-setup` に改名
+（「gauntlet の全部」を名乗る大きさで、無関係な質問まで吸い込んでいた。init が旧
+ディレクトリを片付ける）。
+
+**破壊的変更**: 固定名 `integration` の自動除外は消えた。project を持つ導入済み
+リポジトリ（duct）は、更新時に `tests.projects` の宣言を config に足す必要がある。
+
 ### 一巡したら決めたいこと
 
 **~~mutation が「0 件検査して緑」と「検査して問題なし」を区別していない。~~ 解決（0.0.10）。**

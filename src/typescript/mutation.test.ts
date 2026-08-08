@@ -122,17 +122,18 @@ describe("strykerConfig", () => {
 
 describe("strykerVitestWrapper", () => {
   // 生成する JS は丸ごと固定する。ここが 1 文字ずれても Stryker の vitest は
-  // 黙って別の設定で走り、「integration を除いたつもり」の緑になる。
+  // 黙って別の設定で走り、「宣言が効いているつもり」の緑になる。
   it("生成する設定を丸ごと固定する", () => {
-    expect(strykerVitestWrapper("/repo/vitest.config.ts", "/repo")).toBe(
+    expect(strykerVitestWrapper("/repo/vitest.config.ts", "/repo", ["node", "dom"])).toBe(
       [
-        "// gauntlet が生成した一時ファイル。リポジトリの vitest 設定から integration project を除く。",
+        "// gauntlet が生成した一時ファイル。リポジトリの vitest 設定から、宣言された project だけを残す。",
         'import base from "/repo/vitest.config.ts";',
         'const config = (await (typeof base === "function" ? base({ command: "serve", mode: "test" }) : base)) ?? {};',
         'config.root ??= "/repo";',
-        "if (Array.isArray(config.test?.projects)) {",
+        'const declared = ["node","dom"];',
+        "if (declared.length > 0 && Array.isArray(config.test?.projects)) {",
         "  config.test.projects = config.test.projects.filter(",
-        '    (project) => typeof project === "string" || project?.test?.name !== "integration",',
+        '    (project) => typeof project !== "string" && declared.includes(project?.test?.name),',
         "  );",
         "}",
         "export default config;",
@@ -140,20 +141,27 @@ describe("strykerVitestWrapper", () => {
       ].join("\n"),
     );
   });
+
+  // 宣言が無ければ濾さない（全部走らせる）。root の明示だけが残る。
+  it("宣言が空なら projects を濾さないコードになる", () => {
+    const wrapper = strykerVitestWrapper("/repo/vitest.config.ts", "/repo", []);
+    expect(wrapper).toContain("const declared = [];");
+    expect(wrapper).toContain("declared.length > 0 &&");
+  });
 });
 
 describe("strykerFiles", () => {
   it("先頭が Stryker に渡す設定で、ラッパーの場所を指している", () => {
-    const files = strykerFiles("/conf", "/tmp/out", "/repo", "/repo/vitest.config.ts", ["a.ts"]);
+    const files = strykerFiles("/conf", "/tmp/out", "/repo", "/repo/vitest.config.ts", ["node"], ["a.ts"]);
     expect(files.map((file) => file.path)).toEqual(["/conf/stryker.conf.json", "/conf/vitest.config.mjs"]);
     expect(JSON.parse(files[0]!.content)).toEqual(strykerConfig(["a.ts"], "/tmp/out", "/conf/vitest.config.mjs"));
     expect(files[0]!.content).toBe(JSON.stringify(strykerConfig(["a.ts"], "/tmp/out", "/conf/vitest.config.mjs"), null, 2));
-    expect(files[1]!.content).toBe(strykerVitestWrapper("/repo/vitest.config.ts", "/repo"));
+    expect(files[1]!.content).toBe(strykerVitestWrapper("/repo/vitest.config.ts", "/repo", ["node"]));
   });
 
   // リポジトリに vitest 設定が無ければ、濾すべき projects も無い。
   it("リポジトリに設定が無ければラッパーを作らない", () => {
-    const files = strykerFiles("/conf", "/tmp/out", "/repo", null, ["a.ts"]);
+    const files = strykerFiles("/conf", "/tmp/out", "/repo", null, [], ["a.ts"]);
     expect(files.map((file) => file.path)).toEqual(["/conf/stryker.conf.json"]);
     expect(JSON.parse(files[0]!.content)).toEqual(strykerConfig(["a.ts"], "/tmp/out", null));
   });

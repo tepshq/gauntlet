@@ -60,7 +60,7 @@ describe("init", () => {
     expect(init(root)).toEqual([
       "gauntlet.config.json",
       ".claude/settings.json",
-      ".claude/skills/gauntlet/SKILL.md",
+      ".claude/skills/gauntlet-setup/SKILL.md",
       ".gitignore",
     ]);
   });
@@ -87,7 +87,7 @@ describe("init", () => {
 
   it("skill に触ってはいけないものを書く", () => {
     init(root);
-    const skill = read(".claude/skills/gauntlet/SKILL.md");
+    const skill = read(".claude/skills/gauntlet-setup/SKILL.md");
     expect(skill).toContain("name: gauntlet");
     expect(skill).toContain("gauntlet.baseline.json");
     expect(skill).toContain("gauntlet.config.json");
@@ -103,10 +103,23 @@ describe("init", () => {
   });
 
   it("指定した値を config に入れる", () => {
-    init(root, { defaultBranch: "trunk", include: ["lib/**/*.ts"], exclude: [] });
+    init(root, { defaultBranch: "trunk", include: ["lib/**/*.ts"], exclude: [], testProjects: [] });
     const config = parseConfig(read("gauntlet.config.json"), "test");
     expect(config.defaultBranch).toBe("trunk");
     expect(config.source.include).toEqual(["lib/**/*.ts"]);
+  });
+
+  // 宣言は正の選択（DESIGN §2）。空なら config にキー自体を書かない —
+  // 「書いていない」と「空で書いた」の区別が schema 検証（minItems 1）で守られる。
+  it("走らせる project の宣言を config に入れる", () => {
+    init(root, { defaultBranch: "main", include: ["lib/**/*.ts"], exclude: [], testProjects: ["node", "dom"] });
+    const config = parseConfig(read("gauntlet.config.json"), "test");
+    expect(config.tests).toEqual({ projects: ["node", "dom"] });
+  });
+
+  it("宣言が無ければ tests キーを書かない", () => {
+    init(root, { defaultBranch: "main", include: ["lib/**/*.ts"], exclude: [], testProjects: [] });
+    expect(parseConfig(read("gauntlet.config.json"), "test").tests).toBeUndefined();
   });
 
   // 部分一致で確かめると、matcher や type が空になっても気づかない。
@@ -170,7 +183,7 @@ describe("init", () => {
     ["Node は 22 以上（node:fs の globSync）", "node-version: 22"],
   ])("skill の CI 雛形は %s", (_label, expected) => {
     init(root);
-    expect(read(".claude/skills/gauntlet/SKILL.md")).toContain(expected);
+    expect(read(".claude/skills/gauntlet-setup/SKILL.md")).toContain(expected);
   });
 
   // 0.0.14 から public npm。認証の雛形が残っていると、それを写した導入先が
@@ -181,20 +194,35 @@ describe("init", () => {
     ["トークンの受け渡し", "NODE_AUTH_TOKEN:"],
   ])("skill の CI 雛形に %s は無い", (_label, gone) => {
     init(root);
-    expect(read(".claude/skills/gauntlet/SKILL.md")).not.toContain(gone);
+    expect(read(".claude/skills/gauntlet-setup/SKILL.md")).not.toContain(gone);
   });
 
   // 逆に「古い認証を見つけたら外す」案内は要る。移行期の導入先はまだ残している。
   it("skill は古い認証設定の掃除を案内する", () => {
     init(root);
-    expect(read(".claude/skills/gauntlet/SKILL.md")).toContain("@tepshq:registry=https://npm.pkg.github.com");
+    expect(read(".claude/skills/gauntlet-setup/SKILL.md")).toContain("@tepshq:registry=https://npm.pkg.github.com");
   });
 
   // 既に動いている job に足すのが基本。生成ファイルは重複を生む。
   it("skill は既存の job に 1 行足す形を先に示す", () => {
     init(root);
-    const skill = read(".claude/skills/gauntlet/SKILL.md");
+    const skill = read(".claude/skills/gauntlet-setup/SKILL.md");
     expect(skill.indexOf("足せる job がある場合")).toBeLessThan(skill.indexOf("足せる job が無い場合"));
+  });
+
+  // 0.9.x 以前の skill 名は「gauntlet の全部」を名乗る大きさで、無関係な質問まで
+  // 吸い込んでいた。置き直すとき古い方が残ると、似た skill が 2 枚並ぶ。
+  it("旧名の skill（.claude/skills/gauntlet）を片付ける", () => {
+    mkdirSync(join(root, ".claude/skills/gauntlet"), { recursive: true });
+    writeFileSync(join(root, ".claude/skills/gauntlet/SKILL.md"), "old");
+    // 消してよいのは旧名ちょうど 1 つ。パスが 1 文字ずれて「もっと消す」ようになっても
+    // 上の assert だけでは気づけないので、隣の無関係な skill が生きていることも見る。
+    mkdirSync(join(root, ".claude/skills/other"), { recursive: true });
+    writeFileSync(join(root, ".claude/skills/other/SKILL.md"), "keep");
+    init(root);
+    expect(existsSync(join(root, ".claude/skills/gauntlet"))).toBe(false);
+    expect(existsSync(join(root, ".claude/skills/gauntlet-setup/SKILL.md"))).toBe(true);
+    expect(read(".claude/skills/other/SKILL.md")).toBe("keep");
   });
 });
 
@@ -254,6 +282,10 @@ describe("parseInitOptions", () => {
       defaultBranch: "trunk",
       include: ["a/**", "b/**"],
     });
+  });
+
+  it("test-projects のフラグを読む", () => {
+    expect(parseInitOptions(["--test-projects=node,dom"])).toMatchObject({ testProjects: ["node", "dom"] });
   });
 
   it("exclude のフラグを読む", () => {

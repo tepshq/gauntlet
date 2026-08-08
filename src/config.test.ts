@@ -18,6 +18,19 @@ describe("parseConfig", () => {
     expect(parse({})).toMatchObject({ adapter: "typescript", defaultBranch: "main" });
   });
 
+  it("tests.projects の宣言を通す", () => {
+    expect(parse({ tests: { projects: ["node", "dom"] } })).toMatchObject({ tests: { projects: ["node", "dom"] } });
+  });
+
+  // 空の宣言は「テストを 1 つも走らせない」で、書き間違いとしか考えられない。
+  it("tests.projects が空なら落とす", () => {
+    expect(() => parse({ tests: { projects: [] } })).toThrow(ConfigError);
+  });
+
+  it("tests に知らないキーがあれば落とす", () => {
+    expect(() => parse({ tests: { project: ["node"] } })).toThrow(ConfigError);
+  });
+
   it("commands は省略できる", () => {
     expect(parse({})).not.toHaveProperty("commands");
   });
