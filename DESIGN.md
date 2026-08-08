@@ -335,7 +335,7 @@ TypeScript の更新自体は良い投資なので、gauntlet と切り離して
 | dependency structure・module size | Uncle Bob は使っているが、ノブを増やす価値が未検証 |
 | supply chain / secret スキャン | gauntlet の主題（コードを読まない代替）と別軸 |
 | property-based testing / flaky 検出 / 実行時検証 | v1 の 3 指標が機能してから判断する |
-| 常駐デーモン / 非同期フィードバック | `turn` を数秒に収める手段として不要と判断した |
+| 常駐デーモン / 非同期フィードバック | 当初は「`turn` は数秒に収まる」を理由に却下。duct の実測（実差分 25〜30 秒、PLAN 参照）でその前提は崩れたが、2026-08-08 に再検討して**再度見送り** — 非同期化は turn をゲートから助言に格下げする（赤でもターンを終えられる）上に、スナップショット・プロセス管理・結果の鮮度という機構を抱え込む。遅いリポジトリの逃げ道は turn を外して pr のみで運用する方が、緑の意味を曖昧にしない |
 | Claude Code plugin marketplace 配布 | `init` が薄い以上、運用コストに見合わない |
 | node:test 対応 / workspaces 対応 | パイロット 3 本に該当が無い |
 | 対話式ウィザード | ユーザーは必ず Claude Code を使っているため skill で足りる |
