@@ -178,9 +178,11 @@ gauntlet turn: fail (670ms)
 パッケージ名は **`@tepshq/gauntlet`**。開発中止した旧 gauntlet と同名で、registry 上のものは作り直す。
 → 0.0.14 の public npm 移行で **`@teps/gauntlet`** に改名（npmjs の org 名を teps に合わせた。
 GitHub Packages の 0.0.13 以前は旧名のまま残る）。
-→ npmjs の `@teps/gauntlet` には削除済みの旧 gauntlet のバージョン番号が焼け跡として残っていて
-再利用できない（0.0.14 が「publish 済み」で拒否された。旧版は 0.8.0 まで存在）。
-**0.9.0 に跳んで回避**。以降のバージョンはここから続ける。
+→ 0.0.14 の「publish 済み」拒否を旧 gauntlet の焼け跡と誤診して **0.9.0 に跳んだ**が、
+真相は「**0.0.14 自身の publish が成功していた**」（bin が壊れた版。npm 11.13 は bin の
+`./` 接頭辞を invalid として黙って bin を削って publish する）+ 新規パッケージは作成直後
+数分、読み取りが 404 を返す伝播ラグがある、の組合せだった。教訓: 新規 publish 直後の
+404 は失敗の証拠にならない。`npm view <pkg> time` が正。番号は単調なのでそのまま続ける。
 
 ### 6. mutation testing（`pr` のみ）— 完了
 
