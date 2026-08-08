@@ -604,6 +604,24 @@ init が生成する config がそのまま既定を使う）。以下は clone 
   境界は不変（duct オーナーの意向: 実装済み spec は触らない）。要検証は
   Vercel cold start での instrumentation 登録の可視性。
 
+**globalThis registry の spike 実測（同日）— 予想は外れた（#566 に追記済み）。**
+
+- 実装は成立（tsc 緑、node 5,533 / 5,534 pass。1 件は「bootstrap を呼ぶこと」を
+  検証する旧契約テストで期待を更新）。だが選択数は attr-name-resolve で
+  **1,658 → 1,658（変化なし）**、yahoo/client で 1,398 → 1,243（−11%）。
+- yahoo/client 変更で選ばれる 120 テストファイルの内訳: app/products 16 /
+  lib/bulk-update 10 / components/settings 10 / components/products 9 /
+  lib/diff-preview 8 / lib/sessions 7 … と**ほぼ全 feature に分布**。閉包の
+  支配要因は単一ハブではなく、UI（pages / components）→ Server Actions →
+  feature service → channel 内部という **feature レベルの編み込み**。
+  単一ハブの切断では崩れない。
+- 教訓: **実差分 turn ~25〜30 秒（仮想時計込み）が、選択の衛生で到達できる
+  下限に近い**。duct で 10 秒圏に入れる残りの選択肢は (1) 30 秒を受け入れる
+  (2) Stop フックを外し pr のみ運用 (3) gauntlet 側で「予算つき turn」を設計
+  （選択が閾値超のとき範囲を絞り、絞ったことを scope に明示 — 緑の意味が
+  変わるため DESIGN 判断）。globalThis registry 自体は罠の解消 + ensure
+  呼び出し 6 箇所の削除という簡素化として価値が残る。
+
 ### duct 第 1 期（`try-gauntlet` ブランチ / tepshq/duct#563 — #564 に置き換えて close 済み）
 
 **唯一、リポジトリの持ち主が導入ガイドに沿って自分で入れた例**（skill はまだ実地で
