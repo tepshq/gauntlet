@@ -240,6 +240,21 @@ CRAP と違って単一の数にできないのは、mutation が差分に関係
 - **JSON Schema を同梱し、`gauntlet run` が起動時に必ず検証する。** 不正なら即 fail。
   エージェントが自由に書くからこそ、機械的な検証が要る。
 
+### バージョニング
+
+semver に従う。**gauntlet の公開 API は「緑の意味」** — リポジトリ側が何も変えていないのに、
+バージョンを上げたら判定が変わる（緑が赤に、赤が緑に）変更が breaking change。
+中身は 2 層: 判定の意味（閾値・違反の定義・ratchet の規則・integration 除外）と、
+契約面（CLI と exit code・`gauntlet.config.json` の schema・baseline の形式・
+`integration` project 規約）。
+
+- 0.x の間は minor が major の役を担う: **breaking は 0.y を上げ、0.y.z 内では互換を守る**
+- 1.0.0 は公開 API への署名。時期は決めていない
+- 消費側は exact pin を推奨。`^0.0.x` は事実上の完全固定だったが、`^0.9.x` は patch に浮く。
+  「同じ指定が同じものを返す」を保証するのは semver ではなく pin の仕事
+- 0.0.1〜0.0.13 は通し番号で semver ではなかった。0.9.0（旧 gauntlet が焼いた番号を
+  跳んだ回、PLAN 参照）からこの規則で運用する
+
 ### 抽象は 2 枚だけ
 
 1. **アダプタが吐く JSON のスキーマ**
