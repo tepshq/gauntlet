@@ -621,6 +621,14 @@ init が生成する config がそのまま既定を使う）。以下は clone 
   （選択が閾値超のとき範囲を絞り、絞ったことを scope に明示 — 緑の意味が
   変わるため DESIGN 判断）。globalThis registry 自体は罠の解消 + ensure
   呼び出し 6 箇所の削除という簡素化として価値が残る。
+- **「ファイルごとの固定費」側のレバーも同日に測り切った。** テスト本体は
+  ~19ms/件で健全。遅さは固定費（collect = import ~300ms/ファイル + jsdom +
+  setup）× 選択ファイル数。`isolate: false` は機構としては効く（collect
+  36.2→15.2s、environment 22.3→5.8s）が duct のテスト規約（per-file の
+  vi.mock・モジュール状態）と非互換で **425 テスト失敗**。jsdom → happy-dom
+  は probe 選択で誤差（14.9→14.3s。フルスイート 7,210 件は happy-dom で全緑）。
+  **結論: duct の実差分 turn は「編み込み × 隔離前提の固定費」の積で決まり、
+  安いレバーは出尽くした**（#566 に全実測を記録）。
 
 ### duct 第 1 期（`try-gauntlet` ブランチ / tepshq/duct#563 — #564 に置き換えて close 済み）
 
