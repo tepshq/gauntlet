@@ -246,6 +246,7 @@ gauntlet 自身も TypeScript 6.0.3 に落とし、`typescript` は runtime 依�
 （`oxc-parser` に切り替えて以降どこも import していない死んだ依存だった）。
 
 ランタイム依存は **ajv / istanbul-lib-coverage / oxc-parser** の 3 つだけ。
+→ 0.11.0 で **jscpd** が加わり 4 つ（重複ゲート。同梱してバージョン固定する理由は DESIGN §3）。
 
 gauntlet 自身に対する `pr`: **14.6 秒で全 5 ゲート緑**（typecheck 0.5s / tests 0.7s /
 crap 0s / lint 0.5s / mutation 12.8s）。テスト 203 件。
@@ -368,12 +369,13 @@ README 監査のついでに、main.ts（どのテストも import しない）�
 判定は足さず、全チェックが「何を見たか」を必ず出す形にした（`CheckResult.scope`、DESIGN §2）。
 `✓ mutation (0ms)  変異対象 0 ファイル` と読めるので、沈黙が主張になった。
 
-**~~重複（duplication）のゲートが無い。~~ 決着（2026-08-08）: 今は持たない。**
+**~~重複（duplication）のゲートが無い。~~ 決着（2026-08-08）: 0.11.0 で実装した。**
 「検討して外したもの」に入っていない考え落とし状態だったので、実測してから決めた。
 jscpd（min-tokens 50）で gauntlet 5 クローン / **duct 377 クローン・重複行 3.17%**
-（`composition-agent` と `identity-agent` の route に約 100 行の丸写し等）。信号は実在するが
-扱わないと決め、理由と再検討時の形（repo 全体 1 数の ratchet・jscpd 同梱）を
-DESIGN §6 に、引き受けるリスクを §7-8 に記した。
+（`composition-agent` と `identity-agent` の route に約 100 行の丸写し等）。
+一度「持たない」と決めた直後に、「シンプルに収まるなら」の条件付きで採用に反転 —
+repo 全体の重複トークン数 1 つを CRAP と同じ ratchet に載せる形なら追加機構が
+ほぼゼロで済むため（DESIGN §3）。実装は下の 0.11.0 の節。
 
 **mutation の判定が run 間でブレる（hono で実測）。** 同じコード・同じテストの 2 回の `pr` で、
 差分が触れていないファイルの Survived が 9 → 10 になり ratchet が落ちた。並列実行下の
@@ -537,6 +539,10 @@ GitHub Packages の認証経路がこれで検証できた（パッケージ設�
   やるなら DESIGN の判断。(a)(b) で 15〜25 秒圏、10 秒を切るには (c) まで要る見込み。
 
 **(a)+(b) を使い捨て clone で実際に入れて再計測（同日）: 48.5 秒 → 30.0 秒。**
+(a) は main 起点の PR にした — **tepshq/duct#565**（setup 1 枚 + config 1 行。
+main での実測: `lib/channels` 35.24s → 1.42s、node project 全体 38.5s → 16.8s、
+pass / fail / skip は前後で完全一致）。(b) は gauntlet 導入 PR に入れる 1 行なので
+本導入時に。以下は clone 上の実験の記録:
 
 - 実タイマーの主犯は retry ではなく **rate-limiter だった**（Yahoo は
   `capacity: 1, refillPerSecond: 1` = 1 QPS。テストが 2 リクエスト目で 1 秒、
