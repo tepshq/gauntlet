@@ -587,6 +587,23 @@ init が生成する config がそのまま既定を使う）。以下は clone 
   実測で裏付けられた — (c) は選択数・collect・incremental typecheck の
   再検査範囲、3 つ全部に同時に効く。
 
+**(c) の正体を特定して提案化 — tepshq/duct#566（同日）。**
+
+- barrel は犯人ではなかった。`lib/channels/index.ts` は型・hooks・registry 関数
+  しか re-export しない薄い境界で、registry も空登録 + 動的解決。**ハブは
+  `bootstrap.ts`**（全チャネル client を静的 import）で、lib 層の 21 ファイルが
+  これを import している。しかも f03 design.md（2026-06-11 実装同期）に記録された
+  **意図的対策** — Next.js は instrumentation と Server Action を別モジュール
+  グラフにコンパイルし、モジュールスコープの registry シングルトンが分裂して
+  "Unsupported channel" になる罠への対処。
+- **vitest の `--changed` は動的 import の辺も数える**（duct clone に合成
+  2 ファイルを置いて実測）。「bootstrap の中身を lazy にする」案は選択数に
+  効かないと確定。
+- 提案は「registry シングルトンを globalThis へ」— グラフ分裂という罠の
+  根本原因を消し、lib 層の bootstrap import を不要にする。公開 API と spec の
+  境界は不変（duct オーナーの意向: 実装済み spec は触らない）。要検証は
+  Vercel cold start での instrumentation 登録の可視性。
+
 ### duct 第 1 期（`try-gauntlet` ブランチ / tepshq/duct#563 — #564 に置き換えて close 済み）
 
 **唯一、リポジトリの持ち主が導入ガイドに沿って自分で入れた例**（skill はまだ実地で
