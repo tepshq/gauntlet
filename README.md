@@ -15,7 +15,7 @@ Robert C. Martin が 2026 年 7 月に「自分はもうエージェントのコ
 
 | | いつ | 何が起きる |
 | --- | --- | --- |
-| `quick` | **pre-commit**（コミットするたび。手動でも叩ける） | 赤なら**コミットできず**、そのまま直しにいく |
+| `quick` | **エージェントが `git commit` する直前**（手動でも叩ける） | 赤なら**コミットできず**、理由がエージェントに届いてそのまま直しにいく |
 | `full` | CI | 赤なら**マージできない** |
 
 `quick` が効くのが一番の違いです。人間が「テスト通してね」と言わなくても、エージェントは
@@ -133,19 +133,25 @@ npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/*
 その job には `fetch-depth: 0`（差分の起点に全履歴が要る）と **Node 22 以上**が必要です。
 足せる job が無い場合の雛形は skill が持っています。
 
-### コミットと Claude Code の挙動が変わります
+### Claude Code の挙動が変わります
 
-**pre-commit（`.githooks/pre-commit`）** — コミットするたびに `gauntlet quick` が走り、
-赤なら**コミットが中断します**。「履歴に入った状態はすべて検査済み」が不変条件になります。
-配線は clone ごとに一度だけ必要です（`init` の出力にも出ます）:
+`init` が `.claude/settings.json` に `PreToolUse` フックを 2 つ足します。
+**配線の手作業はありません** — このファイルはコミットで伝播するので、clone した全員に効きます。
 
-```bash
-git config core.hooksPath .githooks
+**1. コミットの検問** — エージェントが `git commit` しようとすると `gauntlet quick` が走り、
+赤なら**コミットそのものが実行されません**。「履歴に入った状態はすべて検査済み」が
+不変条件になります。違反の内容はエージェントに直接届くので、そのまま直しにいきます:
+
+```
+PreToolUse:Bash hook error: [npx gauntlet quick]: gauntlet quick: fail
+  ✗ crap  CRAP 42.0 (> 8)  複雑度 6 / 網羅率 0%  src/probe.ts:1 tangled
 ```
 
-**`PreToolUse` フック**（`.claude/settings.json`）— エージェントが `gauntlet.baseline.json` を
-編集しようとすると止めます。赤を消す最短経路が「基準を緩める」になってしまうためです。
-人間は普通に編集できます。
+**2. baseline の保護** — エージェントが `gauntlet.baseline.json` を編集しようとすると
+止めます。赤を消す最短経路が「基準を緩める」になってしまうためです。人間は普通に編集できます。
+
+> 人間がターミナルで直接打つコミットは検査されません（Claude Code のフックなので）。
+> gauntlet の前提は「コードを書くのはエージェント」です。
 
 既に `.claude/settings.json` がある場合、**既存のフックやプラグイン設定はそのまま残ります**
 （追記するだけで、同じものは二度足しません）。
