@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -64,7 +64,6 @@ describe("init", () => {
   it("薄いファイルだけ置く", () => {
     expect(init(root)).toEqual([
       "gauntlet.config.json",
-      ".githooks/pre-commit",
       ".claude/settings.json",
       ".claude/skills/gauntlet-setup/SKILL.md",
       ".gitignore",
@@ -128,38 +127,31 @@ describe("init", () => {
     expect(parseConfig(read("gauntlet.config.json"), "test").tests).toBeUndefined();
   });
 
-  // 部分一致で確かめると、shebang や exec が消えても気づかない。
-  // それは「検問所が起動しなくなっても緑」を意味する。
-  it("pre-commit の中身を丸ごと固定する", () => {
+  // 0.14 で起動点を guard（PreToolUse）に集約した。git のフックは配線
+  //（core.hooksPath）が clone ごとに要り、忘れた人には静かに効かない。
+  it("git のフックは置かない", () => {
     init(root);
-    expect(read(".githooks/pre-commit")).toBe(
-      "#!/bin/sh\n" +
-        "# gauntlet quick — コミットを検問所にする。\n" +
-        "#\n" +
-        "# 赤なら exit 2 でコミットが中断する。履歴に入った状態はすべて検査済み、が不変条件。\n" +
-        "# 有効にするには clone ごとに一度だけ:  git config core.hooksPath .githooks\n" +
-        "exec npx gauntlet quick\n",
-    );
+    expect(existsSync(join(root, ".githooks"))).toBe(false);
   });
 
-  // 実行ビットが無いと git はフックを黙って無視する = 走らないゲートが置いてあるだけになる。
-  it("pre-commit に実行ビットを立てる", () => {
-    init(root);
-    expect(statSync(join(root, ".githooks/pre-commit")).mode & 0o111).not.toBe(0);
-  });
-
-  // 0.13 で pre-commit に一本化した。Stop を書くと遅いリポジトリで毎ターン数十秒かかる。
+  // Stop（0.12 以前）を書くと遅いリポジトリで毎ターン数十秒かかる。
   it("Stop フックは書かない", () => {
     init(root);
     expect(settings().hooks.Stop).toBeUndefined();
   });
 
+  // 丸ごと固定する。`if` が消えれば全 Bash で quick が走り、matcher が壊れれば
+  // コミットが素通りする — どちらも「気づけない失敗」なので部分一致では見ない。
   it("PreToolUse フックの中身を丸ごと固定する", () => {
     init(root);
     expect(settings().hooks.PreToolUse).toEqual([
       {
         matcher: "Edit|Write|NotebookEdit|Bash",
         hooks: [{ type: "command", command: "npx gauntlet guard" }],
+      },
+      {
+        matcher: "Bash",
+        hooks: [{ type: "command", if: "Bash(git commit *)", command: "npx gauntlet quick" }],
       },
     ]);
   });
@@ -172,11 +164,12 @@ describe("init", () => {
     expect(read(".claude/settings.json")).toBe(once);
   });
 
-  it("二度実行してもフックは各 1 つ", () => {
+  // guard と quick の 2 つ。積み上がると 1 回のコミットで何度も検査が走る。
+  it("何度実行してもフックは 2 つのまま", () => {
     init(root);
     init(root);
     init(root);
-    expect(settings().hooks.PreToolUse).toHaveLength(1);
+    expect(settings().hooks.PreToolUse).toHaveLength(2);
   });
 
   // 他の用途で使っている設定を壊すと、導入そのものが敬遠される。

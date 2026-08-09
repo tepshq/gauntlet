@@ -1,11 +1,15 @@
 {
-  "$schema": "./schema/gauntlet.config.schema.json",
+  "$schema": "./node_modules/@teps/gauntlet/schema/gauntlet.config.schema.json",
   "schemaVersion": 1,
   "adapter": "typescript",
   "runner": "vitest",
   "defaultBranch": "main",
   "source": {
-    "include": ["src/**/*.ts"],
-    "exclude": ["src/**/*.test.ts"]
+    "include": [
+      "src/**/*.ts"
+    ],
+    "exclude": [
+      "src/**/*.test.ts"
+    ]
   }
 }

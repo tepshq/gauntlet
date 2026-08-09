@@ -27,8 +27,7 @@ function initCommand(argv: readonly string[]): number {
       ? ""
       : `\n対象外に TypeScript があります: ${unmatched.join(", ")}\n` +
         `測る範囲が正しいか gauntlet.config.json の source を確認してください（.claude/skills/gauntlet-setup）。\n`;
-  const wiring = "\npre-commit の配線（clone ごとに一度）: git config core.hooksPath .githooks\n";
-  process.stderr.write(`${written.map((path) => `  ${path}`).join("\n")}\n\n測る対象: ${matched} ファイル\n${wiring}${notice}`);
+  process.stderr.write(`${written.map((path) => `  ${path}`).join("\n")}\n\n測る対象: ${matched} ファイル\n${notice}`);
   return EXIT_PASS;
 }
 
@@ -44,9 +43,9 @@ function tierCommand(tier: TierName): () => number {
 const USAGE = `gauntlet <command>
 
   quick   差分に閉じた検査。型チェック + 関連テスト + 触った関数の CRAP
-          （pre-commit が既定の起動点。手動でもそのまま叩ける）
+          （PreToolUse フックが git commit の直前に呼ぶ。手動でもそのまま叩ける）
   full    全量検査。上に加えて全テスト・lint・重複・ラチェット・mutation（CI から）
-  init    pre-commit・設定・skill を置く（CI は skill が案内する）
+  init    設定・フック・skill を置く（CI は skill が案内する）
   guard   PreToolUse フックから。baseline の書き換えを止める
 
 通れば exit 0、違反または gauntlet 自身が走れなければ exit 2。
