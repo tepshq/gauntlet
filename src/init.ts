@@ -11,7 +11,7 @@
  * 「1 行足す先」は skill が案内する。CI について知っている場所を 1 つに保つ。
  */
 
-import { globSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, globSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONFIG_FILENAME, type GauntletConfig } from "./config.ts";
 import { repoSourceSet } from "./git.ts";
@@ -43,9 +43,13 @@ function configFor(options: InitOptions): GauntletConfig & { $schema: string } {
   };
 }
 
-/** `Stop` は exit 2 で停止を阻止し、`PreToolUse` は exit 2 でツールを実行前に止める。 */
+/**
+ * Claude Code のフックは guard だけ。`quick` の起動点は pre-commit（下の PRE_COMMIT）。
+ *
+ * 0.12 までは `Stop` フックも書いていたが、0.13 で pre-commit に一本化した（DESIGN §2）。
+ * 0.12 以前から入れているリポジトリに Stop フックが残っていたら、手で消してよい。
+ */
 const HOOKS = {
-  Stop: [{ hooks: [{ type: "command", command: "npx gauntlet quick" }] }],
   PreToolUse: [
     {
       matcher: "Edit|Write|NotebookEdit|Bash",
@@ -53,6 +57,22 @@ const HOOKS = {
     },
   ],
 };
+
+/**
+ * `quick` の起動点。コミットが検問所になり、「履歴に入った状態はすべて検査済み」が
+ * 不変条件になる（duct #567 で実証してから既定に昇格。DESIGN §2）。
+ *
+ * `.git/hooks/` ではなくリポジトリ内の `.githooks/` に置く — コミットできるのは
+ * こちらだけ。配線（`git config core.hooksPath .githooks`）は clone ごとに一度必要で、
+ * `init` は自分の clone だけ配線し、他の開発者への案内は skill と出力が持つ。
+ */
+export const PRE_COMMIT = `#!/bin/sh
+# gauntlet quick — コミットを検問所にする。
+#
+# 赤なら exit 2 でコミットが中断する。履歴に入った状態はすべて検査済み、が不変条件。
+# 有効にするには clone ごとに一度だけ:  git config core.hooksPath .githooks
+exec npx gauntlet quick
+`;
 
 const SKILL = `---
 name: gauntlet-setup
@@ -158,6 +178,21 @@ npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glo
 型チェックの上書きが要る場合は \`gauntlet.config.json\` の \`commands.typecheck\` に書く
 （\`init\` にフラグは無い。config はスキーマ検証されるので、間違えれば起動時に落ちる）。
 
+### pre-commit を配線する
+
+\`init\` は \`.githooks/pre-commit\`（\`quick\` の起動点）を書くが、**配線は clone ごとに
+一度、手で行う**:
+
+\`\`\`
+git config core.hooksPath .githooks
+\`\`\`
+
+配線しないとフックは走らない = 走らないゲートが置いてあるだけになる。
+**わざと違反（未テストで CC 3 以上の関数）を作ってコミットし、拒否されることまで確認する。**
+他の開発者にも clone 後に同じ 1 行が要る（README か CONTRIBUTING に書いておく）。
+0.12 以前から入れているリポジトリで \`.claude/settings.json\` に \`Stop\` フックが
+残っていたら消す（0.13 で pre-commit に一本化した）。
+
 ### 外部サービスを要するテストがあった場合
 
 \`init\` は**これを自動ではやらない**。1 で見つけていたら、ここで整理する。
@@ -229,6 +264,7 @@ jobs:
 （アプリが載る Node を変える話なので、gauntlet の都合で決めてよいことではない）。
 
 **完了条件** — \`npx gauntlet quick\` が通り、測った件数が想定と一致していること。
+**pre-commit が配線され、わざと作った違反でコミットが拒否されること。**
 外部サービスが無い状態でも \`quick\` と \`full\` が通ること（宣言が効いている証拠）。
 \`full\` を回す job が 1 つあり、それが上の 2 条件（全履歴・Node 22 以上）を満たすこと。
 
@@ -301,6 +337,13 @@ function write(root: string, path: string, contents: string): string {
   return path;
 }
 
+/** pre-commit は実行ビットが無いと git に無視される。書き直しでも必ず立て直す。 */
+function writeExecutable(root: string, path: string, contents: string): string {
+  write(root, path, contents);
+  chmodSync(join(root, path), 0o755);
+  return path;
+}
+
 function readIfPresent(root: string, path: string): string | null {
   try {
     // Stryker disable next-line StringLiteral: encoding を外しても Buffer が
@@ -348,6 +391,7 @@ export function init(root: string, options: InitOptions = INIT_DEFAULTS): string
   removeLegacySkill(root);
   return [
     write(root, CONFIG_FILENAME, `${JSON.stringify(configFor(options), null, 2)}\n`),
+    writeExecutable(root, ".githooks/pre-commit", PRE_COMMIT),
     write(root, ".claude/settings.json", mergeSettings(readIfPresent(root, ".claude/settings.json"))),
     write(root, ".claude/skills/gauntlet-setup/SKILL.md", SKILL),
     write(root, ".gitignore", mergeGitignore(readIfPresent(root, ".gitignore"))),

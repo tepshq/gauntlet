@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -64,6 +64,7 @@ describe("init", () => {
   it("薄いファイルだけ置く", () => {
     expect(init(root)).toEqual([
       "gauntlet.config.json",
+      ".githooks/pre-commit",
       ".claude/settings.json",
       ".claude/skills/gauntlet-setup/SKILL.md",
       ".gitignore",
@@ -127,13 +128,30 @@ describe("init", () => {
     expect(parseConfig(read("gauntlet.config.json"), "test").tests).toBeUndefined();
   });
 
-  // 部分一致で確かめると、matcher や type が空になっても気づかない。
-  // それは「ガードが起動しなくなっても緑」を意味する。
-  it("Stop フックの中身を丸ごと固定する", () => {
+  // 部分一致で確かめると、shebang や exec が消えても気づかない。
+  // それは「検問所が起動しなくなっても緑」を意味する。
+  it("pre-commit の中身を丸ごと固定する", () => {
     init(root);
-    expect(settings().hooks.Stop).toEqual([
-      { hooks: [{ type: "command", command: "npx gauntlet quick" }] },
-    ]);
+    expect(read(".githooks/pre-commit")).toBe(
+      "#!/bin/sh\n" +
+        "# gauntlet quick — コミットを検問所にする。\n" +
+        "#\n" +
+        "# 赤なら exit 2 でコミットが中断する。履歴に入った状態はすべて検査済み、が不変条件。\n" +
+        "# 有効にするには clone ごとに一度だけ:  git config core.hooksPath .githooks\n" +
+        "exec npx gauntlet quick\n",
+    );
+  });
+
+  // 実行ビットが無いと git はフックを黙って無視する = 走らないゲートが置いてあるだけになる。
+  it("pre-commit に実行ビットを立てる", () => {
+    init(root);
+    expect(statSync(join(root, ".githooks/pre-commit")).mode & 0o111).not.toBe(0);
+  });
+
+  // 0.13 で pre-commit に一本化した。Stop を書くと遅いリポジトリで毎ターン数十秒かかる。
+  it("Stop フックは書かない", () => {
+    init(root);
+    expect(settings().hooks.Stop).toBeUndefined();
   });
 
   it("PreToolUse フックの中身を丸ごと固定する", () => {
@@ -158,11 +176,11 @@ describe("init", () => {
     init(root);
     init(root);
     init(root);
-    expect(settings().hooks.Stop).toHaveLength(1);
     expect(settings().hooks.PreToolUse).toHaveLength(1);
   });
 
   // 他の用途で使っている設定を壊すと、導入そのものが敬遠される。
+  // リポジトリ自前の Stop フックは他人の持ち物 — 消さず、gauntlet のものも足さない。
   it("既にある settings.json を壊さない", () => {
     mkdirSync(join(root, ".claude"), { recursive: true });
     writeFileSync(
@@ -172,7 +190,7 @@ describe("init", () => {
     init(root);
     const merged = JSON.parse(read(".claude/settings.json")) as { permissions: unknown; hooks: { Stop: unknown[] } };
     expect(merged.permissions).toEqual({ allow: ["Bash(ls)"] });
-    expect(merged.hooks.Stop).toHaveLength(2);
+    expect(merged.hooks.Stop).toHaveLength(1);
   });
 
   it("既にある .gitignore を残して足す", () => {

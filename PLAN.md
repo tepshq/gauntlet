@@ -363,6 +363,21 @@ README 監査のついでに、main.ts（どのテストも import しない）�
   外した数を scope に出す（`変異対象 12 ファイル（テストが触れない 1 ファイルは対象外 …）`）。
 - init の警告文に残っていた旧 skill 名（`.claude/skills/gauntlet`）を直した。
 
+### 0.13.0: pre-commit を全リポジトリ共通の起動点に昇格（2026-08-09）
+
+duct 本導入（#567）で pre-commit 検問所が実証されたのを受け、「速いリポは Stop /
+遅いリポは pre-commit」の二本立てをやめて**一本化**（ユーザー判断）。起動点が
+リポジトリごとに違うと緑の意味の説明が 2 種類になる。
+
+- `init` は `.githooks/pre-commit`（実行ビット付き）を書き、`Stop` フックを**書かない**。
+  配線（`git config core.hooksPath .githooks`）は clone ごとに一度、手で行う —
+  `init` の出力と skill が案内し、skill の完了条件に「わざと作った違反でコミットが
+  拒否されること」を足した（配線忘れ = 走らないゲート、を潰す）
+- 既にある `.claude/settings.json` の Stop フック（0.12 以前の導入や自前のもの）は
+  消さない。0.12 以前からの移行は手で消す（skill に記載）
+- gauntlet 自身も pre-commit に切り替え（dogfooding）
+- `--no-verify` の穴は引き続き「破られた証拠が出てから」（DESIGN §2）
+
 ### 0.12.0: tier を検査範囲で改名（quick / full）+ サブコマンド直呼び（2026-08-08）
 
 `turn` / `pr` は起動点の名前だったが、起動点が配備の詳細になって嘘になった —

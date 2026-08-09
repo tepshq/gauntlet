@@ -15,7 +15,7 @@ Robert C. Martin が 2026 年 7 月に「自分はもうエージェントのコ
 
 | | いつ | 何が起きる |
 | --- | --- | --- |
-| `quick` | Stop フック（既定）、または pre-commit・手動 | 赤ならエージェントが**先に進めず**、そのまま直しにいく |
+| `quick` | **pre-commit**（コミットするたび。手動でも叩ける） | 赤なら**コミットできず**、そのまま直しにいく |
 | `full` | CI | 赤なら**マージできない** |
 
 `quick` が効くのが一番の違いです。人間が「テスト通してね」と言わなくても、エージェントは
@@ -133,17 +133,19 @@ npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/*
 その job には `fetch-depth: 0`（差分の起点に全履歴が要る）と **Node 22 以上**が必要です。
 足せる job が無い場合の雛形は skill が持っています。
 
-### Claude Code の挙動が変わります
+### コミットと Claude Code の挙動が変わります
 
-`init` は `.claude/settings.json` にフックを 2 つ足します。**このリポジトリで Claude Code を
-使う全員に効きます。**
+**pre-commit（`.githooks/pre-commit`）** — コミットするたびに `gauntlet quick` が走り、
+赤なら**コミットが中断します**。「履歴に入った状態はすべて検査済み」が不変条件になります。
+配線は clone ごとに一度だけ必要です（`init` の出力にも出ます）:
 
-**`Stop` フック** — エージェントが応答を終えようとするたびに `gauntlet quick` が走り、
-赤なら**終了できずに直しにいきます**。人間が「テスト通してね」と言わなくてよくなる代わりに、
-毎ターン数秒〜数十秒かかります（実測は下の表）。
+```bash
+git config core.hooksPath .githooks
+```
 
-**`PreToolUse` フック** — エージェントが `gauntlet.baseline.json` を編集しようとすると止めます。
-赤を消す最短経路が「基準を緩める」になってしまうためです。人間は普通に編集できます。
+**`PreToolUse` フック**（`.claude/settings.json`）— エージェントが `gauntlet.baseline.json` を
+編集しようとすると止めます。赤を消す最短経路が「基準を緩める」になってしまうためです。
+人間は普通に編集できます。
 
 既に `.claude/settings.json` がある場合、**既存のフックやプラグイン設定はそのまま残ります**
 （追記するだけで、同じものは二度足しません）。
