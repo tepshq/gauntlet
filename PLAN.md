@@ -494,6 +494,33 @@ GitHub Packages の認証経路がこれで検証できた（パッケージ設�
   `init` を叩く」流れに書き直した（DESIGN §4）。tsconfig の `include` から機械的に導けるかを
   3 本で試したが、hue は正解・teps と duct は不正解で、判断が要ることが確認できた。
 
+### duct 本導入（tepshq/duct#567 — 全チェック緑、マージ判断待ち。2026-08-09）
+
+0.12.0 で main から入れ直した、実運用に入れるための PR。過去 3 本（#559 / #563 / #564）は
+すべて検証で閉じたが、今回は**ローカルゲートが実際に噛むところまで確認**した。
+
+| | 実測 |
+| --- | --- |
+| `quick`（pre-commit） | **60 秒**（typecheck 1.9s / テスト 7213 件 57s / CRAP 6665 関数） |
+| `full`（CI、認証なし・DB なし） | **15 分 6 秒** |
+| `ci.yml`（DB あり、integration 担当） | 12 分 33 秒 |
+| 測る対象 | 778 ファイル / 6665 関数 |
+| baseline の種 | CRAP 違反 773 / 重複 29,484 トークン |
+
+- **起動点は pre-commit**（DESIGN §2 の「遅いリポジトリ」の形を初めて実地で採用）。
+  `.githooks/pre-commit` をコミットし、各開発者が一度だけ `git config core.hooksPath .githooks`。
+- **ゲートが噛むことを実証**: 未テストで CC 8 の関数を足したら `CRAP 72.0 (> 8)` で
+  コミットが拒否され、HEAD が動かなかった。導入コミット自身も pre-commit を通っている。
+- **Vercel が緑**（public npm 化の効果。8/8 は private パッケージで 401 だった）。
+- **DB 依存の判定は名前ではなく実行で確定**させた。名前に "integration" を含む 6 ファイル
+  （`compose-integration.test.ts` 等）は DB 無しで通ったので宣言側に残し、逆に名前が
+  合っていなかった DB 依存 4 ファイルを `*.integration.test.ts` に移した。
+
+**この導入で見つけた gauntlet 側の不具合**: DESIGN のバージョニング節に、0.10.0 で
+廃止した「`integration` 除外」「`integration` project 規約」が公開 API として残っていた。
+導入作業でこの化石を読み、廃止済みの規約を復活させる提案をしかけた（ユーザーの指摘で発覚）。
+**ドキュメントの化石は、次に読むエージェントを誤らせる**という実例。
+
 ### duct 第 2 期（tepshq/duct#564 — 全チェック緑を確認後、検証完了として close）
 
 導入 PR は 3 本とも閉じた（#559 / #563 / #564）。duct の main に gauntlet は入っていない。
