@@ -287,9 +287,8 @@ CRAP と違って単一の数にできないのは、mutation が差分に関係
 
 semver に従う。**gauntlet の公開 API は「緑の意味」** — リポジトリ側が何も変えていないのに、
 バージョンを上げたら判定が変わる（緑が赤に、赤が緑に）変更が breaking change。
-中身は 2 層: 判定の意味（閾値・違反の定義・ratchet の規則・integration 除外）と、
-契約面（CLI と exit code・`gauntlet.config.json` の schema・baseline の形式・
-`integration` project 規約）。
+中身は 2 層: 判定の意味（閾値・違反の定義・ratchet の規則・何を走らせるか）と、
+契約面（CLI と exit code・`gauntlet.config.json` の schema・baseline の形式）。
 
 - 0.x の間は minor が major の役を担う: **breaking は 0.y を上げ、0.y.z 内では互換を守る**
 - 1.0.0 は公開 API への署名。時期は決めていない
