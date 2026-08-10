@@ -101,15 +101,15 @@ describe("repositoryViolators", () => {
 
 describe("gateRepository", () => {
   it("違反数が許容値以下なら落とさない", () => {
-    expect(gateRepository(reportOf([BAD, GOOD]), { crap: 1, mutation: {}, lint: {} })).toEqual({ kind: "ok" });
+    expect(gateRepository(reportOf([BAD, GOOD]), { crap: 1, mutation: {} })).toEqual({ kind: "ok" });
   });
 
   it("許容値を超えたら落とす", () => {
-    expect(gateRepository(reportOf([BAD]), { crap: 0, mutation: {}, lint: {} })).toEqual({ kind: "regressed", allowed: 0, actual: 1 });
+    expect(gateRepository(reportOf([BAD]), { crap: 0, mutation: {} })).toEqual({ kind: "regressed", allowed: 0, actual: 1 });
   });
 
   it("減っていたら改善として返す", () => {
-    expect(gateRepository(reportOf([GOOD]), { crap: 3, mutation: {}, lint: {} })).toEqual({ kind: "improved", from: 3, to: 0 });
+    expect(gateRepository(reportOf([GOOD]), { crap: 3, mutation: {} })).toEqual({ kind: "improved", from: 3, to: 0 });
   });
 
   // 0 から始めると、既存リポジトリは導入した瞬間に赤で埋まって誰も入れられない。

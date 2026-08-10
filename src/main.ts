@@ -11,7 +11,7 @@ import { INIT_USAGE, formatInit, helpRequested, init, parseInitOptions } from ".
 import { describeCrash, run } from "./run.ts";
 import { EXIT_BLOCKED, EXIT_PASS, type TierName, exitCodeFor } from "./tier.ts";
 
-function guard(_argv: readonly string[]): number {
+function guard(): number {
   const input: unknown = JSON.parse(readFileSync(0, "utf8"));
   if (!shouldBlock(input as Parameters<typeof shouldBlock>[0])) return EXIT_PASS;
   process.stderr.write(`${GUARD_MESSAGE}\n`);

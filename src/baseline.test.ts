@@ -19,12 +19,12 @@ const put = (contents: string): void => writeFileSync(join(root, BASELINE_FILENA
 describe("loadBaseline", () => {
   it("記録を読む", () => {
     put('{"crap": 7, "mutation": {"a.ts": 3}}');
-    expect(loadBaseline(root)).toEqual({ crap: 7, mutation: { "a.ts": 3 }, lint: {} });
+    expect(loadBaseline(root)).toEqual({ crap: 7, mutation: { "a.ts": 3 } });
   });
 
   it("mutation が無ければ空とみなす", () => {
     put('{"crap": 7}');
-    expect(loadBaseline(root)).toEqual({ crap: 7, mutation: {}, lint: {} });
+    expect(loadBaseline(root)).toEqual({ crap: 7, mutation: {} });
   });
 
   // 0 と混同すると、既存リポジトリが導入初日に赤で埋まる。
@@ -39,13 +39,13 @@ describe("loadBaseline", () => {
   });
 
   it("書いたものを読み戻せる", () => {
-    saveBaseline(root, { crap: 3, mutation: { "a.ts": 1 }, lint: {} });
-    expect(loadBaseline(root)).toEqual({ crap: 3, mutation: { "a.ts": 1 }, lint: {} });
+    saveBaseline(root, { crap: 3, mutation: { "a.ts": 1 } });
+    expect(loadBaseline(root)).toEqual({ crap: 3, mutation: { "a.ts": 1 } });
   });
 
   // 「無い」と 0 は違う — 無ければ種を置く判定（duplicationViolations）に使う。
   it("duplication を読み戻せる", () => {
-    saveBaseline(root, { crap: 3, duplication: 1090, mutation: {}, lint: {} });
+    saveBaseline(root, { crap: 3, duplication: 1090, mutation: {} });
     expect(loadBaseline(root)?.duplication).toBe(1090);
   });
 
@@ -101,19 +101,19 @@ describe("ratchetByFile", () => {
 
 describe("ratchet", () => {
   it("許容値ちょうどなら通す", () => {
-    expect(ratchet({ crap: 5, mutation: {}, lint: {} }, 5)).toEqual({ kind: "ok" });
+    expect(ratchet({ crap: 5, mutation: {} }, 5)).toEqual({ kind: "ok" });
   });
 
   it("許容値を超えたら落とす", () => {
-    expect(ratchet({ crap: 5, mutation: {}, lint: {} }, 6)).toEqual({ kind: "regressed", allowed: 5, actual: 6 });
+    expect(ratchet({ crap: 5, mutation: {} }, 6)).toEqual({ kind: "regressed", allowed: 5, actual: 6 });
   });
 
   // 改善を記録し損ねると許容値が緩いまま残り、後で同じだけ悪化させても通る。
   it("改善したら新しい値を返す", () => {
-    expect(ratchet({ crap: 5, mutation: {}, lint: {} }, 3)).toEqual({ kind: "improved", from: 5, to: 3 });
+    expect(ratchet({ crap: 5, mutation: {} }, 3)).toEqual({ kind: "improved", from: 5, to: 3 });
   });
 
   it("0 まで下がりきったら ok", () => {
-    expect(ratchet({ crap: 0, mutation: {}, lint: {} }, 0)).toEqual({ kind: "ok" });
+    expect(ratchet({ crap: 0, mutation: {} }, 0)).toEqual({ kind: "ok" });
   });
 });

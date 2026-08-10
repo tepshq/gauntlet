@@ -14,5 +14,7 @@ jobs:
           node-version-file: package.json
       - run: npm ci
       - run: npm run build
+      # lint は gauntlet のゲートから外した（0.18.0）。リポジトリの CI が回す。
+      - run: npm run lint
       # 自分自身を測るので、registry からではなくビルド結果を直接叩く。
-      - run: node dist/cli.js run --tier=pr
+      - run: node dist/cli.js full

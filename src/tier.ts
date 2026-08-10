@@ -15,7 +15,7 @@
  */
 export type TierName = "quick" | "full";
 
-export type CheckName = "typecheck" | "tests" | "crap" | "lint" | "duplication" | "mutation";
+export type CheckName = "typecheck" | "tests" | "crap" | "duplication" | "mutation";
 
 /**
  * 各 tier が走らせるチェック。
@@ -26,7 +26,7 @@ export type CheckName = "typecheck" | "tests" | "crap" | "lint" | "duplication" 
  */
 export const TIER_CHECKS: Record<TierName, readonly CheckName[]> = {
   quick: ["typecheck", "tests", "crap"],
-  full: ["typecheck", "tests", "crap", "lint", "duplication", "mutation"],
+  full: ["typecheck", "tests", "crap", "duplication", "mutation"],
 };
 
 export interface Violation {

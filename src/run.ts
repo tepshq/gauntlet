@@ -18,7 +18,6 @@ import {
   tierStatus,
 } from "./tier.ts";
 import { analyze, listSourceFiles } from "./typescript/adapter.ts";
-import { runLint } from "./typescript/lint.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
 import { type SurvivedMutant, runMutation } from "./typescript/mutation.ts";
@@ -96,7 +95,6 @@ export function runTier(root: string, tier: TierName): TierResult {
         // フル実行の coverage に現れたファイル = 何かのテストが触れるファイル。
         new Set(coveredFiles(root, outcome.coverage)),
       ),
-    lint: () => lintCheck(root, config),
     duplication: () => duplicationCheck(root, config),
   };
   const checks = TIER_CHECKS[tier].map((name) => runners[name]());
@@ -360,17 +358,17 @@ export function countByFile(mutants: readonly { file: string }[]): Record<string
   return counts;
 }
 
-const EMPTY_BASELINE = { crap: 0, mutation: {}, lint: {} };
+const EMPTY_BASELINE = { crap: 0, mutation: {} };
 
 /**
- * ファイル単位のラチェットを当て、記録を更新する。mutation と lint が共有する。
+ * ファイル単位のラチェットを当て、記録を更新する。mutation が使う。
  *
  * 0 件を要求すると既存リポジトリはどこも導入できない（gauntlet 自身ですら
  * 生き残りが 53 件あった）。CRAP と同じく「増やさない」だけを課す。
  */
 function gateByFile(
   root: string,
-  key: "mutation" | "lint",
+  key: "mutation",
   targets: readonly string[],
   counts: Record<string, number>,
   describe: (entry: { file: string; allowed: number; actual: number }) => string,
@@ -467,26 +465,6 @@ function duplicationCheck(root: string, config: GauntletConfig): CheckResult {
     return {
       scope: `重複 ${duplicatedTokens} トークン / 対象 ${sources} ファイル`,
       violations: duplicationViolations(root, duplicatedTokens),
-    };
-  });
-}
-
-/** ルールは対象リポジトリが持つ。gauntlet は件数を増やさせないだけ。 */
-function lintCheck(root: string, config: GauntletConfig): CheckResult {
-  return timed("lint", () => {
-    const { scanned, counts, details } = runLint(root, config.source.include);
-    // ラチェットが突き合わせるのは「エラーがあったファイル ∪ 記録にあるファイル」。
-    // 直して 0 件になったファイルの記録も下げる必要がある。
-    const tracked = [...new Set([...Object.keys(counts), ...Object.keys(loadBaseline(root)?.lint ?? {})])];
-    return {
-      // scope は eslint が実際に見たファイル数。エラーのあった数だと、綺麗な
-      // リポジトリで「対象 0」になり、何も見ていないのと区別できない（hono で実測）。
-      scope: `lint 対象 ${scanned} ファイル`,
-      violations: gateByFile(root, "lint", tracked, counts, (entry) => {
-        // Stryker disable next-line ArrayDeclaration: 後退したファイルには必ず
-        // エラーがあり、details に載る。既定値が使われる状態を作れない。
-        return withDetails(`lint エラーが ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`, details[entry.file] ?? []);
-      }),
     };
   });
 }

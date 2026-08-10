@@ -28,8 +28,6 @@ export interface Baseline {
    * 比べても意味を持たない。今回の対象になったファイルだけを突き合わせる。
    */
   mutation: Record<string, number>;
-  /** ファイルごとに許容する lint エラーの数。 */
-  lint: Record<string, number>;
 }
 
 /**
@@ -48,7 +46,6 @@ export function loadBaseline(root: string): Baseline | null {
       // 無いのと 0 は違う。無ければ欄ごと無し（種を置く判定に使う）。
       ...(typeof data.duplication === "number" ? { duplication: data.duplication } : {}),
       mutation: data.mutation ?? {},
-      lint: data.lint ?? {},
     };
   } catch {
     return null;
@@ -90,7 +87,7 @@ export interface FileRatchet {
 }
 
 /**
- * ファイルごとに件数を突き合わせる。mutation と lint が共有する。
+ * ファイルごとに件数を突き合わせる。mutation が使う。
  *
  * 記録が無いファイルは今の実測値を種にする。既存リポジトリは導入時点で
  * 大量に抱えているので、0 から始めると誰も入れられない。

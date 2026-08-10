@@ -48,7 +48,7 @@ describe("applyRatchet", () => {
   it("記録が無ければ種を置いて落とす", () => {
     withRoot((root) => {
       expect(applyRatchet(violating(3, root), new Map())).toEqual([BASELINE_NOT_COMMITTED]);
-      expect(loadBaseline(root)).toEqual({ crap: 3, mutation: {}, lint: {} });
+      expect(loadBaseline(root)).toEqual({ crap: 3, mutation: {} });
     });
   });
 
@@ -78,32 +78,32 @@ describe("applyRatchet", () => {
     withRoot((root) => {
       applyRatchet(violating(1, root), new Map());
       const written = JSON.parse(readFileSync(join(root, "gauntlet.baseline.json"), "utf8")) as object;
-      expect(Object.keys(written).sort()).toEqual(["crap", "lint", "mutation"]);
+      expect(Object.keys(written).sort()).toEqual(["crap", "mutation"]);
     });
   });
 
   it("増えていたら落とし、記録は変えない", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 1, mutation: {}, lint: {} });
+      saveBaseline(root, { crap: 1, mutation: {} });
       expect(applyRatchet(violating(4, root), new Map())[0]!.message).toContain("1 → 4");
-      expect(loadBaseline(root)).toEqual({ crap: 1, mutation: {}, lint: {} });
+      expect(loadBaseline(root)).toEqual({ crap: 1, mutation: {} });
     });
   });
 
   // 記録し損ねると許容値が緩いまま残り、後で同じだけ悪化させても通る。
   it("減っていたら通し、記録を下げる", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 5, mutation: {}, lint: {} });
+      saveBaseline(root, { crap: 5, mutation: {} });
       expect(applyRatchet(violating(2, root), new Map())).toEqual([]);
-      expect(loadBaseline(root)).toEqual({ crap: 2, mutation: {}, lint: {} });
+      expect(loadBaseline(root)).toEqual({ crap: 2, mutation: {} });
     });
   });
 
   it("同じなら通し、記録も変わらない", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 2, mutation: {}, lint: {} });
+      saveBaseline(root, { crap: 2, mutation: {} });
       expect(applyRatchet(violating(2, root), new Map())).toEqual([]);
-      expect(loadBaseline(root)).toEqual({ crap: 2, mutation: {}, lint: {} });
+      expect(loadBaseline(root)).toEqual({ crap: 2, mutation: {} });
     });
   });
 });
@@ -590,7 +590,7 @@ describe("crapViolations", () => {
   it("full ではリポジトリ全体のラチェットも当てる", () => {
     const root = mkdtempSync(join(tmpdir(), "gauntlet-crap-"));
     try {
-      saveBaseline(root, { crap: 0, mutation: {}, lint: {} });
+      saveBaseline(root, { crap: 0, mutation: {} });
       const scoped = { ...report, root };
       const messages = crapViolations("full", scoped, new Map()).map((v) => v.message);
       expect(messages).toEqual([
@@ -694,9 +694,9 @@ describe("duplicationViolations", () => {
   // 0.11.0 より前の baseline にはこの欄が無い。種を置いた回は通さない（crap と同じ）。
   it("欄が無ければ種を置いて落とす", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 5, mutation: {}, lint: {} });
+      saveBaseline(root, { crap: 5, mutation: {} });
       expect(duplicationViolations(root, 1090)).toEqual([BASELINE_NOT_COMMITTED]);
-      expect(loadBaseline(root)).toEqual({ crap: 5, mutation: {}, lint: {}, duplication: 1090 });
+      expect(loadBaseline(root)).toEqual({ crap: 5, mutation: {}, duplication: 1090 });
     });
   });
 
@@ -710,7 +710,7 @@ describe("duplicationViolations", () => {
 
   it("増えていたら落とし、記録は変えない", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 0, mutation: {}, lint: {}, duplication: 100 });
+      saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
       expect(duplicationViolations(root, 150)).toEqual([
         { message: "重複が 100 → 150 トークンに増えました" },
       ]);
@@ -721,7 +721,7 @@ describe("duplicationViolations", () => {
   // 記録し損ねると許容値が緩いまま残り、後で同じだけコピペしても通る。
   it("減っていたら通し、記録を下げる", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 0, mutation: {}, lint: {}, duplication: 100 });
+      saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
       expect(duplicationViolations(root, 60)).toEqual([]);
       expect(loadBaseline(root)?.duplication).toBe(60);
     });
@@ -729,7 +729,7 @@ describe("duplicationViolations", () => {
 
   it("同じなら通し、記録も変わらない", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 0, mutation: {}, lint: {}, duplication: 100 });
+      saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
       expect(duplicationViolations(root, 100)).toEqual([]);
       expect(loadBaseline(root)?.duplication).toBe(100);
     });
