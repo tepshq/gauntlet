@@ -27,7 +27,11 @@ function initCommand(argv: readonly string[]): number {
       ? ""
       : `\n対象外に TypeScript があります: ${unmatched.join(", ")}\n` +
         `測る範囲が正しいか gauntlet.config.json の source を確認してください（.claude/skills/gauntlet-setup）。\n`;
-  process.stderr.write(`${written.map((path) => `  ${path}`).join("\n")}\n\n測る対象: ${matched} ファイル\n${notice}`);
+  // 置いただけでは何も守られない。人間が見ているこの画面で、次の一歩を言う。
+  const next =
+    "\n次: Claude Code でこのリポジトリを開き、/gauntlet-setup を実行してください\n" +
+    "（依存の投入 → 測る範囲の決定 → CI → ラチェットの種置きまで随行します）\n";
+  process.stderr.write(`${written.map((path) => `  ${path}`).join("\n")}\n\n測る対象: ${matched} ファイル\n${notice}${next}`);
   return EXIT_PASS;
 }
 

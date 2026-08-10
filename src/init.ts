@@ -84,6 +84,34 @@ description: gauntlet をこのリポジトリに導入する、または測る�
 **測る範囲はユーザーと決める。** 推測して黙って書かない。範囲が狭いまま緑になるのが、
 このツールで一番気づけない失敗だから。
 
+この skill 自体は \`npx @teps/gauntlet init\`（未インストールでも動く）が置く。
+そこから先 — 依存の投入・範囲の決定・CI・ラチェットの種 — は全部ここの手順で行う。
+
+## 0. 依存を入れる
+
+gauntlet が devDependencies に無ければ、まず入れる。**コマンドは決め打ちしない** —
+リポジトリのパッケージマネージャに合わせる（間違えると lockfile が汚れる）:
+
+1. **PM の特定**: \`package.json\` の \`packageManager\` フィールドが正。無ければ lockfile
+   （\`pnpm-lock.yaml\` / \`yarn.lock\` / \`bun.lock\` / \`package-lock.json\`）から。
+2. **node_modules が無ければ先にリポジトリ自体を install する**（後の「実行で確定させる」
+   手順にテスト実行が要る）。
+3. **入れるもの**:
+   - \`@teps/gauntlet\` — フックが \`npx gauntlet\` で呼ぶ本体
+   - \`@stryker-mutator/core\` \`@stryker-mutator/vitest-runner\` — \`full\` の mutation 用
+   - \`@vitest/coverage-v8\` — **既に入っているならそのまま**（自前のテストで \`--coverage\`
+     を使うリポジトリは大抵持っている）。無ければ**リポジトリの vitest とバージョンを
+     揃えて**入れる: \`@vitest/coverage-v8@$(node -p "require('vitest/package.json').version")\`。
+     無指定だと最新が入り、古い vitest と peer 衝突で \`install\` ごと失敗する（duct で実測）。
+
+例（pnpm・coverage-v8 導入済みのリポジトリ）:
+
+\`\`\`
+pnpm add -D @teps/gauntlet @stryker-mutator/core @stryker-mutator/vitest-runner
+\`\`\`
+
+vitest が無いリポジトリは対象外（gauntlet の要件）。無理に足さず、ユーザーに伝えて止まる。
+
 ## 1. リポジトリを読む
 
 - \`tsconfig.json\` の \`include\` — ただし鵜呑みにしない。生成物（\`.next/types\`）、

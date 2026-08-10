@@ -11,6 +11,7 @@ import { existsSync, globSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { capture } from "../exec.ts";
+import { detectPackageManager, installDevCommand } from "../package-manager.ts";
 import { RunnerError, lastLines } from "./runner.ts";
 
 /** Stryker の json reporter の固定出力先。CLI からファイル名を変えられない。 */
@@ -72,10 +73,11 @@ export function ignoredCount(report: MutationReport): number {
 function strykerBin(root: string): string {
   const bin = join(root, "node_modules", ".bin", "stryker");
   if (existsSync(bin)) return bin;
-  throw new RunnerError(
-    "Stryker が入っていません。次で入れてください:\n" +
-      "  npm i -D @stryker-mutator/core @stryker-mutator/vitest-runner",
-  );
+  const command = installDevCommand(detectPackageManager(root), [
+    "@stryker-mutator/core",
+    "@stryker-mutator/vitest-runner",
+  ]);
+  throw new RunnerError(`Stryker が入っていません。次で入れてください:\n  ${command}`);
 }
 
 /**

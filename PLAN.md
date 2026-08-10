@@ -415,6 +415,30 @@ DESIGN §2 に起動点の選び方を記載）。手元で `pr` を回す種置
   汚染は軽微だった。重複側は 140k トークンの水増しで、こちらが実害の本体。
 - gauntlet 自身: 重複 0 トークン / 22 ファイル・約 100ms。全 6 ゲート緑（テスト 418）。
 
+### 0.15.0: 導入の出発点を `npx @teps/gauntlet init` 1 コマンドに（2026-08-10）
+
+h3 への手動導入で「先に何をどの PM で入れるか」を人間が考えていたのを潰した。
+**CLI ウィザード案（TTY で対話）は検討して捨て**、skill に寄せた（ユーザー判断 —
+「AI との対話？」→ いいえ、と答えたら「スキルでできる限り全部やるのがいい」）。
+CLI に LLM を入れる案は flaky そのもの（走るたびに違う提案）なので最初から却下。
+
+- **skill に「0. 依存を入れる」を追加** — PM 検出（`packageManager` フィールド →
+  lockfile）、coverage-v8 の版揃え規則、install 実行まで skill が面倒を見る。
+  README の導入も「init 1 コマンド → Claude Code で続きを」に一本化
+- **実行時メッセージを PM-aware に** — 「入っていません。次で入れてください」の
+  コマンドが npm 固定で、pnpm リポジトリで従うと lockfile が汚れた（h3 で気づいた）。
+  `package-manager.ts`（検出 + install コマンド組み立て、20 テスト）を足し、
+  Stryker / eslint の導入案内が正しい動詞（pnpm add -D 等）で出るようにした
+- 対象の選定実測: 公開リポジトリ候補 6 本の package.json を検分 — zustand ◯、
+  radash（jest）✗、es-toolkit（workspaces）✗、neverthrow / superjson（vitest 2.x /
+  0.34）✗、**h3 ◯（TS 7.0.2 + vitest 4.1.10 + 単一パッケージ）を採用**。
+  ~/dev/h3 にクローン済み、導入はユーザーが自走予定
+- **化石をまた踏んだ**: gauntlet 自身の clone に 0.13 の `.githooks` +
+  `core.hooksPath` 配線が残っていて（0.14 で PreToolUse に移行した際の
+  撤去漏れ）、version bump 後の npx キャッシュ権限問題（既知）で commit が
+  止まって発覚。skill の後始末どおり撤去。**「移行の後始末は移行した本人の
+  リポジトリから」** — duct #567 の教訓（ドキュメントの化石）の配線版
+
 ### 0.14.0: quick の起動点を PreToolUse に集約（2026-08-09）
 
 0.13 の git pre-commit を捨て、Claude Code の `PreToolUse` + `if` に移した。

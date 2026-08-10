@@ -1,6 +1,0 @@
-#!/bin/sh
-# gauntlet quick — コミットを検問所にする。
-#
-# 赤なら exit 2 でコミットが中断する。履歴に入った状態はすべて検査済み、が不変条件。
-# 有効にするには clone ごとに一度だけ:  git config core.hooksPath .githooks
-exec npx gauntlet quick

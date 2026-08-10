@@ -8,6 +8,7 @@
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { capture } from "../exec.ts";
+import { detectPackageManager, installDevCommand } from "../package-manager.ts";
 import { RunnerError } from "./runner.ts";
 
 /** eslint の指摘 1 件分。`ruleId` は設定や構文のエラー（fatal）では null。 */
@@ -32,7 +33,8 @@ function relativeKey(filePath: string, root: string): string {
 function eslintBin(root: string): string {
   const bin = join(root, "node_modules", ".bin", "eslint");
   if (existsSync(bin)) return bin;
-  throw new RunnerError("eslint が入っていません。次で入れてください:\n  npm i -D eslint");
+  const command = installDevCommand(detectPackageManager(root), ["eslint"]);
+  throw new RunnerError(`eslint が入っていません。次で入れてください:\n  ${command}`);
 }
 
 /**

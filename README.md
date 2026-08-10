@@ -71,46 +71,47 @@ jscpd は gauntlet が同梱するので、対象リポジトリに入れるも�
 
 ## 導入
 
-### 1. 入れる
+**出発点は 1 コマンドです。** インストール不要で動きます（npx が一時取得します）:
 
-0.9.0 から public npm（registry.npmjs.org）で `@teps/gauntlet` として配布しています。
-認証は要りません。
+```bash
+npx @teps/gauntlet init
+```
+
+これが skill（`.claude/skills/gauntlet-setup`）を含む 4 ファイルを置きます。この時点の
+測る範囲は既定値なので、たいてい「測る対象: 0 ファイル」と警告が出ます — それで正常です。
+
+あとは **Claude Code でこのリポジトリを開き、`/gauntlet-setup` を実行するだけ**です
+（「gauntlet のセットアップを続けて」と言っても起動します）。skill が
+ここから先の全部 — 依存の投入（パッケージマネージャの検出込み）、測る範囲の決定、
+外部サービスを要するテストの分離、CI への 1 行、ラチェットの種置き、ゲートが実際に
+噛むことの確認 — をユーザーと対話しながら進めます。
+
+推測で範囲を入れると、狭いまま緑になり、それが一番気づけない失敗になります。
+エージェントがリポジトリを読み、理由つきで範囲を提案し、合意してから確定する流れに
+してあるのはそのためです（`tsconfig.json` の `include` は当てになりません —
+生成物・設定ファイル・e2e が混ざります）。
+
+<details>
+<summary>Claude Code を使わず手で入れる場合</summary>
+
+```bash
+# パッケージマネージャはリポジトリに合わせる（pnpm なら pnpm add -D）
+V=$(node -p "require('vitest/package.json').version")
+npm i -D @teps/gauntlet "@vitest/coverage-v8@$V" @stryker-mutator/core @stryker-mutator/vitest-runner
+npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/**/*.test.ts'
+```
+
+**`@vitest/coverage-v8` はリポジトリの vitest とバージョンを揃えます**（既に入っていれば
+不要）。無指定だと最新が入り、古い vitest のリポジトリでは peer 依存の衝突で
+インストール自体が失敗します（duct で実測）。範囲の決め方・CI・種置きは
+`.claude/skills/gauntlet-setup/SKILL.md` に全手順があります。
 
 > 0.0.13 以前を GitHub Packages から入れていたリポジトリは、`.npmrc` の
 > `@tepshq:registry=https://npm.pkg.github.com` の行と、workflow の
 > `registry-url` / `scope` / `NODE_AUTH_TOKEN`（gauntlet のためだけのもの）を消してください。
 > 残っていると新しいバージョンが見えません。
 
-```bash
-V=$(node -p "require('vitest/package.json').version")
-npm i -D @teps/gauntlet "@vitest/coverage-v8@$V" @stryker-mutator/core @stryker-mutator/vitest-runner
-```
-
-**`@vitest/coverage-v8` はリポジトリの vitest とバージョンを揃えます**（上の 1 行目）。
-無指定だと最新（4.x）が入り、vitest 3.x のリポジトリでは peer 依存の衝突で
-`npm i` 自体が失敗します（duct で実測）。
-
-入れたら、そのまま一度叩きます:
-
-```bash
-npx gauntlet init
-```
-
-これが skill（`.claude/skills/gauntlet-setup`）を含む 4 ファイルを置きます。この時点の
-測る範囲は既定値なので、たいてい「測る対象: 0 ファイル」と警告が出ます — それで正常です。
-範囲は次の手順で決めます。
-
-### 2. 測る範囲を決める
-
-**Claude Code で `.claude/skills/gauntlet-setup` を使ってください**（手順 1 の `init` が
-置いたものです）。推測で入れると測る範囲が狭いまま緑になり、それが一番気づけない失敗になります。
-
-エージェントがリポジトリを読み、理由つきで範囲を提案し、合意してから `init` を叩く流れです。
-`tsconfig.json` の `include` は当てになりません（生成物・設定ファイル・e2e が混ざります）。
-
-```bash
-npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/**/*.test.ts'
-```
+</details>
 
 `init` が置くのは薄いファイルだけです。ロジックは全てパッケージ側にあるので、更新は npm の
 バージョンを上げるだけで済みます。何度叩いても結果は同じです。

@@ -24,7 +24,8 @@
     "src/exec.ts": 3,
     "src/main.ts": 0,
     "src/node-version.ts": 0,
-    "src/typescript/duplication.ts": 1
+    "src/typescript/duplication.ts": 1,
+    "src/package-manager.ts": 1
   },
   "lint": {
     "src/cli.ts": 0,
