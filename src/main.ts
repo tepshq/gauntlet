@@ -7,7 +7,7 @@
 
 import { readFileSync } from "node:fs";
 import { GUARD_MESSAGE, shouldBlock } from "./guard.ts";
-import { formatInit, init, parseInitOptions } from "./init.ts";
+import { INIT_USAGE, formatInit, helpRequested, init, parseInitOptions } from "./init.ts";
 import { describeCrash, run } from "./run.ts";
 import { EXIT_BLOCKED, EXIT_PASS, type TierName, exitCodeFor } from "./tier.ts";
 
@@ -19,6 +19,11 @@ function guard(_argv: readonly string[]): number {
 }
 
 function initCommand(argv: readonly string[]): number {
+  // ヘルプは実行の前に見る。`init --help` が範囲を既定値で上書きしていた（h3 で実害）。
+  if (helpRequested(argv)) {
+    process.stderr.write(INIT_USAGE);
+    return EXIT_PASS;
+  }
   // フラグ無し（parseInitOptions が null）は骨組みの整備だけ。既存の範囲に触らない。
   process.stderr.write(formatInit(init(process.cwd(), parseInitOptions(argv))));
   return EXIT_PASS;

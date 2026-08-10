@@ -3,8 +3,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parseConfig } from "./config.ts";
-import { INIT_DEFAULTS, formatInit, init, mergeGitignore, parseInitOptions } from "./init.ts";
+import { ConfigError, parseConfig } from "./config.ts";
+import { INIT_DEFAULTS, INIT_USAGE, formatInit, helpRequested, init, mergeGitignore, parseInitOptions } from "./init.ts";
 
 // 出力の体裁ごと固定する。部分一致で見ると、改行の数や区切りが崩れても気づかない。
 describe("mergeGitignore", () => {
@@ -366,11 +366,66 @@ describe("formatInit", () => {
   });
 });
 
+// h3 の導入で、エージェントが `init --help` を叩いたら実行され、決めた測る範囲が
+// 既定値（src/**）に戻された。ヘルプは実行の前に見る。
+describe("helpRequested", () => {
+  it.each([["--help"], ["-h"]])("%s はヘルプ", (flag) => {
+    expect(helpRequested(["init", flag])).toBe(true);
+  });
+
+  it("範囲の指定はヘルプではない", () => {
+    expect(helpRequested(["init", "--include=src/**/*.ts"])).toBe(false);
+  });
+
+  it("引数が無ければヘルプではない", () => {
+    expect(helpRequested([])).toBe(false);
+  });
+});
+
+describe("INIT_USAGE", () => {
+  // 何が指定できるか分からないと、打ち間違いを直せない。
+  it.each([["--default-branch"], ["--include"], ["--exclude"], ["--test-projects"]])(
+    "%s を挙げる",
+    (flag) => {
+      expect(INIT_USAGE).toContain(flag);
+    },
+  );
+
+  // フラグ無しで叩いても範囲が消えないことは、使う前に知っている必要がある。
+  it("フラグ無しの意味を言う", () => {
+    expect(INIT_USAGE).toContain("既存の測る範囲には触りません");
+  });
+});
+
 describe("parseInitOptions", () => {
   // null = 範囲の指定なし。init はこれを見て既存の config に触らないと決める
   //（既定値を返すと、叩き直すたびに測る範囲が src/** に戻る事故になる）。
   it.each([[[] as string[]], [["init"]]])("フラグが無ければ null: %j", (argv) => {
     expect(parseInitOptions(argv)).toBe(null);
+  });
+
+  // 打ち間違いを素通しすると、既定値で書いたのに「指定したつもり」の設定が残る。
+  it("知らないフラグは止める", () => {
+    expect(() => parseInitOptions(["init", "--includes=src/**/*.ts"])).toThrow(
+      /init が知らない指定です: --includes/,
+    );
+  });
+
+  // 文言を丸ごと固定する。未知フラグを 1 つしか渡さないと、区切り（join の空白）や
+  // 使い方との間の空行が消えても気づかない（mutation で実際に生き残った）。
+  it("知らないフラグを全部挙げ、使い方を添える", () => {
+    expect(() => parseInitOptions(["init", "--nope", "--typo=x"])).toThrow(
+      `init が知らない指定です: --nope --typo\n\n${INIT_USAGE}`,
+    );
+  });
+
+  it("落ちるときは ConfigError", () => {
+    expect(() => parseInitOptions(["init", "--typo"])).toThrow(ConfigError);
+  });
+
+  // 知っているフラグが混ざっていても、知らないものがあれば止める。
+  it("既知と混ざっていても止める", () => {
+    expect(() => parseInitOptions(["init", "--include=a/**", "--nope"])).toThrow(/--nope/);
   });
 
   it("フラグを読む", () => {

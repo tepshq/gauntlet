@@ -269,12 +269,51 @@ export function init(root: string, options: InitOptions | null = null): InitResu
   };
 }
 
+/** init が受け取るフラグ。ここに無いものは素通しさせない。 */
+const INIT_FLAGS = ["default-branch", "include", "exclude", "test-projects"] as const;
+
+export const INIT_USAGE = `gauntlet init [フラグ]
+
+  --default-branch=<branch>       差分の起点になるブランチ
+  --include=<glob,glob>           測る対象
+  --exclude=<glob,glob>           測る対象から外すもの
+  --test-projects=<name,name>     走らせる vitest project の宣言（省略 = 全部）
+
+フラグ無しなら骨組みの整備だけで、既存の測る範囲には触りません。
+測る範囲は /gauntlet-setup が決めてからフラグで渡します。
+`;
+
+/** `--name=value` / `--name` の name だけを取り出す。値の解析はしない。 */
+function flagNames(argv: readonly string[]): string[] {
+  return argv.filter((arg) => arg.startsWith("--")).map((arg) => arg.slice(2).split("=")[0] ?? "");
+}
+
+/**
+ * ヘルプを求められたか。**実行の前に見る。**
+ *
+ * `init --help` が実行に落ちていた（0.17.0 で「`--` があれば範囲指定」と
+ * 判定していたため、`--include=` が無いので既定値で上書きした）。h3 の導入で
+ * 実際に測る範囲が `src/**` に戻された。
+ */
+export function helpRequested(argv: readonly string[]): boolean {
+  return argv.includes("--help") || argv.includes("-h");
+}
+
 /**
  * フラグから範囲を読む。**フラグが 1 つも無ければ `null`** — 範囲の指定なし、
  * つまり「骨組みの整備だけ」の呼ばれ方で、`init` は既存の config に触らない。
+ *
+ * **知らないフラグは止める。** 打ち間違い（`--includes=`）を素通しすると、
+ * 既定値で書いたのに「指定したつもり」の設定が残る（走らなかったゲートを
+ * 緑にしないのと同じ原則。`main.ts` の usageError と揃えた）。
  */
 export function parseInitOptions(argv: readonly string[]): InitOptions | null {
-  if (!argv.some((arg) => arg.startsWith("--"))) return null;
+  const given = flagNames(argv);
+  const unknown = given.filter((name) => !(INIT_FLAGS as readonly string[]).includes(name));
+  if (unknown.length > 0) {
+    throw new ConfigError(`init が知らない指定です: ${unknown.map((name) => `--${name}`).join(" ")}\n\n${INIT_USAGE}`);
+  }
+  if (given.length === 0) return null;
   const value = (name: string): string | undefined =>
     argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
   const list = (name: string, fallback: string[]): string[] => {
