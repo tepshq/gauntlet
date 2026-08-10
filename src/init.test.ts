@@ -330,7 +330,7 @@ describe("init", () => {
   // 既に動いている job に足すのが基本。生成ファイルは重複を生む。
   it("skill は既存の job に 1 行足す形を先に示す", () => {
     const skill = skillSource();
-    expect(skill.indexOf("足せる job がある場合")).toBeLessThan(skill.indexOf("足せる job が無い場合"));
+    expect(skill.indexOf("既に動いている job に 1 行足す")).toBeLessThan(skill.indexOf("足せる job が無ければ作る"));
   });
 
 });

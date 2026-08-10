@@ -1,51 +1,68 @@
 ---
 name: gauntlet-setup
-description: gauntlet をこのリポジトリに導入する、または測る範囲・走らせるテストの宣言を直す。導入直後、gauntlet.config.json を作る・直すとき、quick が意図しない範囲を測っているときに使う。
+description: gauntlet をこのリポジトリに導入する、または測る範囲・走らせるテストの宣言を直す。
 ---
 
 # gauntlet の導入
 
-**測る範囲はユーザーと決める。** 推測して黙って書かない。範囲が狭いまま緑になるのが、
-このツールで一番気づけない失敗だから。
+**測る範囲はユーザーと決める。** 範囲が狭いまま緑になるのが、このツールで一番気づけない
+失敗だから、判断が割れる場所は必ず訊く。
 
-この skill 自体は `npx skills add tepshq/gauntlet -a claude-code` が置く（gauntlet の
-インストールは不要 — この skill が手順 0 でやる）。そこから先 — 依存の投入・範囲の
-決定・CI・ラチェットの種 — は全部ここの手順で行う。
+この skill は `npx skills add tepshq/gauntlet -a claude-code` が置く。gauntlet 本体の
+インストールから種置きまで、全部ここの手順で行う。
 
-## 0. 依存を入れる
+## 0. 何をするか説明して、進めてよいか訊く
 
-gauntlet が devDependencies に無ければ、まず入れる。**コマンドは決め打ちしない** —
-リポジトリのパッケージマネージャに合わせる（間違えると lockfile が汚れる）:
+**リポジトリに触る前に、これを言う。** 相手は gauntlet を知らない前提で、専門語を使わずに:
 
-1. **PM の特定**: `package.json` の `packageManager` フィールドが正。無ければ lockfile
-   （`pnpm-lock.yaml` / `yarn.lock` / `bun.lock` / `package-lock.json`）から。
-2. **node_modules が無ければ先にリポジトリ自体を install する**（後の「実行で確定させる」
-   手順にテスト実行が要る）。
-3. **入れるもの**:
-   - `@teps/gauntlet` — フックが `npx gauntlet` で呼ぶ本体
-   - `@stryker-mutator/core` `@stryker-mutator/vitest-runner` — `full` の mutation 用
+> gauntlet は、エージェントが書いたコードを人間が読まずに済ませるための品質ゲートです。
+> 入れると **`git commit` のたびに検査が走り、通らなければコミットできなくなります**。
+> 検査するのは 3 つ — テストが通るか、型が合うか、**複雑なのにテストが薄い関数が無いか**。
+>
+> 検査の対象にする範囲はこれから一緒に決めます。**対象に入れた場所は、触ったときに
+> テストを書く圧力がかかります。外した場所は今までどおりです。**
+>
+> 入れるものは devDependencies が 3 つと、設定ファイルが 3 つ（`gauntlet.config.json` /
+> `.claude/settings.json` / `.gitignore` への追記）。CI に 1 行足すのも後で相談します。
 
-例（pnpm のリポジトリ）:
+**完了条件** — ユーザーが「コミットが止まること」と「対象に入れると何が起きるか」を
+理解した上で、進めてよいと言っていること。
+
+## 1. 依存を入れる
+
+リポジトリのパッケージマネージャに合わせる（`packageManager` フィールドが正。無ければ
+`pnpm-lock.yaml` / `yarn.lock` / `bun.lock` / `package-lock.json` から判定する）。
+`node_modules` が無ければ、先にリポジトリ自体を install する — 後の手順でテストを走らせる。
 
 ```
-pnpm add -D @teps/gauntlet @stryker-mutator/core @stryker-mutator/vitest-runner
+pnpm add -D @teps/gauntlet@latest @stryker-mutator/core @stryker-mutator/vitest-runner
 ```
 
-**coverage provider（`@vitest/coverage-v8`）は手で足さない。** 版を間違えると
-install ごと失敗する（vitest の**完全一致**を peer に要求する）。足りなければ
-`gauntlet quick` が**版を埋めた 1 行**を出すので、それをそのまま打つ。
+- `@teps/gauntlet` — フックが `npx gauntlet` で呼ぶ本体
+- `@stryker-mutator/*` — `full` の mutation 用
 
-vitest が無いリポジトリは対象外（gauntlet の要件）。無理に足さず、ユーザーに伝えて止まる。
+**入った版を確かめる。** pnpm はメタデータのキャッシュが古いと**何ヶ月も前の版**を入れる
+（実測: latest が 0.18.0 のとき `pnpm add` も `@latest` も 0.13.0 を返した。npm は 0.18.0）。
+古い gauntlet は挙動が違う（skill を上書きする、`.githooks/` を作る）ので、
+`npm view @teps/gauntlet version` と突き合わせ、ずれていたら版を明示して入れ直す。
 
-## 1. リポジトリを読む
+**coverage provider（`@vitest/coverage-v8`）は gauntlet に任せる。** vitest の**完全一致**の版を
+peer に要求するので、版を選び損ねると install ごと失敗する。足りなければ `gauntlet quick` が
+版を埋めた 1 行を出すので、それをそのまま打つ。
 
-- `tsconfig.json` の `include` — ただし鵜呑みにしない。生成物（`.next/types`）、
+vitest が無いリポジトリは対象外（gauntlet の要件）。その場合はユーザーに伝えて止まる。
+
+**完了条件** — `npx gauntlet --help` が動き、入った版が npm の latest と一致していること。
+
+## 2. リポジトリを読む
+
+- `tsconfig.json` の `include` は手がかりであって答えではない。生成物（`.next/types`）、
   設定ファイル（`next.config.ts`, `vitest.config.ts`）、e2e が混ざっていることが多い
 - TypeScript が置かれている最上位ディレクトリを実際に列挙する
-- **ルート直下の `.ts` も 1 つずつ分類する。** 設定ファイルに紛れて製品コードが
-  置かれていることがある（duct ではルートの `proxy.ts` が Auth0 の認証ゲート本体で、
-  最初の導入はこれを測り漏らした）。**取りこぼしを見つけるのはここだけの仕事** —
-  `init` は範囲について何も言わない
+- **ルート直下の `.ts` も 1 つずつ分類する。** 設定ファイルに紛れて製品コードが置かれて
+  いることがある（duct ではルートの `proxy.ts` が Auth0 の認証ゲート本体で、最初の導入は
+  これを測り漏らした）。**取りこぼしを見つけるのはここだけの仕事** — `init` は範囲について
+  何も言わない
 - テストファイルの命名規則（`*.test.ts` / `*.spec.ts` / `__tests__/`）
 - 既定ブランチ（`git symbolic-ref --short HEAD` や `origin/HEAD`）
 
@@ -53,11 +70,10 @@ vitest が無いリポジトリは対象外（gauntlet の要件）。無理に�
 
 `package.json` の `typecheck` / `type-check` スクリプトを読む。**tsconfig が複数ある場合は要注意** —
 `tsc -p tsconfig.src.json --noEmit && tsc --noEmit` のように 2 パスのことがある（teps が実例）。
-gauntlet の既定は `tsc --noEmit --incremental` だけなので、そのままだと**半分しか見ない**。
+gauntlet の既定は `tsc --noEmit --incremental` なので、そのままだと**半分しか見ない**。
 
-`commands.typecheck` で上書きする場合も `--incremental` を付けたままにする —
-2 回目以降の `quick` が数秒速くなる（duct 実測 8.5s → 1.9s）。キャッシュ
-（`*.tsbuildinfo`、`init` が .gitignore に足す）は速さだけを変え、診断は変えない。
+上書きする場合も `--incremental` は残す — 2 回目以降の `quick` が数秒速くなる
+（duct 実測 8.5s → 1.9s）。キャッシュ（`*.tsbuildinfo`）は速さだけを変え、診断は変えない。
 
 ### 外部サービスを要するテストはどれか
 
@@ -67,108 +83,75 @@ DB・ネットワーク・実ファイルシステムに触れるテストを探
 - `beforeAll` での接続や `listen(`
 - 「ローカル DB に接続できません」のようなガード
 
-**確定させるのは grep ではなく実行。** 候補が出そろったら、`.env` / `.env.local` を
-一時的に別の場所へ退避して unit テストを走らせる。落ちるものだけが本物。
-環境変数を unset するだけでは足りない — テストファイルが自前で dotenv を読む設計は
-普通にある（duct で実測。grep は 16 候補中 15 が偽陽性で、本物 1 件を取りこぼしていた。
-取りこぼしは後の「DB 無しで `quick` が通ること」の確認で捕まえた）。
+**確定させるのは grep ではなく実行。** 候補が出そろったら、`.env` / `.env.local` を一時的に
+別の場所へ退避して unit テストを走らせる。落ちるものだけが本物。環境変数を unset するだけ
+では足りない — テストファイルが自前で dotenv を読む設計は普通にある（duct で実測。grep は
+16 候補中 15 が偽陽性で、本物 1 件を取りこぼしていた）。
 
-**外部サービスを要するテストは、gauntlet の世界の外に置く。** gauntlet は
-`gauntlet.config.json` の `tests.projects` に**宣言された vitest project だけ**を走らせる
-（実行・coverage・mutation 全部。宣言が無ければ全部走らせる）。外部サービスを要する
-テストを宣言外の project に分ければ、gauntlet からは存在しなくなる。
-手元に DB が無いだけで赤になるのは環境で答えが変わるゲートであり、そういうテストの
-coverage は「通りすがりに実行しただけ」の行をテスト済みに見せる。
-それらを回す場所は各リポジトリの既存 CI。project の名前や分け方はリポジトリの自由。
+見つかったテストは**専用の vitest project に分けて、gauntlet の宣言から外す**。gauntlet は
+`tests.projects` に**宣言された project だけ**を走らせる（実行・coverage・mutation 全部。
+宣言が無ければ全部走る）。手元に DB が無いだけで赤くなるゲートは環境で答えが変わるし、
+そういうテストの coverage は「通りすがりに実行しただけ」の行をテスト済みに見せる。
+それらを回す場所は各リポジトリの既存 CI。
 
 ### CI はどうなっているか
 
-`.github/workflows/` を全部見る。`full` をどこで回すかを 3 で決めるための材料を集める。
-
-**a. 古い認証設定が残っていないか。** gauntlet は 0.9.0 から `@teps/gauntlet` として public npm
-（registry.npmjs.org）にあり、**認証は要らない**。GitHub Packages 時代の名残があると
-逆に壊れるので、見つけたら外す:
-
-- `.npmrc` の `@tepshq:registry=https://npm.pkg.github.com` の行
-- workflow の `registry-url` / `scope` / `NODE_AUTH_TOKEN`（gauntlet のためだけに
-  入っていた場合。他の private パッケージが使っているなら残す）
-
-**b. `full` を足せる job があるか。** 次を全て満たす job を探す。lint / 型チェック /
-テストを回している job が普通は該当する。
+`.github/workflows/` を全部見て、**`full` を足せる job** を探す。lint / 型チェック / テストを
+回している job が普通は該当する。条件は 2 つ:
 
 - `actions/checkout` に `fetch-depth: 0`（merge-base を取るのに全履歴が要る）
 - Node が **22 以上**（gauntlet が `node:fs` の `globSync` を使う）
 
-gauntlet は宣言されたテストしか走らせないので、**`full` の job にサービスコンテナや
-DB の初期化は要らない**。宣言外のテストは既存 CI の job がそのまま担う。
+gauntlet は宣言されたテストしか走らせないので、**`full` の job にサービスコンテナや DB の
+初期化は要らない**。宣言外のテストは既存 CI の job がそのまま担う。
 
 **完了条件** — TypeScript を含む最上位ディレクトリを 1 つ残らず挙げ、それぞれについて
-「製品コードか、テストか、生成物か、設定か」を言えること。型チェックのコマンド、
-外部サービスを要するテストの一覧、そして `full` を足せる job があるかどうかを言えること。
+「製品コードか、テストか、生成物か、設定か」を言えること。型チェックのコマンド、外部
+サービスを要するテストの一覧、そして `full` を足せる job があるかどうかを言えること。
 
-## 2. 提案してユーザーに確認する
+## 3. 測る範囲を提案して合意する
 
-測る対象と、外すものを**理由つきで**示す。例:
+**それぞれについて、入れる理由か外す理由を言う。** ここでも専門語は使わない:
 
-> `src` と `bin` を測ります。`e2e` は Playwright の受け入れテストなので外します。
-> `scripts` は 3 ファイルありますが、リリース作業用で本体ではないので外します。
-> 型チェックは 2 パスなので `commands.typecheck` で上書きします。
-> `lib/import/session.test.ts` は DB が要るので、宣言から外す project への分離をお願いします。
+> `src`（63 ファイル）を検査の対象にします。ここが本体なので、触ったときにテストを
+> 書く圧力がかかるのが狙いです。
+>
+> 外すのは 3 つ。`test` はテストそのもの、`playground` は動作確認用の遊び場、
+> `bench` は速度計測です。どれも製品コードではないので、テストを要求しても意味が
+> ありません。
+>
+> ひとつ相談です。`lib/import/session.test.ts` は DB が無いと落ちるので、このままだと
+> DB を持っていない人の手元で毎回赤くなります。テストの設定を分けて、gauntlet からは
+> 見えないようにしていいですか。
 
-**判断が割れる場所は必ず訊く。** 迷わず決められる場所だけ黙って含める。
+**完了条件** — 対象と除外のそれぞれについてユーザーが可否を答え、**外した場所は
+検査されないと理解した上で**同意していること。
 
-**完了条件** — ユーザーが範囲・型チェック・走らせる project の宣言に同意していること。
-
-## 3. 入れる
+## 4. 入れる
 
 ```
 npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glob,glob> --test-projects=<name,name>
 ```
 
-**範囲を書き換えるのはフラグを渡したときだけ。** フラグ無しの `init` は骨組み
-（フック・skill・.gitignore）の整備だけで、既存の `gauntlet.config.json` には触らない
-（出力が「変更なし」と言う）。だから gauntlet を上げたあと叩き直しても範囲は消えない。
-`--test-projects` は project を使っていないリポジトリでは省略する（全部走る）。
-
-**測った件数はここでは確かめない。** 検算は 4 の完了条件（`npx gauntlet quick` の
-`測る対象 N` が 1 で数えた想定と合うか）で行う。基準を 2 か所に置かない。
+**範囲を書き換えるのはフラグを渡したときだけ。** フラグ無しの `init` は骨組み（フック・
+.gitignore）の整備だけで、既存の `gauntlet.config.json` はそのまま（出力が「変更なし」と言う）。
+だから gauntlet を上げたあと叩き直しても範囲は消えない。`--test-projects` は project を
+使っていないリポジトリでは省く（全部走る）。
 
 型チェックの上書きが要る場合は `gauntlet.config.json` の `commands.typecheck` に書く
-（`init` にフラグは無い。config はスキーマ検証されるので、間違えれば起動時に落ちる）。
-範囲を直すために `init` をフラグ付きで叩き直しても `commands` は残る
-（出力が「更新（commands は残しました）」と言う）。
+（`init` にフラグは無い）。範囲を直すために `init` を叩き直しても `commands` は残る。
+
+測った件数の検算は 5 の完了条件で行う。基準を 2 か所に置かない。
 
 ### 起動点は自動で配線される
 
-`quick` は Claude Code の `PreToolUse` フック（`npx gauntlet guard`）が、
-**エージェントがコミットしようとした瞬間**に呼ぶ。`init` が
-`.claude/settings.json` に書くので、**配線の手作業は無い** — このファイルは
-コミットで伝播し、clone した全員に効く。
+`quick` は Claude Code の `PreToolUse` フックが、**エージェントがコミットしようとした瞬間**に
+呼ぶ。`init` が `.claude/settings.json` に書き、このファイルはコミットで伝播するので、
+**配線の手作業は無い**（clone した全員に効く）。
 
-**わざと違反（未テストで CC 3 以上の関数）を作ってコミットさせ、拒否されることまで確認する。**
+### 外部サービスを要するテストを分ける
 
-古いバージョンから入れているリポジトリには後始末が要る:
-
-```
-git config --unset core.hooksPath   # 0.13 の pre-commit 配線
-rm -rf .githooks                    # 0.13 が置いたフック
-rm -rf .claude/skills/gauntlet      # 0.9.x の旧名 skill
-```
-
-`.claude/settings.json` に `Stop` フック（0.12 以前）が残っていたら、それも消す。
-
-**0.16 以前から入れているリポジトリの skill は古いまま**になる（0.17.0 で `init` は
-skill を書かなくなった）。`npx skills add tepshq/gauntlet -a claude-code` を一度叩けば
-正本に置き換わり、以降は `npx skills update` で追随できる。
-
-### 外部サービスを要するテストがあった場合
-
-`init` は**これを自動ではやらない**。1 で見つけていたら、ここで整理する。
-
-**外部サービスを要するテストを専用の vitest project に分け、それを宣言から外す。**
-project の名前も分け方もリポジトリの自由（そういうテストはどのみち専用の
-`environment` / `setupFiles` / env 変数が要ることが多く、本来引くべき境界と一致する）。
-分け方の例:
+2 で見つけていたら、ここで vitest の設定を分ける:
 
 ```ts
 projects: [
@@ -182,30 +165,21 @@ projects: [
 この例なら宣言は `--test-projects=unit`。**宣言できるのはインラインの project だけ**
 （別ファイルへの glob 参照は名前が読めないため、mutation で残せない）。
 
-`**/.claude/**` の除外は全 project に入れる。Claude Code の worktree が
-`.claude/worktrees/` にリポジトリ丸ごとのコピーを作ることがあり、
-その中のテストまで拾うと件数が倍増する（duct で 600 ファイル拾った実例）。
+`**/.claude/**` の除外は全 project に入れる。Claude Code の worktree が `.claude/worktrees/` に
+リポジトリ丸ごとのコピーを作ることがあり、その中のテストまで拾うと件数が倍増する
+（duct で 600 ファイル拾った実例）。
 
-## 4. CI で `full` を回す
+## 5. CI で `full` を回す
 
-**`init` は workflow を作らない。** CI が要るものは gauntlet からは見えない
-（サービスコンテナ、マイグレーション、Node のバージョン、認証）。既に動いている job には
-それが全部揃っているので、そこに 1 行足すのが一番確実で、重複も生まない。
-
-### 足せる job がある場合（1 の b で見つけたもの）
-
-その job の最後に足す。それだけ。
+**既に動いている job に 1 行足す**のが基本形。サービス・Node・認証・`fetch-depth: 0` が
+その job には全部揃っているので、一番確実で重複も生まない。
 
 ```yaml
       - run: npx gauntlet full
 ```
 
-### 足せる job が無い場合
-
-作る。以後これは**リポジトリのファイル**で、gauntlet は二度と触らない。
-gauntlet は宣言されたテストしか走らせないので、`services:` も DB の初期化も要らない。
-ただし `postinstall` が環境変数を形式上要求する場合（Prisma の `generate` 等）は
-ダミー値を `env:` に置く。
+足せる job が無ければ作る。以後これは**リポジトリのファイル**で、gauntlet は二度と触らない。
+`postinstall` が環境変数を形式上要求する場合（Prisma の `generate` 等）はダミー値を `env:` に置く。
 
 ```yaml
 name: gauntlet
@@ -227,34 +201,51 @@ jobs:
       - run: npx gauntlet full
 ```
 
-**job の Node が 22 未満なら、そこには足せない。** 上の別 job を作るか、
-リポジトリの持ち主に CI の Node を上げてもらうか。どちらにするかは訊く
+**job の Node が 22 未満なら、別 job を作るか、CI の Node を上げてもらうかを訊く**
 （アプリが載る Node を変える話なので、gauntlet の都合で決めてよいことではない）。
 
-**完了条件** — `npx gauntlet quick` が通り、測った件数が想定と一致していること。
-**pre-commit が配線され、わざと作った違反でコミットが拒否されること。**
-外部サービスが無い状態でも `quick` と `full` が通ること（宣言が効いている証拠）。
-`full` を回す job が 1 つあり、それが上の 2 条件（全履歴・Node 22 以上）を満たすこと。
+**完了条件** — `npx gauntlet quick` が通り、`測る対象 N` が 2 で数えた想定と一致すること。
+**わざと違反（未テストで CC 3 以上の関数）を作ってコミットさせ、拒否され、HEAD が
+動かないことまで確認する。** 外部サービスが無い状態でも `quick` と `full` が通ること
+（宣言が効いている証拠）。`full` を回す job が 1 つあり、上の 2 条件を満たすこと。
 
-## 5. ラチェットの種を置く
+## 6. ラチェットの種を置く
 
 `full` を**手元で一度回して**、できた `gauntlet.baseline.json` をコミットする。
 
 ```
 npx gauntlet full
 ```
-初回は「`gauntlet.baseline.json` を作りました。…コミットしてください」で**落ちる**。
-これが正常。ファイルはできているので、コミットしてもう一度回せば通る。
-コミットは `git add -A` で行う — ファイル名を含む Bash コマンドは guard が止めるので、
-名指しの `git add gauntlet.baseline.json` は使えない。
 
-**CI に任せてはいけない。** CI が置いた種はコンテナの中に書かれて捨てられる。
-毎 PR がその PR の状態を許容値として置き直すことになり、ラチェットが一度も噛まない。
+初回は「`gauntlet.baseline.json` を作りました。…コミットしてください」で**落ちる**。
+これが正常。ファイルはできているので、コミットしてもう一度回せば通る。コミットは
+`git add -A` で行う — ファイル名を含む Bash コマンドは guard が止める。
+
+**種を置くのは手元の仕事。** CI が置いた種はコンテナの中に書かれて捨てられ、毎 PR が
+その PR の状態を許容値として置き直すので、ラチェットが一度も噛まない。
 
 **完了条件** — `gauntlet.baseline.json` が履歴にあり、`npx gauntlet full` が通ること。
 
 ## 触らないもの
 
 `gauntlet.baseline.json` は許容する違反数の記録で、減らすのは gauntlet が自動で行う。
-編集と、ファイル名に触れる Bash コマンドは `PreToolUse` フックで止まる
-（読むには Read ツール、コミットには `git add -A` を使う）。赤を消すには違反そのものを直す。
+編集と、ファイル名に触れる Bash コマンドは `PreToolUse` フックで止まる（読むには Read
+ツール、コミットには `git add -A`）。赤を消すには違反そのものを直す。
+
+## 古いバージョンから上げる場合
+
+新規導入では読まなくてよい。0.16 以前が入っているリポジトリにだけ後始末が要る。
+
+```
+git config --unset core.hooksPath   # 0.13 の pre-commit 配線
+rm -rf .githooks                    # 0.13 が置いたフック
+rm -rf .claude/skills/gauntlet      # 0.9.x の旧名 skill
+```
+
+- `.claude/settings.json` に `Stop` フック（0.12 以前）が残っていたら消す
+- **skill が古いまま残る**（0.17.0 で `init` は skill を書かなくなった）。
+  `npx skills add tepshq/gauntlet -a claude-code` で正本に置き換わり、以降は
+  `npx skills update` で追随できる
+- `.npmrc` に `@tepshq:registry=https://npm.pkg.github.com` があれば消す。gauntlet は
+  0.9.0 から public npm にあり認証は要らない（残っていると新しい版が見えない）。
+  workflow の `registry-url` / `NODE_AUTH_TOKEN` も、gauntlet のためだけなら外す
