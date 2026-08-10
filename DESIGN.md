@@ -296,8 +296,18 @@ CRAP と違って単一の数にできないのは、mutation が差分に関係
   gauntlet に依存した瞬間、無関係な workflow まで巻き添えで壊れる形が特に悪い。
   パッケージに秘匿すべきものは無い（計測結果・baseline・config は各リポジトリ側にある）ので、
   公開して認証を丸ごと消す。
-- `npx @teps/gauntlet init` が**薄いファイルだけ**置く:
-  `.claude/settings.json` のフックエントリ / `gauntlet.config.json` / setup skill 1 枚 / `.gitignore` の追記。
+- **道具は npm、使い方は skills。** 配布経路を 2 つに分ける（0.17.0）。
+  - `npx skills add tepshq/gauntlet -a claude-code` が skill 1 枚を置く（`-a` が無いと
+    `.agents/` + symlink という別の構造が入るので、Claude Code 指定で実体コピーにする）。
+    ロックファイルが内容ハッシュを記録するので `skills update` で追随できる
+  - skill が依存を入れ、範囲を決め、`gauntlet init --include=...` を叩く
+  - **skill の正本はリポジトリ直下の `skills/gauntlet-setup/SKILL.md`。** 0.16 までは
+    `init` が生成しており、その成果物を skills CLI が拾う循環になっていた
+  - 版の一致は**運用規律**（main にマージしたら publish）で担保する。skills には
+    npm のような版指定が無く、ロックは内容ハッシュのみ。機構で縛る保険は
+    食い違い事故が実際に起きてから作る
+- `gauntlet init` が**薄いファイルだけ**置く:
+  `.claude/settings.json` のフックエントリ / `gauntlet.config.json` / `.gitignore` の追記。
   ロジックはすべて npm パッケージ側にあり、生成物にロジックを持たせない。
   **書くのは init、決めるのは skill。** エージェントに設定を手書きさせない —
   フックの `if` 文字列が 1 字違えば発火しないのに設定は存在する、という

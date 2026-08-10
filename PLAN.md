@@ -439,6 +439,33 @@ CLI に LLM を入れる案は flaky そのもの（走るたびに違う提案�
   止まって発覚。skill の後始末どおり撤去。**「移行の後始末は移行した本人の
   リポジトリから」** — duct #567 の教訓（ドキュメントの化石）の配線版
 
+### 0.17.0: 道具は npm、使い方は skills（2026-08-10）
+
+ユーザーの「gauntlet はただインストールし、使うためのスキルを別途配布するのはどう？
+npx skills add で入れられるように」から。**リポジトリを public にしてもらって**成立した
+（private の間は GitHub 認証が要り、public npm 化で消したはずの認証問題が戻る）。
+
+実地で確認したこと:
+
+- `npx skills add tepshq/gauntlet` は **public 化した瞬間から動いた** — gauntlet 自身が
+  dogfooding で置いていた `.claude/skills/gauntlet-setup/SKILL.md` を自動で見つけた
+  （= init の成果物を配布する循環になっていた。正本を `skills/` に移して解消）
+- 既定では `.agents/skills/` に実体 + `.claude/skills/` から symlink + `skills-lock.json`
+  という 3 種の成果物が入る。**`-a claude-code` を付けると** `.claude/skills/` への
+  実体コピー + lockfile だけになる（ユーザーの指摘。これで侵襲性がほぼ従来と同じ）
+- lockfile は `computedHash`（内容ハッシュ）を記録。コミット SHA や版ではないので、
+  「パッケージ 0.17.0 に対応する skill」という紐付けはできない → 版の一致は運用規律
+
+変更:
+
+- skill の正本を `skills/gauntlet-setup/SKILL.md`（254 行）に移した。それまで
+  `init.ts` の中の 254 行のテンプレートリテラルで、diff が読めなかった。
+  抽出は dist と突き合わせて**完全一致を確認**してから
+- `init` は skill を書かない → 置くのは 3 ファイル（config / settings.json / .gitignore）
+- **旧 skill の掃除（`removeLegacySkill`）も init から外した** — 自分が所有しない
+  ファイルを消すのは境界違反。移行の後始末は skill の案内に移した
+- skill の中身を検査するテストは、init の成果物ではなく正本のファイルを読む
+
 ### 0.16.1: coverage provider の版を gauntlet が計算して言う（2026-08-10）
 
 ユーザーの「これがもっともエレガントな解ですか？ インストールがこんなに難しい

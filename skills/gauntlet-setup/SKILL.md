@@ -1,0 +1,260 @@
+---
+name: gauntlet-setup
+description: gauntlet をこのリポジトリに導入する、または測る範囲・走らせるテストの宣言を直す。導入直後、gauntlet.config.json を作る・直すとき、quick が意図しない範囲を測っているときに使う。
+---
+
+# gauntlet の導入
+
+**測る範囲はユーザーと決める。** 推測して黙って書かない。範囲が狭いまま緑になるのが、
+このツールで一番気づけない失敗だから。
+
+この skill 自体は `npx skills add tepshq/gauntlet -a claude-code` が置く（gauntlet の
+インストールは不要 — この skill が手順 0 でやる）。そこから先 — 依存の投入・範囲の
+決定・CI・ラチェットの種 — は全部ここの手順で行う。
+
+## 0. 依存を入れる
+
+gauntlet が devDependencies に無ければ、まず入れる。**コマンドは決め打ちしない** —
+リポジトリのパッケージマネージャに合わせる（間違えると lockfile が汚れる）:
+
+1. **PM の特定**: `package.json` の `packageManager` フィールドが正。無ければ lockfile
+   （`pnpm-lock.yaml` / `yarn.lock` / `bun.lock` / `package-lock.json`）から。
+2. **node_modules が無ければ先にリポジトリ自体を install する**（後の「実行で確定させる」
+   手順にテスト実行が要る）。
+3. **入れるもの**:
+   - `@teps/gauntlet` — フックが `npx gauntlet` で呼ぶ本体
+   - `@stryker-mutator/core` `@stryker-mutator/vitest-runner` — `full` の mutation 用
+
+例（pnpm のリポジトリ）:
+
+```
+pnpm add -D @teps/gauntlet @stryker-mutator/core @stryker-mutator/vitest-runner
+```
+
+**coverage provider（`@vitest/coverage-v8`）は手で足さない。** 版を間違えると
+install ごと失敗する（vitest の**完全一致**を peer に要求する）。足りなければ
+`gauntlet quick` が**版を埋めた 1 行**を出すので、それをそのまま打つ。
+
+vitest が無いリポジトリは対象外（gauntlet の要件）。無理に足さず、ユーザーに伝えて止まる。
+
+## 1. リポジトリを読む
+
+- `tsconfig.json` の `include` — ただし鵜呑みにしない。生成物（`.next/types`）、
+  設定ファイル（`next.config.ts`, `vitest.config.ts`）、e2e が混ざっていることが多い
+- TypeScript が置かれている最上位ディレクトリを実際に列挙する
+- **ルート直下の `.ts` も 1 つずつ分類する。** 設定ファイルに紛れて製品コードが
+  置かれていることがある（duct ではルートの `proxy.ts` が Auth0 の認証ゲート本体で、
+  最初の導入はこれを測り漏らした）。**取りこぼしを見つけるのはここだけの仕事** —
+  `init` は範囲について何も言わない
+- テストファイルの命名規則（`*.test.ts` / `*.spec.ts` / `__tests__/`）
+- 既定ブランチ（`git symbolic-ref --short HEAD` や `origin/HEAD`）
+
+### どう型チェックしているか
+
+`package.json` の `typecheck` / `type-check` スクリプトを読む。**tsconfig が複数ある場合は要注意** —
+`tsc -p tsconfig.src.json --noEmit && tsc --noEmit` のように 2 パスのことがある（teps が実例）。
+gauntlet の既定は `tsc --noEmit --incremental` だけなので、そのままだと**半分しか見ない**。
+
+`commands.typecheck` で上書きする場合も `--incremental` を付けたままにする —
+2 回目以降の `quick` が数秒速くなる（duct 実測 8.5s → 1.9s）。キャッシュ
+（`*.tsbuildinfo`、`init` が .gitignore に足す）は速さだけを変え、診断は変えない。
+
+### 外部サービスを要するテストはどれか
+
+DB・ネットワーク・実ファイルシステムに触れるテストを探す。手がかり:
+
+- `PrismaClient` / `new Pool(` / `$queryRaw` / `createClient(` の import
+- `beforeAll` での接続や `listen(`
+- 「ローカル DB に接続できません」のようなガード
+
+**確定させるのは grep ではなく実行。** 候補が出そろったら、`.env` / `.env.local` を
+一時的に別の場所へ退避して unit テストを走らせる。落ちるものだけが本物。
+環境変数を unset するだけでは足りない — テストファイルが自前で dotenv を読む設計は
+普通にある（duct で実測。grep は 16 候補中 15 が偽陽性で、本物 1 件を取りこぼしていた。
+取りこぼしは後の「DB 無しで `quick` が通ること」の確認で捕まえた）。
+
+**外部サービスを要するテストは、gauntlet の世界の外に置く。** gauntlet は
+`gauntlet.config.json` の `tests.projects` に**宣言された vitest project だけ**を走らせる
+（実行・coverage・mutation 全部。宣言が無ければ全部走らせる）。外部サービスを要する
+テストを宣言外の project に分ければ、gauntlet からは存在しなくなる。
+手元に DB が無いだけで赤になるのは環境で答えが変わるゲートであり、そういうテストの
+coverage は「通りすがりに実行しただけ」の行をテスト済みに見せる。
+それらを回す場所は各リポジトリの既存 CI。project の名前や分け方はリポジトリの自由。
+
+### CI はどうなっているか
+
+`.github/workflows/` を全部見る。`full` をどこで回すかを 3 で決めるための材料を集める。
+
+**a. 古い認証設定が残っていないか。** gauntlet は 0.9.0 から `@teps/gauntlet` として public npm
+（registry.npmjs.org）にあり、**認証は要らない**。GitHub Packages 時代の名残があると
+逆に壊れるので、見つけたら外す:
+
+- `.npmrc` の `@tepshq:registry=https://npm.pkg.github.com` の行
+- workflow の `registry-url` / `scope` / `NODE_AUTH_TOKEN`（gauntlet のためだけに
+  入っていた場合。他の private パッケージが使っているなら残す）
+
+**b. `full` を足せる job があるか。** 次を全て満たす job を探す。lint / 型チェック /
+テストを回している job が普通は該当する。
+
+- `actions/checkout` に `fetch-depth: 0`（merge-base を取るのに全履歴が要る）
+- Node が **22 以上**（gauntlet が `node:fs` の `globSync` を使う）
+
+gauntlet は宣言されたテストしか走らせないので、**`full` の job にサービスコンテナや
+DB の初期化は要らない**。宣言外のテストは既存 CI の job がそのまま担う。
+
+**完了条件** — TypeScript を含む最上位ディレクトリを 1 つ残らず挙げ、それぞれについて
+「製品コードか、テストか、生成物か、設定か」を言えること。型チェックのコマンド、
+外部サービスを要するテストの一覧、そして `full` を足せる job があるかどうかを言えること。
+
+## 2. 提案してユーザーに確認する
+
+測る対象と、外すものを**理由つきで**示す。例:
+
+> `src` と `bin` を測ります。`e2e` は Playwright の受け入れテストなので外します。
+> `scripts` は 3 ファイルありますが、リリース作業用で本体ではないので外します。
+> 型チェックは 2 パスなので `commands.typecheck` で上書きします。
+> `lib/import/session.test.ts` は DB が要るので、宣言から外す project への分離をお願いします。
+
+**判断が割れる場所は必ず訊く。** 迷わず決められる場所だけ黙って含める。
+
+**完了条件** — ユーザーが範囲・型チェック・走らせる project の宣言に同意していること。
+
+## 3. 入れる
+
+```
+npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glob,glob> --test-projects=<name,name>
+```
+
+**範囲を書き換えるのはフラグを渡したときだけ。** フラグ無しの `init` は骨組み
+（フック・skill・.gitignore）の整備だけで、既存の `gauntlet.config.json` には触らない
+（出力が「変更なし」と言う）。だから gauntlet を上げたあと叩き直しても範囲は消えない。
+`--test-projects` は project を使っていないリポジトリでは省略する（全部走る）。
+
+**測った件数はここでは確かめない。** 検算は 4 の完了条件（`npx gauntlet quick` の
+`測る対象 N` が 1 で数えた想定と合うか）で行う。基準を 2 か所に置かない。
+
+型チェックの上書きが要る場合は `gauntlet.config.json` の `commands.typecheck` に書く
+（`init` にフラグは無い。config はスキーマ検証されるので、間違えれば起動時に落ちる）。
+範囲を直すために `init` をフラグ付きで叩き直しても `commands` は残る
+（出力が「更新（commands は残しました）」と言う）。
+
+### 起動点は自動で配線される
+
+`quick` は Claude Code の `PreToolUse` フック（`npx gauntlet guard`）が、
+**エージェントがコミットしようとした瞬間**に呼ぶ。`init` が
+`.claude/settings.json` に書くので、**配線の手作業は無い** — このファイルは
+コミットで伝播し、clone した全員に効く。
+
+**わざと違反（未テストで CC 3 以上の関数）を作ってコミットさせ、拒否されることまで確認する。**
+
+古いバージョンから入れているリポジトリには後始末が要る:
+
+```
+git config --unset core.hooksPath   # 0.13 の pre-commit 配線
+rm -rf .githooks                    # 0.13 が置いたフック
+rm -rf .claude/skills/gauntlet      # 0.9.x の旧名 skill
+```
+
+`.claude/settings.json` に `Stop` フック（0.12 以前）が残っていたら、それも消す。
+
+**0.16 以前から入れているリポジトリの skill は古いまま**になる（0.17.0 で `init` は
+skill を書かなくなった）。`npx skills add tepshq/gauntlet -a claude-code` を一度叩けば
+正本に置き換わり、以降は `npx skills update` で追随できる。
+
+### 外部サービスを要するテストがあった場合
+
+`init` は**これを自動ではやらない**。1 で見つけていたら、ここで整理する。
+
+**外部サービスを要するテストを専用の vitest project に分け、それを宣言から外す。**
+project の名前も分け方もリポジトリの自由（そういうテストはどのみち専用の
+`environment` / `setupFiles` / env 変数が要ることが多く、本来引くべき境界と一致する）。
+分け方の例:
+
+```ts
+projects: [
+  { extends: true, test: { name: "unit", include: ["**/*.test.ts"],
+    exclude: ["**/node_modules/**", "**/.claude/**", "**/*.db.test.ts"] } },
+  { extends: true, test: { name: "db", include: ["**/*.db.test.ts"],
+    exclude: ["**/node_modules/**", "**/.claude/**"] } },
+]
+```
+
+この例なら宣言は `--test-projects=unit`。**宣言できるのはインラインの project だけ**
+（別ファイルへの glob 参照は名前が読めないため、mutation で残せない）。
+
+`**/.claude/**` の除外は全 project に入れる。Claude Code の worktree が
+`.claude/worktrees/` にリポジトリ丸ごとのコピーを作ることがあり、
+その中のテストまで拾うと件数が倍増する（duct で 600 ファイル拾った実例）。
+
+## 4. CI で `full` を回す
+
+**`init` は workflow を作らない。** CI が要るものは gauntlet からは見えない
+（サービスコンテナ、マイグレーション、Node のバージョン、認証）。既に動いている job には
+それが全部揃っているので、そこに 1 行足すのが一番確実で、重複も生まない。
+
+### 足せる job がある場合（1 の b で見つけたもの）
+
+その job の最後に足す。それだけ。
+
+```yaml
+      - run: npx gauntlet full
+```
+
+### 足せる job が無い場合
+
+作る。以後これは**リポジトリのファイル**で、gauntlet は二度と触らない。
+gauntlet は宣言されたテストしか走らせないので、`services:` も DB の初期化も要らない。
+ただし `postinstall` が環境変数を形式上要求する場合（Prisma の `generate` 等）は
+ダミー値を `env:` に置く。
+
+```yaml
+name: gauntlet
+on: pull_request
+
+jobs:
+  gauntlet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # merge-base を取るために全履歴が要る。浅いと差分の起点が決まらない。
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          # gauntlet は node:fs の globSync を使うので 22 以上。
+          node-version: 22
+      - run: npm ci
+      - run: npx gauntlet full
+```
+
+**job の Node が 22 未満なら、そこには足せない。** 上の別 job を作るか、
+リポジトリの持ち主に CI の Node を上げてもらうか。どちらにするかは訊く
+（アプリが載る Node を変える話なので、gauntlet の都合で決めてよいことではない）。
+
+**完了条件** — `npx gauntlet quick` が通り、測った件数が想定と一致していること。
+**pre-commit が配線され、わざと作った違反でコミットが拒否されること。**
+外部サービスが無い状態でも `quick` と `full` が通ること（宣言が効いている証拠）。
+`full` を回す job が 1 つあり、それが上の 2 条件（全履歴・Node 22 以上）を満たすこと。
+
+## 5. ラチェットの種を置く
+
+`full` を**手元で一度回して**、できた `gauntlet.baseline.json` をコミットする。
+
+```
+npx gauntlet full
+```
+初回は「`gauntlet.baseline.json` を作りました。…コミットしてください」で**落ちる**。
+これが正常。ファイルはできているので、コミットしてもう一度回せば通る。
+コミットは `git add -A` で行う — ファイル名を含む Bash コマンドは guard が止めるので、
+名指しの `git add gauntlet.baseline.json` は使えない。
+
+**CI に任せてはいけない。** CI が置いた種はコンテナの中に書かれて捨てられる。
+毎 PR がその PR の状態を許容値として置き直すことになり、ラチェットが一度も噛まない。
+
+**完了条件** — `gauntlet.baseline.json` が履歴にあり、`npx gauntlet full` が通ること。
+
+## 触らないもの
+
+`gauntlet.baseline.json` は許容する違反数の記録で、減らすのは gauntlet が自動で行う。
+編集と、ファイル名に触れる Bash コマンドは `PreToolUse` フックで止まる
+（読むには Read ツール、コミットには `git add -A` を使う）。赤を消すには違反そのものを直す。

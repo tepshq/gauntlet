@@ -57,6 +57,11 @@ afterEach(() => {
 });
 
 const read = (path: string): string => readFileSync(join(root, path), "utf8");
+/**
+ * skill の正本。0.17.0 で init の生成物からリポジトリ直下のファイルになった
+ * （配布は `npx skills add tepshq/gauntlet -a claude-code`）。
+ */
+const skillSource = (): string => readFileSync("skills/gauntlet-setup/SKILL.md", "utf8");
 const settings = (): { hooks: Record<string, { matcher?: string }[]> } =>
   JSON.parse(read(".claude/settings.json")) as { hooks: Record<string, { matcher?: string }[]> };
 
@@ -65,7 +70,6 @@ describe("init", () => {
     expect(init(root).files.map((file) => file.path)).toEqual([
       "gauntlet.config.json",
       ".claude/settings.json",
-      ".claude/skills/gauntlet-setup/SKILL.md",
       ".gitignore",
     ]);
   });
@@ -73,7 +77,7 @@ describe("init", () => {
   // パスだけ並べると、読み手は「自分の settings.json が上書きされたか」を
   // 出力から判断できない。4 ファイルで振る舞いが 3 種類ある。
   it("初回は全部 作成 と言う", () => {
-    expect(init(root).files.map((file) => file.note)).toEqual(["作成", "作成", "作成", "作成"]);
+    expect(init(root).files.map((file) => file.note)).toEqual(["作成", "作成", "作成"]);
   });
 
   it("二度目は何をしたかを言い分ける", () => {
@@ -81,7 +85,6 @@ describe("init", () => {
     expect(init(root).files.map((file) => file.note)).toEqual([
       "変更なし",
       "更新（既存の設定は残しました）",
-      "更新",
       "変更なし",
     ]);
   });
@@ -108,8 +111,11 @@ describe("init", () => {
 
   it("範囲を指定すれば書き換える", () => {
     init(root);
-    init(root, { defaultBranch: "main", include: ["lib/**/*.ts"], exclude: [], testProjects: [] });
+    const result = init(root, { defaultBranch: "main", include: ["lib/**/*.ts"], exclude: [], testProjects: [] });
     expect(parseConfig(read("gauntlet.config.json"), "test").source.include).toEqual(["lib/**/*.ts"]);
+    // 書き換えたことを出力でも言う。0.17.0 で skill を書かなくなり、config が
+    //「更新」を出す唯一の経路になった（mutation で検査漏れとして出た）。
+    expect(result.files[0]!.note).toBe("更新");
   });
 
   // 案内が要るのは、まだ範囲が決まっていないときだけ。設定済みのリポジトリを
@@ -152,8 +158,7 @@ describe("init", () => {
   });
 
   it("skill に触ってはいけないものを書く", () => {
-    init(root);
-    const skill = read(".claude/skills/gauntlet-setup/SKILL.md");
+    const skill = skillSource();
     expect(skill).toContain("name: gauntlet");
     expect(skill).toContain("gauntlet.baseline.json");
     expect(skill).toContain("gauntlet.config.json");
@@ -304,8 +309,7 @@ describe("init", () => {
     ["履歴を全部取る（merge-base に要る）", "fetch-depth: 0"],
     ["Node は 22 以上（node:fs の globSync）", "node-version: 22"],
   ])("skill の CI 雛形は %s", (_label, expected) => {
-    init(root);
-    expect(read(".claude/skills/gauntlet-setup/SKILL.md")).toContain(expected);
+    expect(skillSource()).toContain(expected);
   });
 
   // 0.0.14 から public npm。認証の雛形が残っていると、それを写した導入先が
@@ -315,37 +319,20 @@ describe("init", () => {
     ["registry の指定", "registry-url:"],
     ["トークンの受け渡し", "NODE_AUTH_TOKEN:"],
   ])("skill の CI 雛形に %s は無い", (_label, gone) => {
-    init(root);
-    expect(read(".claude/skills/gauntlet-setup/SKILL.md")).not.toContain(gone);
+    expect(skillSource()).not.toContain(gone);
   });
 
   // 逆に「古い認証を見つけたら外す」案内は要る。移行期の導入先はまだ残している。
   it("skill は古い認証設定の掃除を案内する", () => {
-    init(root);
-    expect(read(".claude/skills/gauntlet-setup/SKILL.md")).toContain("@tepshq:registry=https://npm.pkg.github.com");
+    expect(skillSource()).toContain("@tepshq:registry=https://npm.pkg.github.com");
   });
 
   // 既に動いている job に足すのが基本。生成ファイルは重複を生む。
   it("skill は既存の job に 1 行足す形を先に示す", () => {
-    init(root);
-    const skill = read(".claude/skills/gauntlet-setup/SKILL.md");
+    const skill = skillSource();
     expect(skill.indexOf("足せる job がある場合")).toBeLessThan(skill.indexOf("足せる job が無い場合"));
   });
 
-  // 0.9.x 以前の skill 名は「gauntlet の全部」を名乗る大きさで、無関係な質問まで
-  // 吸い込んでいた。置き直すとき古い方が残ると、似た skill が 2 枚並ぶ。
-  it("旧名の skill（.claude/skills/gauntlet）を片付ける", () => {
-    mkdirSync(join(root, ".claude/skills/gauntlet"), { recursive: true });
-    writeFileSync(join(root, ".claude/skills/gauntlet/SKILL.md"), "old");
-    // 消してよいのは旧名ちょうど 1 つ。パスが 1 文字ずれて「もっと消す」ようになっても
-    // 上の assert だけでは気づけないので、隣の無関係な skill が生きていることも見る。
-    mkdirSync(join(root, ".claude/skills/other"), { recursive: true });
-    writeFileSync(join(root, ".claude/skills/other/SKILL.md"), "keep");
-    init(root);
-    expect(existsSync(join(root, ".claude/skills/gauntlet"))).toBe(false);
-    expect(existsSync(join(root, ".claude/skills/gauntlet-setup/SKILL.md"))).toBe(true);
-    expect(read(".claude/skills/other/SKILL.md")).toBe("keep");
-  });
 });
 
 // 出力そのものが導入者への案内なので、体裁ごと固定する。main.ts に置くと
@@ -368,8 +355,8 @@ describe("formatInit", () => {
     expect(formatInit({ files, needsSetup: true })).toBe(
       "  gauntlet.config.json   作成\n" +
         "  .claude/settings.json  更新（既存の設定は残しました）\n" +
-        "\n次: Claude Code でこのリポジトリを開き、/gauntlet-setup を実行してください\n" +
-        "（依存の投入 → 測る範囲の決定 → CI → ラチェットの種置きまで随行します）\n",
+        "\n次: Claude Code で /gauntlet-setup を実行してください\n" +
+        "（無ければ npx skills add tepshq/gauntlet -a claude-code で入ります）\n",
     );
   });
 

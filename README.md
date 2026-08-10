@@ -71,30 +71,26 @@ jscpd は gauntlet が同梱するので、対象リポジトリに入れるも�
 
 ## 導入
 
-**出発点は 1 コマンドです。** インストール不要で動きます（npx が一時取得します）:
+**出発点は 1 コマンドです。** gauntlet のインストールも不要です:
 
 ```bash
-npx @teps/gauntlet init
+npx skills add tepshq/gauntlet -a claude-code
 ```
 
-これが skill（`.claude/skills/gauntlet-setup`）を含む 4 ファイルを置き、それぞれに
-**何をしたか**（作成 / 更新 / 変更なし）を出します。この時点の測る範囲は既定値です —
-決めるのは次の手順で、`init` は範囲について何も主張しません。
+置かれるのは skill 1 枚（`.claude/skills/gauntlet-setup/`）と `skills-lock.json` だけ。
+**この時点では何も有効になりません** — ゲートも設定も、範囲が決まってから入ります。
 
-既にある `.claude/settings.json` や `.gitignore` は**置き換えません**（足りないものだけ
-追記）。**測る範囲を書き換えるのはフラグを渡したときだけ**なので、gauntlet を上げたあと
-`npx gauntlet init` を叩き直しても、決めた範囲も手書きの `commands` も消えません。
-
-あとは **Claude Code でこのリポジトリを開き、`/gauntlet-setup` を実行するだけ**です
-（「gauntlet のセットアップを続けて」と言っても起動します）。skill が
-ここから先の全部 — 依存の投入（パッケージマネージャの検出込み）、測る範囲の決定、
-外部サービスを要するテストの分離、CI への 1 行、ラチェットの種置き、ゲートが実際に
-噛むことの確認 — をユーザーと対話しながら進めます。
+あとは **Claude Code で `/gauntlet-setup` を実行するだけ**です（「gauntlet を入れて」と
+言っても起動します）。skill がここから先の全部 — 依存の投入（パッケージマネージャの
+検出込み）、測る範囲の決定、外部サービスを要するテストの分離、CI への 1 行、
+ラチェットの種置き、ゲートが実際に噛むことの確認 — をユーザーと対話しながら進めます。
 
 推測で範囲を入れると、狭いまま緑になり、それが一番気づけない失敗になります。
 エージェントがリポジトリを読み、理由つきで範囲を提案し、合意してから確定する流れに
 してあるのはそのためです（`tsconfig.json` の `include` は当てになりません —
 生成物・設定ファイル・e2e が混ざります）。
+
+skill が更新されたら `npx skills update` で追随できます。
 
 <details>
 <summary>Claude Code を使わず手で入れる場合</summary>
@@ -110,7 +106,7 @@ npx gauntlet quick
 vitest と**完全一致**する版でなければ install 自体が失敗します（`peer vitest@"3.2.7"` —
 範囲ではありません）。足りなければ `gauntlet quick` が**版を埋めた 1 行**を出すので、
 それをそのまま打てば済みます。範囲の決め方・CI・種置きは
-`.claude/skills/gauntlet-setup/SKILL.md` に全手順があります。
+[`skills/gauntlet-setup/SKILL.md`](skills/gauntlet-setup/SKILL.md) に全手順があります。
 
 > 0.0.13 以前を GitHub Packages から入れていたリポジトリは、`.npmrc` の
 > `@tepshq:registry=https://npm.pkg.github.com` の行と、workflow の
@@ -119,16 +115,20 @@ vitest と**完全一致**する版でなければ install 自体が失敗しま
 
 </details>
 
-`init` が置くのは薄いファイルだけです。ロジックは全てパッケージ側にあるので、更新は npm の
-バージョンを上げて `init` を叩き直すだけで済みます（フックの形が変わっても、あなたの設定は
-そのままに配線だけ入れ替わります）。
+skill が範囲を決めたあと `gauntlet init --include=...` を叩き、**薄いファイル 3 枚**が
+置かれます。ロジックは全てパッケージ側にあるので、更新は npm のバージョンを上げて
+`init` を叩き直すだけで済みます（フックの形が変わっても、あなたの設定はそのままに配線だけ
+入れ替わります）。
 
 | 置くもの | 内容 |
 | --- | --- |
 | `.claude/settings.json` | **フック 2 つ**（下記）。既存の設定は壊しません |
-| `.claude/skills/gauntlet-setup/SKILL.md` | 測る範囲を決め直すときに使う skill |
 | `gauntlet.config.json` | このリポジトリの事実。閾値は入りません |
 | `.gitignore` | 足りない行だけ追記 |
+
+既にある `.claude/settings.json` や `.gitignore` は**置き換えません**（足りないものだけ
+追記）。**測る範囲を書き換えるのはフラグを渡したときだけ**なので、gauntlet を上げたあと
+`npx gauntlet init` を叩き直しても、決めた範囲も手書きの `commands` も消えません。
 
 **CI の workflow は置きません。** CI が要るもの（Node のバージョン、`postinstall` が
 要求する環境変数など）は gauntlet からは見えないので、
