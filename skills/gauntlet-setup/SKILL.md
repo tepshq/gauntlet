@@ -34,17 +34,18 @@ description: gauntlet をこのリポジトリに導入する、または測る�
 `pnpm-lock.yaml` / `yarn.lock` / `bun.lock` / `package-lock.json` から判定する）。
 `node_modules` が無ければ、先にリポジトリ自体を install する — 後の手順でテストを走らせる。
 
+**版は `npm view` で調べて明示する。** パッケージマネージャに `latest` を解決させると、
+そのキャッシュが古いまま**何ヶ月も前の版**が入る（実測: latest が 0.18.0 のとき pnpm は
+`pnpm add` も `@latest` も 0.13.0 を返した。npm は 0.18.0）。古い gauntlet は挙動が違い、
+skill を上書きしたり `.githooks/` を作ったりする。版を名指しすればキャッシュを迂回できる:
+
 ```
-pnpm add -D @teps/gauntlet@latest @stryker-mutator/core @stryker-mutator/vitest-runner
+V=$(npm view @teps/gauntlet version)
+pnpm add -D "@teps/gauntlet@$V" @stryker-mutator/core @stryker-mutator/vitest-runner
 ```
 
 - `@teps/gauntlet` — フックが `npx gauntlet` で呼ぶ本体
 - `@stryker-mutator/*` — `full` の mutation 用
-
-**入った版を確かめる。** pnpm はメタデータのキャッシュが古いと**何ヶ月も前の版**を入れる
-（実測: latest が 0.18.0 のとき `pnpm add` も `@latest` も 0.13.0 を返した。npm は 0.18.0）。
-古い gauntlet は挙動が違う（skill を上書きする、`.githooks/` を作る）ので、
-`npm view @teps/gauntlet version` と突き合わせ、ずれていたら版を明示して入れ直す。
 
 **coverage provider（`@vitest/coverage-v8`）は gauntlet に任せる。** vitest の**完全一致**の版を
 peer に要求するので、版を選び損ねると install ごと失敗する。足りなければ `gauntlet quick` が
