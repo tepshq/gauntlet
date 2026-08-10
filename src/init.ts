@@ -11,10 +11,9 @@
  * 「1 行足す先」は skill が案内する。CI について知っている場所を 1 つに保つ。
  */
 
-import { globSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { CONFIG_FILENAME, ConfigError, type GauntletConfig } from "./config.ts";
-import { repoSourceSet } from "./git.ts";
 
 export interface InitOptions {
   defaultBranch: string;
@@ -142,7 +141,7 @@ vitest が無いリポジトリは対象外（gauntlet の要件）。無理に�
 - **ルート直下の \`.ts\` も 1 つずつ分類する。** 設定ファイルに紛れて製品コードが
   置かれていることがある（duct ではルートの \`proxy.ts\` が Auth0 の認証ゲート本体で、
   最初の導入はこれを測り漏らした）。**取りこぼしを見つけるのはここだけの仕事** —
-  \`init\` は「測る対象: N ファイル」しか言わない
+  \`init\` は範囲について何も言わない
 - テストファイルの命名規則（\`*.test.ts\` / \`*.spec.ts\` / \`__tests__/\`）
 - 既定ブランチ（\`git symbolic-ref --short HEAD\` や \`origin/HEAD\`）
 
@@ -222,14 +221,18 @@ DB の初期化は要らない**。宣言外のテストは既存 CI の job が
 npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glob,glob> --test-projects=<name,name>
 \`\`\`
 
-出力の「測る対象: N ファイル」が 1 で数えた想定と一致するか確かめる。
-合わなければ glob が間違っている（0 件なら確実に間違っている）。
+**範囲を書き換えるのはフラグを渡したときだけ。** フラグ無しの \`init\` は骨組み
+（フック・skill・.gitignore）の整備だけで、既存の \`gauntlet.config.json\` には触らない
+（出力が「変更なし」と言う）。だから gauntlet を上げたあと叩き直しても範囲は消えない。
 \`--test-projects\` は project を使っていないリポジトリでは省略する（全部走る）。
+
+**測った件数はここでは確かめない。** 検算は 4 の完了条件（\`npx gauntlet quick\` の
+\`測る対象 N\` が 1 で数えた想定と合うか）で行う。基準を 2 か所に置かない。
 
 型チェックの上書きが要る場合は \`gauntlet.config.json\` の \`commands.typecheck\` に書く
 （\`init\` にフラグは無い。config はスキーマ検証されるので、間違えれば起動時に落ちる）。
-**\`init\` を後で叩き直しても \`commands\` は残る** — 出力が「更新（commands は
-残しました）」と言う。範囲だけ直したいときに型チェックの設定を失わない。
+範囲を直すために \`init\` をフラグ付きで叩き直しても \`commands\` は残る
+（出力が「更新（commands は残しました）」と言う）。
 
 ### 起動点は自動で配線される
 
@@ -443,23 +446,21 @@ function readIfPresent(root: string, path: string): string | null {
   }
 }
 
+
 /**
- * いまの設定が実際に何ファイルを掴むか。
- *
- * 0 件なら設定が現実とずれている、という一番大事な信号がこれで出る。
- *
- * **「対象外に TypeScript がある」の報告は持たない。** 以前は出していたが、
- * 最上位ディレクトリしか挙げられず、duct ではルート直下の `proxy.ts`
- * （Auth0 の認証ゲート本体）の測り漏らしを捕まえられなかった — 存在理由の
- * ケースそのもので役に立たなかった。範囲の分類は skill の仕事（リポジトリを
- * 読んで 1 件ずつ「製品コードか、テストか、生成物か、設定か」を言う）。
- *
- * gitignore された生成物は数えない（duct の Prisma 生成クライアントが
- * 「測る対象 837」を水増ししていた）。
+ * init の出力。**判断も体裁もここで決める** — main.ts には書くだけを残す
+ * （薄いまま保てば、テストできない場所に判断が溜まらない）。
  */
-export function measuredFileCount(root: string, source: InitOptions): number {
-  const owned = repoSourceSet(root);
-  return globSync(source.include, { cwd: root, exclude: source.exclude }).filter((file) => owned.has(file)).length;
+export function formatInit(result: InitResult): string {
+  const width = Math.max(...result.files.map((file) => file.path.length));
+  const listed = result.files.map((file) => `  ${file.path.padEnd(width)}  ${file.note}`).join("\n");
+  // 案内するのは、まだ範囲が決まっていないときだけ。設定済みのリポジトリを
+  // 更新した回に出すと雑音になる。
+  const next = result.needsSetup
+    ? "\n次: Claude Code でこのリポジトリを開き、/gauntlet-setup を実行してください\n" +
+      "（依存の投入 → 測る範囲の決定 → CI → ラチェットの種置きまで随行します）\n"
+    : "";
+  return `${listed}\n${next}`;
 }
 
 /**
@@ -471,31 +472,67 @@ function removeLegacySkill(root: string): void {
   rmSync(join(root, ".claude/skills/gauntlet"), { recursive: true, force: true });
 }
 
-/** 書いたファイルと、それぞれに何をしたかを返す。 */
-export function init(root: string, options: InitOptions = INIT_DEFAULTS): WrittenFile[] {
+export interface InitResult {
+  files: WrittenFile[];
+  /** config を新しく作った = 範囲がまだ決まっていない。次の一歩を案内する。 */
+  needsSetup: boolean;
+}
+
+/**
+ * config を書くか、既存を守るか。
+ *
+ * **`options` が null（フラグ無し）で既存があれば触らない。** ここを既定値で
+ * 上書きしていたため、新しいフックを取り込もうと `init` を叩き直した人が
+ * 測る範囲を `src/**` に戻される事故があった（`commands` 消失と同じ形）。
+ * 範囲を書き換えるのは、範囲を指定して呼ばれたときだけ。
+ *
+ * 壊れて読めない config も残す — 上書きすると手書きの範囲が消える。
+ * 読めない config は実行時に ConfigError で落ちるので、黙って進むことはない。
+ */
+function configFile(root: string, options: InitOptions | null): WrittenFile {
+  const raw = readIfPresent(root, CONFIG_FILENAME);
+  if (options === null && raw !== null) return { path: CONFIG_FILENAME, note: "変更なし" };
+  const existing = existingConfig(root);
+  const note = existing?.commands === undefined ? madeOrUpdated(raw) : "更新（commands は残しました）";
+  return write(root, CONFIG_FILENAME, `${JSON.stringify(configFor(options ?? INIT_DEFAULTS, existing), null, 2)}\n`, note);
+}
+
+/**
+ * 骨組みを置く。**`options` が null なら範囲は決めない**（既存の config を守る）。
+ *
+ * 範囲を決めるのは skill の仕事で、決まった値をフラグで渡してもう一度叩く。
+ * 測った件数はここでは出さない — 検算は `quick` の scope 行が担う
+ * （skill の完了条件がそれを見ている。二重に出すと基準が 2 つになる）。
+ */
+export function init(root: string, options: InitOptions | null = null): InitResult {
   removeLegacySkill(root);
-  const config = existingConfig(root);
   const settings = readIfPresent(root, ".claude/settings.json");
   const skill = readIfPresent(root, ".claude/skills/gauntlet-setup/SKILL.md");
   const gitignore = readIfPresent(root, ".gitignore");
   const merged = mergeGitignore(gitignore);
   // 設定は書く前に全部読む。読めない settings.json ならここで落ち、1 つも書かずに済む。
   const settingsAfter = mergeSettings(settings);
+  const config = configFile(root, options);
 
-  return [
-    write(
-      root,
-      CONFIG_FILENAME,
-      `${JSON.stringify(configFor(options, config), null, 2)}\n`,
-      config?.commands === undefined ? madeOrUpdated(config) : "更新（commands は残しました）",
-    ),
-    write(root, ".claude/settings.json", settingsAfter, settings === null ? "作成" : "更新（既存の設定は残しました）"),
-    write(root, ".claude/skills/gauntlet-setup/SKILL.md", SKILL, madeOrUpdated(skill)),
-    write(root, ".gitignore", merged, gitignoreNote(gitignore, merged)),
-  ];
+  return {
+    files: [
+      config,
+      write(root, ".claude/settings.json", settingsAfter, settings === null ? "作成" : "更新（既存の設定は残しました）"),
+      write(root, ".claude/skills/gauntlet-setup/SKILL.md", SKILL, madeOrUpdated(skill)),
+      write(root, ".gitignore", merged, gitignoreNote(gitignore, merged)),
+    ],
+    // 範囲を指定して呼ばれたなら、もう決まっている。案内が要るのは
+    // 「骨組みだけ置いて、範囲がまだ既定値」の状態。
+    needsSetup: options === null && config.note === "作成",
+  };
 }
 
-export function parseInitOptions(argv: readonly string[]): InitOptions {
+/**
+ * フラグから範囲を読む。**フラグが 1 つも無ければ `null`** — 範囲の指定なし、
+ * つまり「骨組みの整備だけ」の呼ばれ方で、`init` は既存の config に触らない。
+ */
+export function parseInitOptions(argv: readonly string[]): InitOptions | null {
+  if (!argv.some((arg) => arg.startsWith("--"))) return null;
   const value = (name: string): string | undefined =>
     argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3);
   const list = (name: string, fallback: string[]): string[] => {

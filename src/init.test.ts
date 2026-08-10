@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseConfig } from "./config.ts";
-import { INIT_DEFAULTS, init, measuredFileCount, mergeGitignore, parseInitOptions } from "./init.ts";
+import { INIT_DEFAULTS, formatInit, init, mergeGitignore, parseInitOptions } from "./init.ts";
 
 // 出力の体裁ごと固定する。部分一致で見ると、改行の数や区切りが崩れても気づかない。
 describe("mergeGitignore", () => {
@@ -62,7 +62,7 @@ const settings = (): { hooks: Record<string, { matcher?: string }[]> } =>
 
 describe("init", () => {
   it("薄いファイルだけ置く", () => {
-    expect(init(root).map((file) => file.path)).toEqual([
+    expect(init(root).files.map((file) => file.path)).toEqual([
       "gauntlet.config.json",
       ".claude/settings.json",
       ".claude/skills/gauntlet-setup/SKILL.md",
@@ -73,24 +73,61 @@ describe("init", () => {
   // パスだけ並べると、読み手は「自分の settings.json が上書きされたか」を
   // 出力から判断できない。4 ファイルで振る舞いが 3 種類ある。
   it("初回は全部 作成 と言う", () => {
-    expect(init(root).map((file) => file.note)).toEqual(["作成", "作成", "作成", "作成"]);
+    expect(init(root).files.map((file) => file.note)).toEqual(["作成", "作成", "作成", "作成"]);
   });
 
   it("二度目は何をしたかを言い分ける", () => {
     init(root);
-    expect(init(root).map((file) => file.note)).toEqual([
-      "更新",
+    expect(init(root).files.map((file) => file.note)).toEqual([
+      "変更なし",
       "更新（既存の設定は残しました）",
       "更新",
       "変更なし",
     ]);
   });
 
+  // 新しいフックを取り込むために叩き直した人が、測る範囲を既定値に戻された
+  // （lib/** で運用していたリポジトリが src/** に化ける）。commands 消失と同じ形。
+  it("範囲の指定が無ければ既存の config に触らない", () => {
+    init(root, { defaultBranch: "trunk", include: ["lib/**/*.ts"], exclude: [], testProjects: ["unit"] });
+    const before = read("gauntlet.config.json");
+
+    const result = init(root);
+
+    expect(read("gauntlet.config.json")).toBe(before);
+    expect(result.files[0]).toEqual({ path: "gauntlet.config.json", note: "変更なし" });
+  });
+
+  // 壊れた config を既定値で上書きすると、手書きの範囲が消える。読めない config は
+  // 実行時に ConfigError で落ちるので、黙って進むことはない。
+  it("読めない config も範囲の指定が無ければ残す", () => {
+    writeFileSync(join(root, "gauntlet.config.json"), "{ broken");
+    init(root);
+    expect(read("gauntlet.config.json")).toBe("{ broken");
+  });
+
+  it("範囲を指定すれば書き換える", () => {
+    init(root);
+    init(root, { defaultBranch: "main", include: ["lib/**/*.ts"], exclude: [], testProjects: [] });
+    expect(parseConfig(read("gauntlet.config.json"), "test").source.include).toEqual(["lib/**/*.ts"]);
+  });
+
+  // 案内が要るのは、まだ範囲が決まっていないときだけ。設定済みのリポジトリを
+  // 更新した回に「セットアップしてください」と出すと雑音になる。
+  it("config を作った回だけ次の一歩を要求する", () => {
+    expect(init(root).needsSetup).toBe(true);
+    expect(init(root).needsSetup).toBe(false);
+  });
+
+  it("範囲を指定した回は案内しない", () => {
+    expect(init(root, INIT_DEFAULTS).needsSetup).toBe(false);
+  });
+
   // 行数まで固定する。数字を見ないと、引き算が足し算に化けても気づかない
   //（mutation で実際に生き残った）。空行 + 見出し + 4 エントリで 6 行。
   it("足りない行だけ足した .gitignore は足した行数を言う", () => {
     writeFileSync(join(root, ".gitignore"), "node_modules/\n");
-    const gitignore = init(root).find((file) => file.path === ".gitignore");
+    const gitignore = init(root).files.find((file) => file.path === ".gitignore");
     expect(gitignore!.note).toBe("更新（6 行追加）");
   });
 
@@ -173,7 +210,8 @@ describe("init", () => {
     const config = JSON.parse(read("gauntlet.config.json")) as Record<string, unknown>;
     config.commands = { typecheck: "tsc --noEmit" };
     writeFileSync(join(root, "gauntlet.config.json"), `${JSON.stringify(config, null, 2)}\n`);
-    expect(init(root)[0]!.note).toBe("更新（commands は残しました）");
+    const written = init(root, { defaultBranch: "main", include: ["lib/**/*.ts"], exclude: [], testProjects: [] });
+    expect(written.files[0]!.note).toBe("更新（commands は残しました）");
   });
 
   // 推測で既存の設定を捨てるくらいなら止まる。フックが 1 つ消えれば、
@@ -310,43 +348,42 @@ describe("init", () => {
   });
 });
 
-describe("measuredFileCount", () => {
-  function put(path: string): void {
-    mkdirSync(join(root, path, ".."), { recursive: true });
-    writeFileSync(join(root, path), "export const x = 1;\n");
-  }
+// 出力そのものが導入者への案内なので、体裁ごと固定する。main.ts に置くと
+// テストできない場所に判断が溜まり、実際 CRAP 12 でゲートに止められた。
+describe("formatInit", () => {
+  const files = [
+    { path: "gauntlet.config.json", note: "作成" },
+    { path: ".claude/settings.json", note: "更新（既存の設定は残しました）" },
+  ];
 
-  it("測る対象の数を返す", () => {
-    put("src/a.ts");
-    put("src/b.ts");
-    expect(measuredFileCount(root, INIT_DEFAULTS)).toBe(2);
+  it("パスを揃えて、何をしたかを添える", () => {
+    expect(formatInit({ files, needsSetup: false })).toBe(
+      "  gauntlet.config.json   作成\n  .claude/settings.json  更新（既存の設定は残しました）\n",
+    );
   });
 
-  // glob はディスクを見るので gitignore された生成物を拾う。duct では Prisma の
-  // 生成クライアントが「測る対象 837」を水増ししていた。
-  it("gitignore された生成物は数えない", () => {
-    writeFileSync(join(root, ".gitignore"), "src/generated.ts\n");
-    put("src/real.ts");
-    put("src/generated.ts");
-    expect(measuredFileCount(root, INIT_DEFAULTS)).toBe(1);
+  // 案内は丸ごと固定する。「何をしてくれるのか」の一文を消しても
+  // /gauntlet-setup の部分一致では気づけない（mutation で実際に生き残った）。
+  it("範囲がまだなら次の一歩を案内する", () => {
+    expect(formatInit({ files, needsSetup: true })).toBe(
+      "  gauntlet.config.json   作成\n" +
+        "  .claude/settings.json  更新（既存の設定は残しました）\n" +
+        "\n次: Claude Code でこのリポジトリを開き、/gauntlet-setup を実行してください\n" +
+        "（依存の投入 → 測る範囲の決定 → CI → ラチェットの種置きまで随行します）\n",
+    );
   });
 
-  it("除外されたファイルは数えない", () => {
-    put("src/a.ts");
-    put("src/a.test.ts");
-    expect(measuredFileCount(root, INIT_DEFAULTS)).toBe(1);
-  });
-
-  // 0 件は「設定が現実とずれている」という一番大事な信号。
-  it("範囲外しか無ければ 0", () => {
-    put("bin/tool.ts");
-    expect(measuredFileCount(root, INIT_DEFAULTS)).toBe(0);
+  // 設定済みのリポジトリを更新した回に「セットアップしてください」は雑音。
+  it("範囲が決まっていれば案内しない", () => {
+    expect(formatInit({ files, needsSetup: false })).not.toContain("/gauntlet-setup");
   });
 });
 
 describe("parseInitOptions", () => {
-  it("指定が無ければ既定値", () => {
-    expect(parseInitOptions([])).toEqual(INIT_DEFAULTS);
+  // null = 範囲の指定なし。init はこれを見て既存の config に触らないと決める
+  //（既定値を返すと、叩き直すたびに測る範囲が src/** に戻る事故になる）。
+  it.each([[[] as string[]], [["init"]]])("フラグが無ければ null: %j", (argv) => {
+    expect(parseInitOptions(argv)).toBe(null);
   });
 
   it("フラグを読む", () => {
@@ -361,11 +398,11 @@ describe("parseInitOptions", () => {
   });
 
   it("exclude のフラグを読む", () => {
-    expect(parseInitOptions(["init", "--exclude=x/**,y/**"]).exclude).toEqual(["x/**", "y/**"]);
+    expect(parseInitOptions(["init", "--exclude=x/**,y/**"])!.exclude).toEqual(["x/**", "y/**"]);
   });
 
   // 空の値で既定に戻らないと、`--include=` が「何も測らない」設定になる。
   it.each(["include", "exclude"] as const)("--%s= が空なら既定に戻す", (name) => {
-    expect(parseInitOptions(["init", `--${name}=`])[name]).toEqual(INIT_DEFAULTS[name]);
+    expect(parseInitOptions(["init", `--${name}=`])![name]).toEqual(INIT_DEFAULTS[name]);
   });
 });
