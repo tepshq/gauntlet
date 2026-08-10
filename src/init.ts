@@ -13,7 +13,7 @@
 
 import { globSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { CONFIG_FILENAME, type GauntletConfig } from "./config.ts";
+import { CONFIG_FILENAME, ConfigError, type GauntletConfig } from "./config.ts";
 import { repoSourceSet } from "./git.ts";
 
 export interface InitOptions {
@@ -31,7 +31,15 @@ export const INIT_DEFAULTS: InitOptions = {
   testProjects: [],
 };
 
-function configFor(options: InitOptions): GauntletConfig & { $schema: string } {
+/**
+ * config を組み立てる。**フラグで管理しないキーは既存から引き継ぐ。**
+ *
+ * `commands.typecheck` は `init` にフラグが無く、skill が「手で書く」と案内している。
+ * 全上書きにしていた頃は、範囲を直すために `init` を叩き直すと**黙って消えた** —
+ * teps のような 2 パス型チェックのリポジトリでは、既定の `tsc --noEmit` に落ちて
+ * 半分しか見ないまま緑になる。settings.json / .gitignore と同じくマージする。
+ */
+function configFor(options: InitOptions, existing: GauntletConfig | null): GauntletConfig & { $schema: string } {
   return {
     $schema: "./node_modules/@teps/gauntlet/schema/gauntlet.config.schema.json",
     schemaVersion: 1,
@@ -40,7 +48,21 @@ function configFor(options: InitOptions): GauntletConfig & { $schema: string } {
     defaultBranch: options.defaultBranch,
     source: { include: options.include, exclude: options.exclude },
     ...(options.testProjects.length === 0 ? {} : { tests: { projects: options.testProjects } }),
+    ...(existing?.commands === undefined ? {} : { commands: existing.commands }),
   };
+}
+
+/** 既存 config。読めなければ null（壊れていても init は進む — 書き直せば直るので）。 */
+function existingConfig(root: string): GauntletConfig | null {
+  const raw = readIfPresent(root, CONFIG_FILENAME);
+  // Stryker disable next-line ConditionalExpression: 早期 return を外しても
+  // JSON.parse(null) は "null" を読んで null を返すので、結果が変わらない。
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as GauntletConfig;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -119,7 +141,8 @@ vitest が無いリポジトリは対象外（gauntlet の要件）。無理に�
 - TypeScript が置かれている最上位ディレクトリを実際に列挙する
 - **ルート直下の \`.ts\` も 1 つずつ分類する。** 設定ファイルに紛れて製品コードが
   置かれていることがある（duct ではルートの \`proxy.ts\` が Auth0 の認証ゲート本体で、
-  最初の導入はこれを測り漏らした）。\`init\` の取りこぼし報告はディレクトリしか挙げない
+  最初の導入はこれを測り漏らした）。**取りこぼしを見つけるのはここだけの仕事** —
+  \`init\` は「測る対象: N ファイル」しか言わない
 - テストファイルの命名規則（\`*.test.ts\` / \`*.spec.ts\` / \`__tests__/\`）
 - 既定ブランチ（\`git symbolic-ref --short HEAD\` や \`origin/HEAD\`）
 
@@ -199,12 +222,14 @@ DB の初期化は要らない**。宣言外のテストは既存 CI の job が
 npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glob,glob> --test-projects=<name,name>
 \`\`\`
 
-出力の「測る対象: N ファイル」が想定と合っているか確かめる。
-「対象外に TypeScript があります」が出たら、それが意図した除外か確認する。
+出力の「測る対象: N ファイル」が 1 で数えた想定と一致するか確かめる。
+合わなければ glob が間違っている（0 件なら確実に間違っている）。
 \`--test-projects\` は project を使っていないリポジトリでは省略する（全部走る）。
 
 型チェックの上書きが要る場合は \`gauntlet.config.json\` の \`commands.typecheck\` に書く
 （\`init\` にフラグは無い。config はスキーマ検証されるので、間違えれば起動時に落ちる）。
+**\`init\` を後で叩き直しても \`commands\` は残る** — 出力が「更新（commands は
+残しました）」と言う。範囲だけ直したいときに型チェックの設定を失わない。
 
 ### 起動点は自動で配線される
 
@@ -345,13 +370,30 @@ export function mergeGitignore(existing: string | null): string {
 type Settings = { hooks?: Record<string, unknown[]> };
 
 /**
+ * 読めない settings.json は、生の SyntaxError ではなく直せる文言で落とす。
+ *
+ * 既存の設定を推測で捨てるくらいなら止まる方がいい（フックが 1 つ消えれば、
+ * そのリポジトリのゲートが黙って無効になる）。ファイルはまだ書いていない。
+ */
+function parseSettings(raw: string): Settings {
+  try {
+    return JSON.parse(raw) as Settings;
+  } catch (error) {
+    throw new ConfigError(
+      `.claude/settings.json が JSON として読めません: ${(error as Error).message}\n` +
+        "コメントや末尾のカンマがあれば外してください（Claude Code の設定は厳密な JSON です）。",
+    );
+  }
+}
+
+/**
  * 既にあるフックを消さずに足す。他の用途で使っている設定を壊さない。
  *
  * **同じものは二度足さない。** `init` は測る範囲を直すたびに叩かれるので、
  * 積み上げるとフックが多重に登録され、毎ターン gauntlet が何度も走ることになる。
  */
 export function mergeSettings(existing: string | null): string {
-  const settings: Settings = existing === null ? {} : (JSON.parse(existing) as Settings);
+  const settings: Settings = existing === null ? {} : parseSettings(existing);
   const hooks = settings.hooks ?? {};
   for (const [event, entries] of Object.entries(HOOKS)) {
     const current = hooks[event] ?? [];
@@ -361,11 +403,34 @@ export function mergeSettings(existing: string | null): string {
   return `${JSON.stringify({ ...settings, hooks }, null, 2)}\n`;
 }
 
-function write(root: string, path: string, contents: string): string {
+/**
+ * 置いたファイルと、それに**何をしたか**。
+ *
+ * パスだけ並べると、読み手は「自分の settings.json は上書きされたのか」を
+ * 出力から判断できない（4 ファイルで振る舞いが 3 種類ある）。
+ */
+export interface WrittenFile {
+  path: string;
+  note: string;
+}
+
+function write(root: string, path: string, contents: string, note: string): WrittenFile {
   const full = join(root, path);
   mkdirSync(dirname(full), { recursive: true });
   writeFileSync(full, contents);
-  return path;
+  return { path, note };
+}
+
+/** 既存があれば「更新」。gauntlet が所有するファイル（config / skill）用。 */
+function madeOrUpdated(before: unknown): string {
+  return before === null ? "作成" : "更新";
+}
+
+/** .gitignore は足りない行だけ足す。何行足したかを言うと、読み手が確かめられる。 */
+function gitignoreNote(before: string | null, after: string): string {
+  if (before === null) return "作成";
+  if (before === after) return "変更なし";
+  return `更新（${after.split("\n").length - before.split("\n").length} 行追加）`;
 }
 
 function readIfPresent(root: string, path: string): string | null {
@@ -379,26 +444,22 @@ function readIfPresent(root: string, path: string): string | null {
 }
 
 /**
- * 測る対象になった数と、取りこぼしていそうな場所。
+ * いまの設定が実際に何ファイルを掴むか。
  *
- * `init` は既定値を書くだけで、そのリポジトリの正解は知らない。
- * 黙って書くと測定範囲が狭いまま緑になり、それが一番気づけない失敗になる。
- * 対象外の場所に TypeScript があることを見せて、設定を詰める合図にする。
+ * 0 件なら設定が現実とずれている、という一番大事な信号がこれで出る。
+ *
+ * **「対象外に TypeScript がある」の報告は持たない。** 以前は出していたが、
+ * 最上位ディレクトリしか挙げられず、duct ではルート直下の `proxy.ts`
+ * （Auth0 の認証ゲート本体）の測り漏らしを捕まえられなかった — 存在理由の
+ * ケースそのもので役に立たなかった。範囲の分類は skill の仕事（リポジトリを
+ * 読んで 1 件ずつ「製品コードか、テストか、生成物か、設定か」を言う）。
+ *
+ * gitignore された生成物は数えない（duct の Prisma 生成クライアントが
+ * 「測る対象 837」を水増ししていた）。
  */
-export function scopeReport(root: string, source: InitOptions): { matched: number; unmatched: string[] } {
-  const topOf = (path: string): string => path.split(/[\\/]/)[0] ?? path;
-  // gitignore された生成物は数えない（duct の Prisma 生成クライアントが「測る対象 837」を
-  // 水増しし、対象外の候補にも生成物のディレクトリが混ざっていた）。
+export function measuredFileCount(root: string, source: InitOptions): number {
   const owned = repoSourceSet(root);
-  const matched = globSync(source.include, { cwd: root, exclude: source.exclude }).filter((file) => owned.has(file));
-  const covered = new Set(matched.map(topOf));
-  const all = globSync("**/*.ts", { cwd: root, exclude: ["node_modules/**", "dist/**", "coverage/**"] }).filter(
-    (file) => owned.has(file),
-  );
-  const unmatched = [...new Set(all.map(topOf))]
-    .filter((top) => !covered.has(top) && !top.endsWith(".ts"))
-    .sort();
-  return { matched: matched.length, unmatched };
+  return globSync(source.include, { cwd: root, exclude: source.exclude }).filter((file) => owned.has(file)).length;
 }
 
 /**
@@ -410,14 +471,27 @@ function removeLegacySkill(root: string): void {
   rmSync(join(root, ".claude/skills/gauntlet"), { recursive: true, force: true });
 }
 
-/** 書いたファイルの一覧を返す。 */
-export function init(root: string, options: InitOptions = INIT_DEFAULTS): string[] {
+/** 書いたファイルと、それぞれに何をしたかを返す。 */
+export function init(root: string, options: InitOptions = INIT_DEFAULTS): WrittenFile[] {
   removeLegacySkill(root);
+  const config = existingConfig(root);
+  const settings = readIfPresent(root, ".claude/settings.json");
+  const skill = readIfPresent(root, ".claude/skills/gauntlet-setup/SKILL.md");
+  const gitignore = readIfPresent(root, ".gitignore");
+  const merged = mergeGitignore(gitignore);
+  // 設定は書く前に全部読む。読めない settings.json ならここで落ち、1 つも書かずに済む。
+  const settingsAfter = mergeSettings(settings);
+
   return [
-    write(root, CONFIG_FILENAME, `${JSON.stringify(configFor(options), null, 2)}\n`),
-    write(root, ".claude/settings.json", mergeSettings(readIfPresent(root, ".claude/settings.json"))),
-    write(root, ".claude/skills/gauntlet-setup/SKILL.md", SKILL),
-    write(root, ".gitignore", mergeGitignore(readIfPresent(root, ".gitignore"))),
+    write(
+      root,
+      CONFIG_FILENAME,
+      `${JSON.stringify(configFor(options, config), null, 2)}\n`,
+      config?.commands === undefined ? madeOrUpdated(config) : "更新（commands は残しました）",
+    ),
+    write(root, ".claude/settings.json", settingsAfter, settings === null ? "作成" : "更新（既存の設定は残しました）"),
+    write(root, ".claude/skills/gauntlet-setup/SKILL.md", SKILL, madeOrUpdated(skill)),
+    write(root, ".gitignore", merged, gitignoreNote(gitignore, merged)),
   ];
 }
 

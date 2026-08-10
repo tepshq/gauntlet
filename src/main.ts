@@ -7,7 +7,7 @@
 
 import { readFileSync } from "node:fs";
 import { GUARD_MESSAGE, shouldBlock } from "./guard.ts";
-import { init, parseInitOptions, scopeReport } from "./init.ts";
+import { init, measuredFileCount, parseInitOptions } from "./init.ts";
 import { describeCrash, run } from "./run.ts";
 import { EXIT_BLOCKED, EXIT_PASS, type TierName, exitCodeFor } from "./tier.ts";
 
@@ -21,17 +21,17 @@ function guard(_argv: readonly string[]): number {
 function initCommand(argv: readonly string[]): number {
   const options = parseInitOptions(argv);
   const written = init(process.cwd(), options);
-  const { matched, unmatched } = scopeReport(process.cwd(), options);
-  const notice =
-    unmatched.length === 0
-      ? ""
-      : `\n対象外に TypeScript があります: ${unmatched.join(", ")}\n` +
-        `測る範囲が正しいか gauntlet.config.json の source を確認してください（.claude/skills/gauntlet-setup）。\n`;
+  const count = measuredFileCount(process.cwd(), options);
+  // 何をしたかをファイルごとに言う。パスだけ並べると「自分の settings.json は
+  // 上書きされたのか」が出力から分からない。
+  const width = Math.max(...written.map((file) => file.path.length));
+  const files = written.map((file) => `  ${file.path.padEnd(width)}  ${file.note}`).join("\n");
   // 置いただけでは何も守られない。人間が見ているこの画面で、次の一歩を言う。
+  // 測る範囲の分類（どこに TS があり何が製品コードか）は skill の仕事。
   const next =
     "\n次: Claude Code でこのリポジトリを開き、/gauntlet-setup を実行してください\n" +
     "（依存の投入 → 測る範囲の決定 → CI → ラチェットの種置きまで随行します）\n";
-  process.stderr.write(`${written.map((path) => `  ${path}`).join("\n")}\n\n測る対象: ${matched} ファイル\n${notice}${next}`);
+  process.stderr.write(`${files}\n\n測る対象: ${count} ファイル\n${next}`);
   return EXIT_PASS;
 }
 

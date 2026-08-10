@@ -77,8 +77,12 @@ jscpd は gauntlet が同梱するので、対象リポジトリに入れるも�
 npx @teps/gauntlet init
 ```
 
-これが skill（`.claude/skills/gauntlet-setup`）を含む 4 ファイルを置きます。この時点の
-測る範囲は既定値なので、たいてい「測る対象: 0 ファイル」と警告が出ます — それで正常です。
+これが skill（`.claude/skills/gauntlet-setup`）を含む 4 ファイルを置き、それぞれに
+**何をしたか**（作成 / 更新 / 変更なし）を出します。この時点の測る範囲は既定値なので、
+「測る対象: 0 ファイル」でも正常です — 範囲は次で決めます。
+
+既にある `.claude/settings.json` や `.gitignore` は**置き換えません**（足りないものだけ
+追記）。手で書いた `gauntlet.config.json` の `commands` も、`init` を叩き直した時に残ります。
 
 あとは **Claude Code でこのリポジトリを開き、`/gauntlet-setup` を実行するだけ**です
 （「gauntlet のセットアップを続けて」と言っても起動します）。skill が

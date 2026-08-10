@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseConfig } from "./config.ts";
-import { INIT_DEFAULTS, init, mergeGitignore, parseInitOptions, scopeReport } from "./init.ts";
+import { INIT_DEFAULTS, init, measuredFileCount, mergeGitignore, parseInitOptions } from "./init.ts";
 
 // 出力の体裁ごと固定する。部分一致で見ると、改行の数や区切りが崩れても気づかない。
 describe("mergeGitignore", () => {
@@ -62,12 +62,36 @@ const settings = (): { hooks: Record<string, { matcher?: string }[]> } =>
 
 describe("init", () => {
   it("薄いファイルだけ置く", () => {
-    expect(init(root)).toEqual([
+    expect(init(root).map((file) => file.path)).toEqual([
       "gauntlet.config.json",
       ".claude/settings.json",
       ".claude/skills/gauntlet-setup/SKILL.md",
       ".gitignore",
     ]);
+  });
+
+  // パスだけ並べると、読み手は「自分の settings.json が上書きされたか」を
+  // 出力から判断できない。4 ファイルで振る舞いが 3 種類ある。
+  it("初回は全部 作成 と言う", () => {
+    expect(init(root).map((file) => file.note)).toEqual(["作成", "作成", "作成", "作成"]);
+  });
+
+  it("二度目は何をしたかを言い分ける", () => {
+    init(root);
+    expect(init(root).map((file) => file.note)).toEqual([
+      "更新",
+      "更新（既存の設定は残しました）",
+      "更新",
+      "変更なし",
+    ]);
+  });
+
+  // 行数まで固定する。数字を見ないと、引き算が足し算に化けても気づかない
+  //（mutation で実際に生き残った）。空行 + 見出し + 4 エントリで 6 行。
+  it("足りない行だけ足した .gitignore は足した行数を言う", () => {
+    writeFileSync(join(root, ".gitignore"), "node_modules/\n");
+    const gitignore = init(root).find((file) => file.path === ".gitignore");
+    expect(gitignore!.note).toBe("更新（6 行追加）");
   });
 
   // CI が要るもの（サービスコンテナ・マイグレーション・Node のバージョン・認証）は
@@ -125,6 +149,50 @@ describe("init", () => {
   it("宣言が無ければ tests キーを書かない", () => {
     init(root, { defaultBranch: "main", include: ["lib/**/*.ts"], exclude: [], testProjects: [] });
     expect(parseConfig(read("gauntlet.config.json"), "test").tests).toBeUndefined();
+  });
+
+  // init にフラグが無く skill が「手で書く」と案内しているキー。全上書きしていた頃は
+  // 範囲を直すために init を叩き直すと黙って消え、2 パス型チェックのリポジトリが
+  // 既定の tsc --noEmit に落ちて「半分しか見ないまま緑」になっていた。
+  it("再実行しても手で書いた commands を残す", () => {
+    init(root);
+    const config = JSON.parse(read("gauntlet.config.json")) as Record<string, unknown>;
+    config.commands = { typecheck: "tsc -p tsconfig.src.json --noEmit && tsc --noEmit" };
+    writeFileSync(join(root, "gauntlet.config.json"), `${JSON.stringify(config, null, 2)}\n`);
+
+    init(root, { defaultBranch: "main", include: ["lib/**/*.ts"], exclude: [], testProjects: [] });
+
+    const after = parseConfig(read("gauntlet.config.json"), "test");
+    expect(after.commands).toEqual({ typecheck: "tsc -p tsconfig.src.json --noEmit && tsc --noEmit" });
+    // 残すのは commands だけ。フラグで管理するキーは指定どおり上書きする。
+    expect(after.source.include).toEqual(["lib/**/*.ts"]);
+  });
+
+  it("commands を残したことを出力で言う", () => {
+    init(root);
+    const config = JSON.parse(read("gauntlet.config.json")) as Record<string, unknown>;
+    config.commands = { typecheck: "tsc --noEmit" };
+    writeFileSync(join(root, "gauntlet.config.json"), `${JSON.stringify(config, null, 2)}\n`);
+    expect(init(root)[0]!.note).toBe("更新（commands は残しました）");
+  });
+
+  // 推測で既存の設定を捨てるくらいなら止まる。フックが 1 つ消えれば、
+  // そのリポジトリのゲートが黙って無効になる。
+  it("読めない settings.json では 1 つも書かずに落ちる", () => {
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(join(root, ".claude/settings.json"), '{\n  // コメント\n  "hooks": {}\n}\n');
+    expect(() => init(root)).toThrow(/settings.json が JSON として読めません/);
+    expect(existsSync(join(root, "gauntlet.config.json"))).toBe(false);
+  });
+
+  // 原因（読めない）だけでは直せない。直し方まで言えているかを見る —
+  // 助言の一文は mutation で消しても誰も気づかなかった。
+  it("読めない settings.json では直し方まで言う", () => {
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(join(root, ".claude/settings.json"), "{ broken");
+    expect(() => init(root)).toThrow(
+      /コメントや末尾のカンマがあれば外してください（Claude Code の設定は厳密な JSON です）。$/,
+    );
   });
 
   // 0.14 で起動点を guard（PreToolUse）に集約した。git のフックは配線
@@ -242,7 +310,7 @@ describe("init", () => {
   });
 });
 
-describe("scopeReport", () => {
+describe("measuredFileCount", () => {
   function put(path: string): void {
     mkdirSync(join(root, path, ".."), { recursive: true });
     writeFileSync(join(root, path), "export const x = 1;\n");
@@ -251,52 +319,28 @@ describe("scopeReport", () => {
   it("測る対象の数を返す", () => {
     put("src/a.ts");
     put("src/b.ts");
-    expect(scopeReport(root, INIT_DEFAULTS).matched).toBe(2);
+    expect(measuredFileCount(root, INIT_DEFAULTS)).toBe(2);
   });
 
   // glob はディスクを見るので gitignore された生成物を拾う。duct では Prisma の
-  // 生成クライアントが「測る対象 837」を水増しし、対象外の候補にも生成物が混ざった。
-  it("gitignore された生成物は数えず、対象外の候補にも出さない", () => {
-    writeFileSync(join(root, ".gitignore"), "src/generated.ts\ngen/\n");
+  // 生成クライアントが「測る対象 837」を水増ししていた。
+  it("gitignore された生成物は数えない", () => {
+    writeFileSync(join(root, ".gitignore"), "src/generated.ts\n");
     put("src/real.ts");
     put("src/generated.ts");
-    put("gen/out.ts");
-    const report = scopeReport(root, INIT_DEFAULTS);
-    expect(report.matched).toBe(1);
-    expect(report.unmatched).not.toContain("gen");
+    expect(measuredFileCount(root, INIT_DEFAULTS)).toBe(1);
   });
 
   it("除外されたファイルは数えない", () => {
     put("src/a.ts");
     put("src/a.test.ts");
-    expect(scopeReport(root, INIT_DEFAULTS).matched).toBe(1);
+    expect(measuredFileCount(root, INIT_DEFAULTS)).toBe(1);
   });
 
-  // 測る範囲が狭いまま緑になるのが一番気づけない失敗なので、取りこぼしを見せる。
-  it("対象外に TypeScript がある場所を挙げる", () => {
-    put("src/a.ts");
+  // 0 件は「設定が現実とずれている」という一番大事な信号。
+  it("範囲外しか無ければ 0", () => {
     put("bin/tool.ts");
-    put("scripts/gen.ts");
-    expect(scopeReport(root, INIT_DEFAULTS).unmatched).toEqual(["bin", "scripts"]);
-  });
-
-  it("取りこぼしが無ければ空", () => {
-    put("src/a.ts");
-    expect(scopeReport(root, INIT_DEFAULTS).unmatched).toEqual([]);
-  });
-
-  // 依存や生成物まで挙げると、本当に見るべき取りこぼしが埋もれる。
-  it.each(["node_modules", "dist", "coverage"])("%s は取りこぼしに数えない", (dir) => {
-    put("src/a.ts");
-    put(`${dir}/pkg/index.ts`);
-    expect(scopeReport(root, INIT_DEFAULTS).unmatched).toEqual([]);
-  });
-
-  // ルート直下の .ts はディレクトリではないので、場所として挙げても行動できない。
-  it("ルート直下のファイルは取りこぼしに数えない", () => {
-    put("src/a.ts");
-    put("vitest.config.ts");
-    expect(scopeReport(root, INIT_DEFAULTS).unmatched).toEqual([]);
+    expect(measuredFileCount(root, INIT_DEFAULTS)).toBe(0);
   });
 });
 
