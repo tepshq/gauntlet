@@ -466,6 +466,20 @@ npx skills add で入れられるように」から。**リポジトリを publi
   ファイルを消すのは境界違反。移行の後始末は skill の案内に移した
 - skill の中身を検査するテストは、init の成果物ではなく正本のファイルを読む
 
+**h3 を戻して分かった、この移行がまさに必要だった理由（同日）:**
+
+h3 に残っていたのは **0.13 世代の skill**（`git config core.hooksPath .githooks` を
+指示していた — 0.14 で捨てた手順）と `@teps/gauntlet: ^0.13.0`、`.githooks/pre-commit`。
+今日 0.16.0 の `init` を叩いても、**古い skill が置き去りのまま**だった。
+「init が skill を書く」形の drift が実地で出た形。
+
+- `skills add` の配布は健全と実測: リポジトリに `.claude/skills/gauntlet-setup/`（0.14 世代の
+  コミット済みコピー）と `skills/gauntlet-setup/`（0.17.0 正本）の 2 つがあったが、
+  lockfile の `skillPath` は正本を指していた
+- それでも**自分のリポジトリの化石を撤去**した — `.claude/skills/gauntlet-setup` を
+  正本への symlink（git は mode 120000 で記録）にした。同名の古い文書は次に読む
+  エージェントを誤らせる（duct #567 の教訓の再演）。symlink なら二度と drift しない
+
 ### 0.16.1: coverage provider の版を gauntlet が計算して言う（2026-08-10）
 
 ユーザーの「これがもっともエレガントな解ですか？ インストールがこんなに難しい
