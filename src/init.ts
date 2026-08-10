@@ -120,16 +120,16 @@ gauntlet が devDependencies に無ければ、まず入れる。**コマンド�
 3. **入れるもの**:
    - \`@teps/gauntlet\` — フックが \`npx gauntlet\` で呼ぶ本体
    - \`@stryker-mutator/core\` \`@stryker-mutator/vitest-runner\` — \`full\` の mutation 用
-   - \`@vitest/coverage-v8\` — **既に入っているならそのまま**（自前のテストで \`--coverage\`
-     を使うリポジトリは大抵持っている）。無ければ**リポジトリの vitest とバージョンを
-     揃えて**入れる: \`@vitest/coverage-v8@$(node -p "require('vitest/package.json').version")\`。
-     無指定だと最新が入り、古い vitest と peer 衝突で \`install\` ごと失敗する（duct で実測）。
 
-例（pnpm・coverage-v8 導入済みのリポジトリ）:
+例（pnpm のリポジトリ）:
 
 \`\`\`
 pnpm add -D @teps/gauntlet @stryker-mutator/core @stryker-mutator/vitest-runner
 \`\`\`
+
+**coverage provider（\`@vitest/coverage-v8\`）は手で足さない。** 版を間違えると
+install ごと失敗する（vitest の**完全一致**を peer に要求する）。足りなければ
+\`gauntlet quick\` が**版を埋めた 1 行**を出すので、それをそのまま打つ。
 
 vitest が無いリポジトリは対象外（gauntlet の要件）。無理に足さず、ユーザーに伝えて止まる。
 

@@ -1,5 +1,78 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { RunnerError, toOutcome, vitestArgs } from "./runner.ts";
+import {
+  RunnerError,
+  coverageInstallCommand,
+  installedVitestVersion,
+  requireCoverageProvider,
+  toOutcome,
+  vitestArgs,
+} from "./runner.ts";
+
+/** node_modules の一部を作る。gauntlet は「実際に入っている版」を読むので実物が要る。 */
+function withModules(body: (root: string) => void, modules: Record<string, string> = {}): void {
+  const root = mkdtempSync(join(tmpdir(), "gauntlet-runner-"));
+  try {
+    for (const [name, version] of Object.entries(modules)) {
+      mkdirSync(join(root, "node_modules", name), { recursive: true });
+      writeFileSync(join(root, "node_modules", name, "package.json"), JSON.stringify({ name, version }));
+    }
+    body(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("coverageInstallCommand", () => {
+  // coverage-v8 は vitest の完全一致を peer に要求する（peer vitest@"3.2.7"）。
+  // 版無しで入れると最新が来て ERESOLVE で install ごと失敗する（実測）。
+  it("入っている vitest の版に固定する", () => {
+    expect(coverageInstallCommand("pnpm", "3.2.7")).toBe("pnpm add -D @vitest/coverage-v8@3.2.7");
+  });
+
+  it("PM に合わせた動詞を使う", () => {
+    expect(coverageInstallCommand("npm", "4.1.10")).toBe("npm i -D @vitest/coverage-v8@4.1.10");
+  });
+
+  // vitest が読めないなら版を騙らない。嘘の版を書いたコマンドを渡すより無指定の方がまし。
+  it("版が読めなければ固定しない", () => {
+    expect(coverageInstallCommand("pnpm", null)).toBe("pnpm add -D @vitest/coverage-v8");
+  });
+});
+
+describe("installedVitestVersion", () => {
+  // package.json の指定（^3.2.4）ではなく解決後の実物（3.2.7）が要る。
+  it("node_modules の実物を読む", () => {
+    withModules((root) => expect(installedVitestVersion(root)).toBe("3.2.7"), { vitest: "3.2.7" });
+  });
+
+  it("入っていなければ null", () => {
+    withModules((root) => expect(installedVitestVersion(root)).toBe(null));
+  });
+});
+
+describe("requireCoverageProvider", () => {
+  it("入っていれば通す", () => {
+    withModules((root) => expect(() => requireCoverageProvider(root)).not.toThrow(), {
+      "@vitest/coverage-v8": "3.2.7",
+    });
+  });
+
+  // 無いまま走らせると vitest の「MISSING DEPENDENCY」が下位ツールの生エラーとして出る。
+  // 原因と直し方を先に言う。
+  it("無ければ版込みのコマンドを添えて落とす", () => {
+    withModules(
+      (root) => expect(() => requireCoverageProvider(root)).toThrow(/@vitest\/coverage-v8@3\.2\.7$/),
+      { vitest: "3.2.7" },
+    );
+  });
+
+  it("落ちるときは RunnerError", () => {
+    withModules((root) => expect(() => requireCoverageProvider(root)).toThrow(RunnerError));
+  });
+});
 
 // 道具が落ちたのか違反があったのかを、呼び出し側が型で見分けられる必要がある。
 describe("RunnerError", () => {

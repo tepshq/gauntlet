@@ -439,6 +439,34 @@ CLI に LLM を入れる案は flaky そのもの（走るたびに違う提案�
   止まって発覚。skill の後始末どおり撤去。**「移行の後始末は移行した本人の
   リポジトリから」** — duct #567 の教訓（ドキュメントの化石）の配線版
 
+### 0.16.1: coverage provider の版を gauntlet が計算して言う（2026-08-10）
+
+ユーザーの「これがもっともエレガントな解ですか？ インストールがこんなに難しい
+パッケージは成立しないんじゃ？」から。skill と README が利用者に
+\`@vitest/coverage-v8@$(node -p "require('vitest/package.json').version")\` という
+呪文を書かせていた。
+
+実測で分かった制約の連鎖:
+
+- \`@vitest/coverage-v8@4.1.10\` の peer は **\`vitest: '4.1.10'\` の完全一致**（範囲ではない）
+- **vitest 側は provider を peer 宣言していない**ので npm は必要性を知らず、助けようがない
+- 版無しで入れると最新が来て **ERESOLVE で install ごと失敗**（vitest 3.2.7 の repo で実証）
+- npm が既存 vitest に合わせて古い provider を選び直すことは**しない**（ユーザーの仮説を実測で否定）
+
+**正解の版はリポジトリの中にある**（入っている vitest）ので、gauntlet が読んで
+コマンドを組み立てる — Stryker で既にやっていた形に揃えた。provider が無ければ
+\`quick\` / \`full\` が走る前に版込み・PM 込みの 1 行を出して止まる:
+
+\`\`\`
+coverage provider（@vitest/coverage-v8）が入っていません。次で入れてください:
+  pnpm add -D @vitest/coverage-v8@3.2.7
+\`\`\`
+
+- 版は \`node_modules/vitest/package.json\` から読む（\`^3\` 指定でも実体は 3.2.7 なので、
+  package.json の指定ではなく解決後の実物が要る）
+- これまでは vitest の「MISSING DEPENDENCY」が下位ツールの生エラーとして漏れていた
+- skill と README から呪文を削除。「gauntlet が出す 1 行を打つ」だけになった
+
 ### 0.16.0: init を「骨組みを置く」だけに戻す（2026-08-10）
 
 0.15.1 の直後、ユーザーの「それは意味的に init じゃないよな」「繰り返し

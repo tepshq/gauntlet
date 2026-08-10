@@ -101,14 +101,15 @@ npx @teps/gauntlet init
 
 ```bash
 # パッケージマネージャはリポジトリに合わせる（pnpm なら pnpm add -D）
-V=$(node -p "require('vitest/package.json').version")
-npm i -D @teps/gauntlet "@vitest/coverage-v8@$V" @stryker-mutator/core @stryker-mutator/vitest-runner
+npm i -D @teps/gauntlet @stryker-mutator/core @stryker-mutator/vitest-runner
 npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/**/*.test.ts'
+npx gauntlet quick
 ```
 
-**`@vitest/coverage-v8` はリポジトリの vitest とバージョンを揃えます**（既に入っていれば
-不要）。無指定だと最新が入り、古い vitest のリポジトリでは peer 依存の衝突で
-インストール自体が失敗します（duct で実測）。範囲の決め方・CI・種置きは
+**coverage provider は手で足さないでください。** `@vitest/coverage-v8` はリポジトリの
+vitest と**完全一致**する版でなければ install 自体が失敗します（`peer vitest@"3.2.7"` —
+範囲ではありません）。足りなければ `gauntlet quick` が**版を埋めた 1 行**を出すので、
+それをそのまま打てば済みます。範囲の決め方・CI・種置きは
 `.claude/skills/gauntlet-setup/SKILL.md` に全手順があります。
 
 > 0.0.13 以前を GitHub Packages から入れていたリポジトリは、`.npmrc` の

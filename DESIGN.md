@@ -193,6 +193,21 @@ gauntlet 自身の `vitestArgs` / `strykerArgs` のテストがこれで、呼�
 `NoCoverage` は数えない。それは網羅率の話で CRAP が既に見ている。
 mutation が独自に捕まえるのは「テストは通るが assert が弱い」ケースなので `Survived` だけを違反にする。
 
+### 足りない道具は、版まで埋めた 1 行で言う
+
+gauntlet は依存を勝手に入れない（package.json と lockfile を書き換えるのは侵襲的）。
+代わりに**そのリポジトリでそのまま実行できるコマンド**を出して止まる。パッケージ
+マネージャは `packageManager` フィールドか lockfile から検出する（npm 決め打ちだと
+pnpm のリポジトリで従った人の lockfile が汚れる）。
+
+**版が要るものは gauntlet が計算する。** `@vitest/coverage-v8` は vitest の
+**完全一致**を peer に要求する（`peer vitest@"3.2.7"` — 範囲ではない）。しかも
+vitest 側は provider を peer 宣言していないので npm は必要性すら知らず、版無しで
+入れると最新が来て ERESOLVE で install ごと失敗する（実測）。正解の版は
+「node_modules に入っている vitest」なので gauntlet が読める — **読めるものを
+人間に `node -p` で取り出させない**。同じ理由で、下位ツールの生エラー
+（vitest の `MISSING DEPENDENCY`）を漏らさず、先に原因と直し方を言う。
+
 ### 測れていないときは緑にしない
 
 設定が現実とずれると、gauntlet は黙って「違反ゼロ」を報告する。走らなかったゲートが

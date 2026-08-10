@@ -6,10 +6,11 @@
  * glob キー付きの設定には効かないので、テスト結果と coverage を別経路で取る。
  */
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { capture } from "../exec.ts";
+import { type PackageManager, detectPackageManager, installDevCommand } from "../package-manager.ts";
 import type { IstanbulCoverage } from "./coverage.ts";
 
 export class RunnerError extends Error {
@@ -17,6 +18,52 @@ export class RunnerError extends Error {
     super(message);
     this.name = "RunnerError";
   }
+}
+
+/** gauntlet が使う coverage provider。v8 はエンジン内蔵の計測で、コードを書き換えない。 */
+const COVERAGE_PROVIDER = "@vitest/coverage-v8";
+
+/**
+ * coverage provider を入れる 1 行。**版を人間に計算させない。**
+ *
+ * `@vitest/coverage-v8` は vitest の**完全一致**を peer に要求する
+ * （`peer vitest@"3.2.7"` — 範囲ではない）。しかも vitest 側は provider を
+ * peer 宣言していないので npm は必要性すら知らず、版無しで入れると最新が来て
+ * ERESOLVE で install ごと失敗する（duct で実測）。
+ *
+ * 正解の版は「入っている vitest」なので gauntlet が読める。読めるものを
+ * 人間に `node -p` で取り出させるのは、判定できることを渡していない。
+ */
+export function coverageInstallCommand(pm: PackageManager, vitestVersion: string | null): string {
+  const spec = vitestVersion === null ? COVERAGE_PROVIDER : `${COVERAGE_PROVIDER}@${vitestVersion}`;
+  return installDevCommand(pm, [spec]);
+}
+
+/** node_modules に**実際に入っている** vitest の版。`^` 解決後の値が要る。 */
+export function installedVitestVersion(root: string): string | null {
+  try {
+    // Stryker disable next-line StringLiteral: encoding を外しても Buffer が
+    // JSON.parse に渡って同じ結果になるため、区別できる振る舞いが無い。
+    const pkg = readFileSync(join(root, "node_modules", "vitest", "package.json"), "utf8");
+    return (JSON.parse(pkg) as { version?: string }).version ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * provider が無いまま走らせない。
+ *
+ * 無いと vitest は「MISSING DEPENDENCY」を吐いて coverage を書かず、gauntlet 側は
+ * 「vitest の実行結果を読めません」という**下位ツールの生エラー**になる。
+ * 原因（provider が無い）と直し方（この 1 行）を先に言う。
+ */
+export function requireCoverageProvider(root: string): void {
+  if (existsSync(join(root, "node_modules", COVERAGE_PROVIDER))) return;
+  const command = coverageInstallCommand(detectPackageManager(root), installedVitestVersion(root));
+  throw new RunnerError(
+    `coverage provider（${COVERAGE_PROVIDER}）が入っていません。次で入れてください:\n  ${command}`,
+  );
 }
 
 /** テスト 1 件分の結果。`fullName` は `describe > it` を連結した全名。 */
@@ -169,6 +216,7 @@ export function runTests(
   projects: readonly string[],
   files: readonly string[] = [],
 ): TestOutcome {
+  requireCoverageProvider(root);
   const outDir = mkdtempSync(join(tmpdir(), "gauntlet-"));
   try {
     // exit code は握り潰す。閾値違反とテスト失敗が区別できないため。
