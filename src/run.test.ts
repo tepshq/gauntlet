@@ -660,14 +660,24 @@ describe("crapCheckViolations", () => {
   it("設定のずれがあれば閾値の違反は出さない", () => {
     const violating: FunctionReport = { ...good, cc: 5, coverage: 0 };
     const broken: AdapterReport = { ...report, functions: [violating] };
-    const violations = crapCheckViolations("quick", broken, new Map([["a.ts", new Set([1])]]), green);
+    const violations = crapCheckViolations("full", broken, new Map([["a.ts", new Set([1])]]), green);
     expect(violations).toHaveLength(1);
     expect(violations[0]!.message).toContain("coverage.include");
   });
 
-  // vitest は `--changed` のとき coverage を変更ファイルだけに絞る。設定だけの差分では
-  // 全テストが選ばれて走るが、変更されたソースが無いので coverage は空が正常。
-  // hono（4795 テスト・触った関数 0）で「噛み合っていない」と誤検知して落ちた。
+  // vitest は `--changed` のとき coverage を変更ファイルだけに絞るので、quick で
+  // 全関数 0% は「変更したファイルにテストが届いていない」だけのことがある。
+  // h3 では新規の未テストファイルを 1 つ足した差分がこれに当たり、正しい CRAP 違反が
+  // 「設定のずれ」に化けて関数名もスコアも消えていた。
+  it("quick では coverage が空でも設定のずれと言わない", () => {
+    const violating: FunctionReport = { ...good, cc: 5, coverage: 0 };
+    const untested: AdapterReport = { ...report, functions: [violating] };
+    const violations = crapCheckViolations("quick", untested, new Map([["a.ts", new Set([1])]]), green);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]!.message).toContain("CRAP 30.0");
+  });
+
+  // 触った関数が 0 の quick も同じ扱い。hono（4795 テスト）で誤検知して落ちた形。
   it("quick で触った関数が 0 なら、coverage が空でも通す", () => {
     const untouched: AdapterReport = { ...report, functions: [{ ...good, coverage: 0 }] };
     expect(crapCheckViolations("quick", untouched, new Map(), { passed: true, total: 4795 })).toEqual([]);

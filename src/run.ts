@@ -20,7 +20,7 @@ import {
 import { analyze, listSourceFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
-import { type SurvivedMutant, runMutation } from "./typescript/mutation.ts";
+import { type SurvivedMutant, requireMutationTools, runMutation } from "./typescript/mutation.ts";
 import { type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
 
@@ -316,10 +316,7 @@ export function crapCheckViolations(
   outcome: Pick<TestOutcome, "passed" | "total">,
 ): Violation[] {
   if (!outcome.passed) return [CRAP_NEEDS_TESTS];
-  // `quick` は部分実行で、vitest は coverage を変更ファイルに絞る。触った関数が
-  // 0 なら coverage は空が正常（hono で実測）。`full` はフル実行なので常に期待する。
-  const coverageExpected = tier === "full" || touchedFunctions(report, changed).length > 0;
-  const faults = measurementFaults(report, outcome.total, coverageExpected);
+  const faults = measurementFaults(report, outcome.total, tier === "full");
   return faults.length === 0 ? crapViolations(tier, report, changed) : faults;
 }
 
@@ -420,6 +417,7 @@ function mutationCheck(
   const targets = inScope.filter((file) => tested.has(file));
   const untested = inScope.length - targets.length;
   return timed("mutation", () => {
+    requireMutationTools(root);
     if (targets.length === 0) return { scope: mutationScopeText(0, 0, untested), violations: [] };
     const { survived, ignored } = runMutation(root, targets, declaredProjects(config));
     return {

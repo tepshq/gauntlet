@@ -157,13 +157,14 @@ describe("measurementFaults", () => {
     expect(measurementFaults(reportOf([bare, covered]), 10, true)).toEqual([]);
   });
 
-  // vitest は `--changed` のとき coverage を変更ファイルだけに絞るので、設定だけの
-  // 差分では「全テストが走って coverage が空」が正常（hono で誤検知して踏んだ）。
-  it("coverage を期待しない実行では、全員 0 でも咎めない", () => {
+  // 部分実行（quick）では、vitest が coverage を変更ファイルだけに絞るので
+  // 全員 0 が正常でありうる。hono では設定だけの差分で、h3 では新規の未テスト
+  // ファイルを足した差分で踏んだ。この条件に識別力が無いので判定しない。
+  it("部分実行では、全員 0 でも咎めない", () => {
     expect(measurementFaults(reportOf([bare, bare]), 4795, false)).toEqual([]);
   });
 
-  it("coverage を期待しなくても、対象が空なのは設定の誤りとして言う", () => {
+  it("部分実行でも、対象が空なのは設定の誤りとして言う", () => {
     expect(measurementFaults(reportOf([]), 10, false)).toHaveLength(1);
   });
 });

@@ -31,13 +31,15 @@ function violatesThreshold(fn: FunctionReport): boolean {
  * 設定が現実とずれると、gauntlet は「違反ゼロ」を報告する。走らなかったゲートが
  * 緑に見えるのは、設計で `flaky` として避けた形そのもの。落として理由を言う。
  *
- * `coverageExpected` — vitest は `--changed` のとき coverage を**変更ファイルだけに絞る**
- * （hue の実測。unchanged は丸ごと欠落する）。だから触った関数が 0 の `quick` では、
- * テストが何千件走っても coverage が空なのが正常で、設定のずれとは区別できる。
- * フル実行の `full` では常に true（hono で誤検知して入れた。設定だけの差分で全テストが
- * 選ばれ、正しく空の coverage を「噛み合っていない」と誤認して落ちた）。
+ * **判定できるのはフル実行（`full`）だけ。** vitest は `--changed` のとき coverage を
+ * 変更ファイルだけに絞る（hue の実測。unchanged は丸ごと欠落する）ので、`quick` では
+ * 「変更したファイルがテストに触られていない」だけで全関数 0% になる。新規の未テスト
+ * ファイルを 1 つ足した差分がまさにそれで、正しい CRAP 違反が「設定のずれ」に化けて
+ * 関数名もスコアも消えていた（h3 で実測）。`quick` のこの条件には識別力が無い。
+ *
+ * 配線が壊れていれば `full` が落とす。`quick` では網羅率 0% の違反として出る。
  */
-export function measurementFaults(report: AdapterReport, testsRan: number, coverageExpected: boolean): Violation[] {
+export function measurementFaults(report: AdapterReport, testsRan: number, fullRun: boolean): Violation[] {
   if (report.functions.length === 0) {
     return [
       {
@@ -47,9 +49,9 @@ export function measurementFaults(report: AdapterReport, testsRan: number, cover
       },
     ];
   }
-  // テストが走ったのに 1 関数も覆われていないなら、coverage の設定が噛み合っていない。
+  // 全テストが走ったのに 1 関数も覆われていないなら、coverage の設定が噛み合っていない。
   // 「テストが無いから 0%」と区別がつかないまま全関数を違反にしてはいけない。
-  if (coverageExpected && testsRan > 0 && report.functions.every((fn) => fn.coverage === 0)) {
+  if (fullRun && testsRan > 0 && report.functions.every((fn) => fn.coverage === 0)) {
     return [
       {
         message:

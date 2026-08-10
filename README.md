@@ -102,8 +102,8 @@ skill が更新されたら `npx skills update` で追随できます。
 
 ```bash
 # パッケージマネージャはリポジトリに合わせる（pnpm なら pnpm add -D）
-# 版は npm view で調べて明示する — pnpm に latest を解決させると、キャッシュが古いまま
-# 何ヶ月も前の版が入ることがあります（実測）。
+# 版は npm view で調べて明示する — pnpm は既定で公開から 24 時間経った版しか選ばないので、
+# latest を任せると古い版が黙って入ります（minimumReleaseAge。実測）。
 npm i -D "@teps/gauntlet@$(npm view @teps/gauntlet version)" @stryker-mutator/core @stryker-mutator/vitest-runner
 npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/**/*.test.ts'
 npx gauntlet quick

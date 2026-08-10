@@ -471,6 +471,37 @@ CLI に LLM を入れる案は flaky そのもの（走るたびに違う提案�
 - baseline の `lint` キーは `loadBaseline` が読まなくなったので **`full` が保存する
   時点で自動的に落ちた**（guard を回避せずに移行できる形）
 
+### 0.18.1: h3 のパイロット報告 6 件（2026-08-10）
+
+h3 で `/gauntlet-setup` を最後まで走らせたエージェントからの報告。**pnpm リポジトリで
+初めて回した回**で、npm 前提の穴が 2 つ出た。
+
+- **［高］pnpm では mutation が必ず落ちる。** Stryker の既定 `plugins: ["@stryker-mutator/*"]`
+  は自分自身の隣を readdir する（npm / yarn のフラットな `node_modules` 前提）。pnpm の
+  分離レイアウトではそこに api / core / instrumenter / util しか無く、vitest-runner は
+  別の仮想ストアに置かれるので**原理的に見つからない**。
+  → 対象リポジトリ基点の `createRequire().resolve()` で実体を解決し、`plugins` に
+  絶対パスで渡す（絶対パスは glob に入らずそのまま読まれる）
+- **［高］その故障が導入作業では見えない。** 種置きの時点では差分にソースが無いので
+  `✓ mutation (0ms) 変異対象 0 ファイル` で緑になり、**src を触る最初の PR まで隠れる**。
+  → 対象 0 でも道具の解決だけは先に行う（`requireMutationTools`）。道具の有無は
+  対象の有無と無関係
+- **［中］正しい CRAP 違反が「coverage 設定のずれ」に化けていた。** `quick` の全関数 0% は
+  「変更したファイルにテストが届いていない」でも起きる（新規の未テストファイルを 1 つ
+  足した差分がまさにそれ）。fault が出ると閾値の判定を飛ばすので、**関数名もスコアも
+  消える**。h3 の coverage は健全（373/412 被覆）だった。
+  → fault 判定はフル実行（`full`）にだけ当てる。`quick` のこの条件には識別力が無い
+  （hono で入れた `触った関数 > 0` の条件が、まさにこれを踏んでいた）
+- **［中］`full` が実行ビットを落とす。** `--inPlace` の書き戻しで mode が失われ、
+  `bin/h3.mjs` が 755 → 644 に。→ 変異対象の mode を控えて `finally` で戻す
+- **［低］skill の「版ずれ」の説明が実態と違った。** 原因はキャッシュではなく pnpm の
+  `minimumReleaseAge`（既定 24 時間の供給網対策）。公開日の差も「何ヶ月」ではなく 31 時間。
+  → skill / README を実態に直した。加えて**版を明示すると pnpm は
+  `pnpm-workspace.yaml` に `minimumReleaseAgeExclude` を書き足す**（無ければ新規に作る）
+  ことを実測で確認し、`--config.minimumReleaseAge=0` を付ければ何も書かれないことも
+  確認した（使い捨てディレクトリで両方再現）。宣言した「触るファイル 3 つ」を守れる
+- **［低］pnpm の workspace root では `-w` が要る**（無いと `ERR_PNPM_ADDING_TO_ROOT`）
+
 ### 0.17.1: `init --help` が範囲を既定値に戻していた（2026-08-10）
 
 h3 で `/gauntlet-setup` を走らせたエージェントの報告から:

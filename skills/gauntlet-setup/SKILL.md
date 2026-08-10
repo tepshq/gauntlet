@@ -34,18 +34,26 @@ description: gauntlet をこのリポジトリに導入する、または測る�
 `pnpm-lock.yaml` / `yarn.lock` / `bun.lock` / `package-lock.json` から判定する）。
 `node_modules` が無ければ、先にリポジトリ自体を install する — 後の手順でテストを走らせる。
 
-**版は `npm view` で調べて明示する。** パッケージマネージャに `latest` を解決させると、
-そのキャッシュが古いまま**何ヶ月も前の版**が入る（実測: latest が 0.18.0 のとき pnpm は
-`pnpm add` も `@latest` も 0.13.0 を返した。npm は 0.18.0）。古い gauntlet は挙動が違い、
-skill を上書きしたり `.githooks/` を作ったりする。版を名指しすればキャッシュを迂回できる:
+**版は `npm view` で調べて明示する。** pnpm は既定で**公開から 24 時間**経った版しか
+選ばない（`minimumReleaseAge`。供給網対策）。だから `latest` を任せると古い版が入り、
+それは黙って起きる（実測: latest が 0.18.0 のとき `pnpm add` も `@latest` も 0.13.0。
+公開日の差は 31 時間）。古い gauntlet は挙動が違い、skill を上書きしたり `.githooks/` を
+作ったりする。
 
 ```
 V=$(npm view @teps/gauntlet version)
-pnpm add -D "@teps/gauntlet@$V" @stryker-mutator/core @stryker-mutator/vitest-runner
+pnpm add -D "@teps/gauntlet@$V" @stryker-mutator/core @stryker-mutator/vitest-runner \
+  --config.minimumReleaseAge=0
 ```
 
+- `--config.minimumReleaseAge=0` — この 1 回だけ 24 時間の待ちを外す。付けないと pnpm は
+  代わりに `pnpm-workspace.yaml` に除外行を書き足す（**無ければ新規に作る**）ので、
+  上で宣言した 3 ファイルの外に変更が出る。書き足されたらユーザーに伝える
+- `-w` — pnpm の workspace root に入れるときに要る（無いと `ERR_PNPM_ADDING_TO_ROOT`）
 - `@teps/gauntlet` — フックが `npx gauntlet` で呼ぶ本体
 - `@stryker-mutator/*` — `full` の mutation 用
+
+npm / yarn / bun に 24 時間の待ちは無い。版の明示だけで足りる。
 
 **coverage provider（`@vitest/coverage-v8`）は gauntlet に任せる。** vitest の**完全一致**の版を
 peer に要求するので、版を選び損ねると install ごと失敗する。足りなければ `gauntlet quick` が

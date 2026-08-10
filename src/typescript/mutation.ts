@@ -7,8 +7,9 @@
  * 実ファイルを書き換えることになるが、mutation は CI でしか走らせないので作業ツリーは使い捨て。
  */
 
-import { existsSync, globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, globSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 import { capture } from "../exec.ts";
 import { detectPackageManager, installDevCommand } from "../package-manager.ts";
@@ -73,11 +74,37 @@ export function ignoredCount(report: MutationReport): number {
 function strykerBin(root: string): string {
   const bin = join(root, "node_modules", ".bin", "stryker");
   if (existsSync(bin)) return bin;
-  const command = installDevCommand(detectPackageManager(root), [
+  throw new RunnerError(`Stryker が入っていません。次で入れてください:\n  ${installMutationDeps(root)}`);
+}
+
+/** mutation に要る 2 つ。どちらが欠けても同じコマンドで足りる。 */
+function installMutationDeps(root: string): string {
+  return installDevCommand(detectPackageManager(root), [
     "@stryker-mutator/core",
     "@stryker-mutator/vitest-runner",
   ]);
-  throw new RunnerError(`Stryker が入っていません。次で入れてください:\n  ${command}`);
+}
+
+/**
+ * vitest-runner の実体を**対象リポジトリから**解決する。
+ *
+ * Stryker の既定 `plugins: ["@stryker-mutator/*"]` は、Stryker 自身の隣を readdir して
+ * プラグインを探す（npm / yarn のフラットな node_modules 前提）。**pnpm の分離レイアウトでは
+ * そこに api / core / instrumenter / util しか無く、vitest-runner は別の仮想ストアに置かれる**
+ * ので、glob では原理的に見つからない（h3 で実測）。絶対パスは glob に入らずそのまま
+ * 読まれるので、実体を名指しする。
+ *
+ * `createRequire` の基点は**対象リポジトリ**。gauntlet 自身の位置から解決すると、
+ * gauntlet は vitest-runner に依存していないので pnpm では見つからない。
+ */
+export function vitestRunnerPlugin(root: string): string {
+  try {
+    return createRequire(join(root, "package.json")).resolve("@stryker-mutator/vitest-runner");
+  } catch {
+    throw new RunnerError(
+      `Stryker の vitest-runner が見つかりません。次で入れてください:\n  ${installMutationDeps(root)}`,
+    );
+  }
 }
 
 /**
@@ -104,6 +131,7 @@ export function strykerConfig(
   files: readonly string[],
   tempDir: string,
   vitestConfigFile: string | null,
+  runnerPlugin: string,
 ): Record<string, unknown> {
   return {
     testRunner: "vitest",
@@ -111,6 +139,10 @@ export function strykerConfig(
     tempDirName: tempDir,
     ignoreStatic: true,
     reporters: ["json"],
+    // 既定の `["@stryker-mutator/*"]` は Stryker 自身の隣を readdir して探す。
+    // pnpm の分離レイアウトでは vitest-runner は別の場所にあり、原理的に見つからない
+    // （npm / yarn のフラットな node_modules 前提の実装）。実体の絶対パスを渡す。
+    plugins: [runnerPlugin],
     mutate: [...files],
     ...(vitestConfigFile === null ? {} : { vitest: { configFile: vitestConfigFile } }),
   };
@@ -169,10 +201,16 @@ export interface GeneratedFile {
  * 組み立ては純粋に行い、書くのは呼び出し側。ここをテストで固定して、
  * プロセスを起動する殻（`runMutation`）には判断を残さない。
  */
-function confFile(confDir: string, tempDir: string, files: readonly string[], wrapper: string | null): GeneratedFile {
+function confFile(
+  confDir: string,
+  tempDir: string,
+  files: readonly string[],
+  wrapper: string | null,
+  runnerPlugin: string,
+): GeneratedFile {
   return {
     path: join(confDir, "stryker.conf.json"),
-    content: JSON.stringify(strykerConfig(files, tempDir, wrapper), null, 2),
+    content: JSON.stringify(strykerConfig(files, tempDir, wrapper, runnerPlugin), null, 2),
   };
 }
 
@@ -183,11 +221,12 @@ export function strykerFiles(
   repoConfig: string | null,
   projects: readonly string[],
   files: readonly string[],
+  runnerPlugin: string,
 ): GeneratedFile[] {
-  if (repoConfig === null) return [confFile(confDir, tempDir, files, null)];
+  if (repoConfig === null) return [confFile(confDir, tempDir, files, null, runnerPlugin)];
   const wrapper = join(confDir, "vitest.config.mjs");
   return [
-    confFile(confDir, tempDir, files, wrapper),
+    confFile(confDir, tempDir, files, wrapper, runnerPlugin),
     { path: wrapper, content: strykerVitestWrapper(repoConfig, root, projects) },
   ];
 }
@@ -198,15 +237,50 @@ export interface MutationOutcome {
   ignored: number;
 }
 
+/**
+ * Stryker が走れる状態かだけを見る。**変異対象が 0 でも呼ぶ。**
+ *
+ * 道具が揃っているかは対象の有無と無関係なのに、0 件で先に帰ると
+ * 「変異対象 0 ファイル」の緑になる。導入直後の種置きは差分にソースが無いので必ずこれを踏み、
+ * 壊れていることが最初の実装 PR まで隠れる（h3 で実測）。
+ */
+export function requireMutationTools(root: string): void {
+  strykerBin(root);
+  vitestRunnerPlugin(root);
+}
+
+/**
+ * 変異させる前のファイルの mode。
+ *
+ * `--inPlace` の書き戻しで実行ビットが落ちる（h3 で `bin/h3.mjs` が 755 → 644）。
+ * gauntlet が対象リポジトリに残してよい変更は無いので、自分で戻す。
+ */
+export function fileModes(root: string, files: readonly string[]): Map<string, number> {
+  const modes = new Map<string, number>();
+  for (const file of files) {
+    const path = join(root, file);
+    if (existsSync(path)) modes.set(path, statSync(path).mode);
+  }
+  return modes;
+}
+
+export function restoreModes(modes: ReadonlyMap<string, number>): void {
+  for (const [path, mode] of modes) {
+    if (existsSync(path)) chmodSync(path, mode);
+  }
+}
+
 /** 変異させる対象が 1 つ以上あることは呼び出し側が保証する。 */
 export function runMutation(root: string, files: readonly string[], projects: readonly string[]): MutationOutcome {
   const bin = strykerBin(root);
+  const runner = vitestRunnerPlugin(root);
+  const modes = fileModes(root, files);
   const tempDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-"));
   // 設定は退避先と別のディレクトリに置く。Stryker は tempDirName の中身を管理する
   // （作成・掃除）ので、同居させると設定ファイルごと消されうる。
   const confDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-conf-"));
   try {
-    const launch = strykerFiles(confDir, tempDir, root, findRepoVitestConfig(root), projects, files);
+    const launch = strykerFiles(confDir, tempDir, root, findRepoVitestConfig(root), projects, files, runner);
     launch.forEach((file) => writeFileSync(file.path, file.content));
     const { combined } = capture(bin, ["run", launch[0]!.path], root);
 
@@ -219,6 +293,7 @@ export function runMutation(root: string, files: readonly string[], projects: re
     cleanLeftovers(root);
     return { survived: survivedFrom(report), ignored: ignoredCount(report) };
   } finally {
+    restoreModes(modes);
     rmSync(tempDir, { recursive: true, force: true });
     rmSync(confDir, { recursive: true, force: true });
   }
