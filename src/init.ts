@@ -115,11 +115,22 @@ const HOOKS = {
  */
 const IGNORED = ["coverage/", "reports/", ".stryker-tmp/", "*.tsbuildinfo"];
 
-/** 既にある行は足さない。既存の .gitignore を並べ替えたり消したりもしない。 */
+/**
+ * 既にある行は足さない。既存の .gitignore を並べ替えたり消したりもしない。
+ *
+ * **末尾の `/` は無視して突き合わせる。** `coverage` は（ディレクトリにも当たるので）
+ * `coverage/` を含む。h3 には元から `coverage` があり、そこへ `coverage/` を足していた —
+ * 動作は同じでも、読んだ人に「なぜ 2 回書くのか」と思わせる（h3 の導入で指摘された）。
+ */
+function samePattern(line: string, entry: string): boolean {
+  const bare = (pattern: string): string => pattern.replace(/\/$/, "");
+  return bare(line.trim()) === bare(entry);
+}
+
 export function mergeGitignore(existing: string | null): string {
   const current = existing ?? "";
   const lines = current.split("\n");
-  const missing = IGNORED.filter((entry) => !lines.some((line) => line.trim() === entry));
+  const missing = IGNORED.filter((entry) => !lines.some((line) => samePattern(line, entry)));
   if (missing.length === 0) return current;
   const head = current === "" ? "" : `${current.replace(/\n+$/, "")}\n\n`;
   return `${head}# gauntlet の出力\n${missing.join("\n")}\n`;

@@ -8,6 +8,20 @@ import { INIT_DEFAULTS, INIT_USAGE, formatInit, helpRequested, init, mergeGitign
 
 // 出力の体裁ごと固定する。部分一致で見ると、改行の数や区切りが崩れても気づかない。
 describe("mergeGitignore", () => {
+  // `coverage` はディレクトリにも当たるので `coverage/` を含む。h3 には元から
+  // `coverage` があり、そこへ `coverage/` を足していた（動作は同じでも二度書きに見える）。
+  it("末尾の / 違いは同じ行として扱う", () => {
+    expect(mergeGitignore("coverage\nreports\n.stryker-tmp\n*.tsbuildinfo\n")).toBe(
+      "coverage\nreports\n.stryker-tmp\n*.tsbuildinfo\n",
+    );
+  });
+
+  // 逆向き（既存が広い方）も同じ。足りないものだけを足す。
+  it("足りないものだけ足す", () => {
+    expect(mergeGitignore("coverage/\n")).toBe(
+      "coverage/\n\n# gauntlet の出力\nreports/\n.stryker-tmp/\n*.tsbuildinfo\n",
+    );
+  });
   // *.tsbuildinfo は既定の型チェック（tsc --noEmit --incremental）の検査キャッシュ。
   const ADDED = "# gauntlet の出力\ncoverage/\nreports/\n.stryker-tmp/\n*.tsbuildinfo\n";
 

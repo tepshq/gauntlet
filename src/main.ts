@@ -6,6 +6,7 @@
  */
 
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { GUARD_MESSAGE, shouldBlock } from "./guard.ts";
 import { INIT_USAGE, formatInit, helpRequested, init, parseInitOptions } from "./init.ts";
 import { describeCrash, doctor, listViolators, run } from "./run.ts";
@@ -67,8 +68,24 @@ const USAGE = `gauntlet <command>
   init    設定とフックを置く（範囲の決め方と CI は skill が案内する）
   guard   PreToolUse フックから。baseline の書き換えを止める
 
+  --version  入っている版を出す
+
 通れば exit 0、違反または gauntlet 自身が走れなければ exit 2。
 `;
+
+/**
+ * 入った版を gauntlet 自身に訊く。**skill の完了条件がこれで確かめられる。**
+ *
+ * pnpm の `minimumReleaseAge` があるので「指定した版と実際に入った版が違う」は
+ * 現実に起きる（latest が 0.18.0 のとき 0.13.0 が入った実測がある）。それを
+ * 確かめる手段が gauntlet 側に無かった。
+ */
+function version(): number {
+  const path = fileURLToPath(new URL("../package.json", import.meta.url));
+  const meta = JSON.parse(readFileSync(path, "utf8")) as { version: string };
+  process.stdout.write(`${meta.version}\n`);
+  return EXIT_PASS;
+}
 
 function help(): number {
   process.stderr.write(USAGE);
@@ -99,6 +116,8 @@ const COMMANDS: Record<string, (argv: readonly string[]) => number> = {
   help,
   "--help": help,
   "-h": help,
+  "--version": version,
+  "-v": version,
 };
 
 function main(argv: readonly string[]): number {

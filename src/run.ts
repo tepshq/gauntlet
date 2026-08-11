@@ -310,6 +310,15 @@ export function mutationScope(changed: Iterable<string>, coveredBy: (tests: stri
  *
  * ファイルは書いたまま残すので、コミットすれば次から噛む。
  */
+/**
+ * 種を置いた回に、**ゲートごとに出す短い印**。
+ *
+ * baseline はゲート横断で 1 ファイルなので、起きた事象は 1 つ。説明を各ゲートに
+ * 出すと、同じ 2 行が crap と duplication に並んで「別々に何かが起きた」と読める
+ * （h3 の導入で指摘された）。説明は `formatResult` が最後に 1 回だけ出す。
+ */
+export const BASELINE_SEEDED: Violation = { message: "許容値の記録を作りました（下記）" };
+
 export const BASELINE_NOT_COMMITTED: Violation = {
   message:
     `${BASELINE_FILENAME} を作りました。git add -A などでコミットしてください` +
@@ -350,7 +359,7 @@ export function applyRatchet(report: ReturnType<typeof analyze>, changed: Map<st
     return [ratchetViolation(report, changed, outcome)];
   }
   if (outcome.kind !== "ok") saveBaseline(report.root, { ...EMPTY_BASELINE, ...baseline, crap: outcome.to });
-  return outcome.kind === "seeded" ? [BASELINE_NOT_COMMITTED] : [];
+  return outcome.kind === "seeded" ? [BASELINE_SEEDED] : [];
 }
 
 /**
@@ -576,7 +585,7 @@ export function duplicationViolations(root: string, actual: number): Violation[]
   // 0.11.0 より前の baseline にはこの欄が無い。種を置いた回は通さない（crap と同じ理由）。
   if (allowed === undefined) {
     saveBaseline(root, { ...EMPTY_BASELINE, ...baseline, duplication: actual });
-    return [BASELINE_NOT_COMMITTED];
+    return [BASELINE_SEEDED];
   }
   const outcome = ratchetNumber(allowed, actual);
   if (outcome.kind === "regressed") {
@@ -611,7 +620,12 @@ export function formatResult(result: TierResult): string {
     return `  ${mark} ${check.name} (${check.durationMs.toFixed(0)}ms)  ${scope}${detail}`;
   });
   const header = `gauntlet ${result.tier}: ${result.status} (${result.durationMs.toFixed(0)}ms)`;
-  return [header, ...lines].join("\n");
+  // 種置きは 1 つの事象。ゲートの数だけ説明を並べない。
+  const seeded = result.checks.some((check) =>
+    check.violations.some((violation) => violation.message === BASELINE_SEEDED.message),
+  );
+  const footer = seeded ? ["", BASELINE_NOT_COMMITTED.message] : [];
+  return [header, ...lines, ...footer].join("\n");
 }
 
 /** 自分で名づけているエラー。メッセージが一行の説明そのものになっている。 */

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -47,7 +47,7 @@ describe("applyRatchet", () => {
   // 毎回いまの状態が許容値になる。落として、コミットさせる。
   it("記録が無ければ種を置いて落とす", () => {
     withRoot((root) => {
-      expect(applyRatchet(violating(3, root), new Map())).toEqual([BASELINE_NOT_COMMITTED]);
+      expect(applyRatchet(violating(3, root), new Map())).toEqual([BASELINE_SEEDED]);
       expect(loadBaseline(root)).toEqual({ crap: 3, mutation: {} });
     });
   });
@@ -61,9 +61,10 @@ describe("applyRatchet", () => {
   });
 
   // 文言はエージェントへのフィードバックそのもの。理由が落ちると
-  // 「コミットしろと言われたから baseline を触る」だけが伝わる。
+  // 「コミットしろと言われたから記録を触る」だけが伝わる。
   // 手段（git add -A）まで言うのは、ファイル名を含む Bash を guard が
   // 止めるから — 名指しの git add は矛盾した 2 つの指示になる。
+  // ゲートごとの行には短い印だけを出し、この説明は formatResult が 1 回だけ出す。
   it("コミットを促す文言を丸ごと固定する", () => {
     expect(BASELINE_NOT_COMMITTED).toEqual({
       message:
@@ -567,6 +568,23 @@ describe("formatResult", () => {
     );
   });
 
+  // baseline はゲート横断で 1 ファイルなので、種置きは 1 つの事象。ゲートごとに
+  // 説明を並べると「crap と duplication で別々に何かが起きた」と読める（h3 で指摘）。
+  it("種置きの説明は最後に 1 回だけ出す", () => {
+    const seeded = (name: CheckResult["name"]): CheckResult => ({
+      ...check(name, "fail"),
+      violations: [BASELINE_SEEDED],
+    });
+    const output = formatResult(result([seeded("crap"), seeded("duplication")]));
+    expect(output.split(BASELINE_NOT_COMMITTED.message).length - 1).toBe(1);
+    expect(output.endsWith(`\n\n${BASELINE_NOT_COMMITTED.message}`)).toBe(true);
+    expect(output.split(BASELINE_SEEDED.message).length - 1).toBe(2);
+  });
+
+  it("種を置いていなければ説明を出さない", () => {
+    expect(formatResult(result([check("crap", "fail", "CRAP 30.0")]))).not.toContain(BASELINE_NOT_COMMITTED.message);
+  });
+
   // scope も複数行になりうる（マッチ 0 件の include）。段に入れないとチェックの木から外れる。
   it("複数行の scope も段に入れる", () => {
     const scoped: CheckResult = { ...check("crap", "pass"), scope: "触った関数 0 / 測る対象 5 関数\n続き" };
@@ -921,7 +939,7 @@ describe("duplicationViolations", () => {
   it("欄が無ければ種を置いて落とす", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 5, mutation: {} });
-      expect(duplicationViolations(root, 1090)).toEqual([BASELINE_NOT_COMMITTED]);
+      expect(duplicationViolations(root, 1090)).toEqual([BASELINE_SEEDED]);
       expect(loadBaseline(root)).toEqual({ crap: 5, mutation: {}, duplication: 1090 });
     });
   });
@@ -929,7 +947,7 @@ describe("duplicationViolations", () => {
   // baseline ファイル自体が無いリポジトリでも落ちずに種を置く。
   it("記録ファイルそのものが無くても種を置いて落とす", () => {
     withRoot((root) => {
-      expect(duplicationViolations(root, 42)).toEqual([BASELINE_NOT_COMMITTED]);
+      expect(duplicationViolations(root, 42)).toEqual([BASELINE_SEEDED]);
       expect(loadBaseline(root)?.duplication).toBe(42);
     });
   });

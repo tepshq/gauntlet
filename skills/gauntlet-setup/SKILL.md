@@ -84,7 +84,8 @@ peer に要求するので、版を選び損ねると install ごと失敗する
 
 vitest が無いリポジトリは対象外（gauntlet の要件）。その場合はユーザーに伝えて止まる。
 
-**完了条件** — `npx gauntlet --help` が動き、入った版が npm の latest と一致していること。
+**完了条件** — `npx gauntlet --version` が npm の latest と一致していること
+（pnpm は 24 時間ルールで古い版を選ぶので、**指定した版が入ったとは限らない**）。
 
 ## 2. リポジトリを読む
 
