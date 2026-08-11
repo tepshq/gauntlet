@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, duplicationViolations, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, formatViolators, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, duplicationViolations, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -242,7 +242,7 @@ describe("mutationTargets", () => {
 });
 
 describe("testsCheck", () => {
-  const green = { passed: true, failed: 0, total: 5, failures: [] };
+  const green = { passed: true, failed: 0, total: 5, failures: [], output: "" };
 
   // 0 件で緑なら、テストが 1 つも選ばれていないということ。件数を出さないと区別できない。
   it("通っていれば pass、走った件数を添える", () => {
@@ -265,6 +265,7 @@ describe("testsCheck", () => {
         { file: "a.test.ts", test: "sum > 足せる", message: "expected 1 to be 2" },
         { file: "b.test.ts", test: null, message: "" },
       ],
+      output: "",
     };
     expect(testsCheck(red, 100)).toEqual({
       name: "tests",
@@ -297,22 +298,50 @@ describe("testViolations", () => {
 
   // vitest が success: false だけ返す形（未処理エラー等）でも、無言で fail にしない。
   it("個別の失敗が取れなければ、確認の仕方を言う", () => {
-    expect(testViolations({ failed: 0, total: 5, failures: [] })).toEqual([
+    expect(testViolations({ failed: 0, total: 5, failures: [], output: "" })).toEqual([
       { message: "0 / 5 件が失敗: 詳細を取れませんでした。npx vitest run で確認してください" },
     ]);
+  });
+
+  // JSON 側は timeout の理由を STACK_TRACE_ERROR に差し替えることがある（h3 で実測）。
+  // 空でないが手掛かりが 0 なので、人向けに印字された方から理由を取る。
+  it("JSON に理由が無ければ、印字された理由を添える", () => {
+    const printed = "⎯⎯ Failed Tests 1 ⎯⎯\n FAIL  test/a.test.ts > t\nError: Test timed out in 5000ms.\n    at x (y.ts:1:1)";
+    const failures = [{ file: "test/a.test.ts", test: "t", message: "Error: STACK_TRACE_ERROR\n    at task (x.js:1:1)" }];
+    const violations = testViolations({ failed: 1, total: 5, failures, output: printed });
+    expect(violations.at(-1)!.message).toBe(
+      "vitest が印字した理由:\n  Failed Tests 1 ⎯⎯\n   FAIL  test/a.test.ts > t\n  Error: Test timed out in 5000ms.",
+    );
+  });
+
+  // 1 件でも理由が無ければ添える。全部揃っているときだけ省く。
+  it("理由がある失敗に混ざっていても添える", () => {
+    const failures = [
+      { file: "a.test.ts", test: "t", message: "expected 1 to be 2" },
+      { file: "b.test.ts", test: "u", message: "" },
+    ];
+    const violations = testViolations({ failed: 2, total: 5, failures, output: "⎯ Failed Tests 2 ⎯\n理由" });
+    expect(violations.at(-1)!.message).toContain("vitest が印字した理由");
+  });
+
+  // 理由が読める普通の失敗で両方出すと、同じ内容が 2 回並ぶ。
+  it("JSON に理由があれば添えない", () => {
+    const failures = [{ file: "a.test.ts", test: "t", message: "expected 1 to be 2" }];
+    const violations = testViolations({ failed: 1, total: 5, failures, output: "⎯⎯ Failed Tests 1 ⎯⎯\n中身" });
+    expect(violations).toHaveLength(2);
   });
 
   // assert が 1 つも落ちずにファイルが落ちる形（import エラー、timeout）では
   // vitest の失敗数が 0 になる。そのまま出すと「何も落ちていない」に読める（h3 で実測）。
   it("失敗 0 件でファイルが落ちていれば、そう数え直す", () => {
-    const violations = testViolations({ failed: 0, total: 1668, failures: [failure(1), failure(2)] });
+    const violations = testViolations({ failed: 0, total: 1668, failures: [failure(1), failure(2)], output: "" });
     expect(violations[0]!.message).toBe("2 ファイルがテストを実行できませんでした（1668 件中の失敗は 0 件）:");
   });
 
   // 大規模なリファクタで 200 件落ちたとき、全部並べると本当の原因が量に埋もれる。
   it("11 件目からは件数に畳む", () => {
     const failures = Array.from({ length: 12 }, (_, index) => failure(index));
-    const violations = testViolations({ failed: 12, total: 20, failures });
+    const violations = testViolations({ failed: 12, total: 20, failures, output: "" });
     expect(violations).toHaveLength(12); // 見出し + 10 件 + 「他 2 件」
     expect(violations[0]!.message).toBe("12 / 20 件が失敗:");
     expect(violations.at(-1)!.message).toBe("…他 2 件の失敗");
@@ -320,7 +349,54 @@ describe("testViolations", () => {
 
   it("上限までは畳まない", () => {
     const failures = Array.from({ length: 10 }, (_, index) => failure(index));
-    expect(testViolations({ failed: 10, total: 10, failures })).toHaveLength(11); // 見出し + 10 件
+    expect(testViolations({ failed: 10, total: 10, failures, output: "" })).toHaveLength(11); // 見出し + 10 件
+  });
+});
+
+describe("lacksReason", () => {
+  it("空なら理由が無い", () => {
+    expect(lacksReason("")).toBe(true);
+  });
+
+  // vitest は timeout の理由を内部の置き換え文字列にすることがある（h3 で実測）。
+  it("置き換え文字列だけなら理由が無い", () => {
+    expect(lacksReason("Error: STACK_TRACE_ERROR\n    at task (x.js:1:1)")).toBe(true);
+  });
+
+  // 1 行でも読める理由があれば、それを見せる方がよい。
+  it("読める行が混ざっていれば理由がある", () => {
+    expect(lacksReason("Error: STACK_TRACE_ERROR\nexpected 1 to be 2")).toBe(false);
+  });
+
+  it("普通の理由は理由がある", () => {
+    expect(lacksReason("expected 1 to be 2")).toBe(false);
+  });
+});
+
+describe("failureReport", () => {
+  it("印字された失敗の節から先を取る", () => {
+    expect(failureReport("前置き\n⎯ Failed Tests 1 ⎯\nFAIL a.test.ts")).toBe("Failed Tests 1 ⎯\nFAIL a.test.ts");
+  });
+
+  // 節が無い出力（vitest が起動すらしなかった等）で切り出すと、前置きを理由として見せてしまう。
+  it("節が無ければ空", () => {
+    expect(failureReport("何も落ちていない出力")).toBe("");
+  });
+});
+
+describe("needsTestsMessage", () => {
+  // `list` はこの 1 行で終わるので、ファイル名が無いと切り分けの起点が無い。
+  it("落ちたファイルを並べる", () => {
+    const failures = [
+      { file: "a.test.ts", test: null, message: "" },
+      { file: "b.test.ts", test: null, message: "" },
+      { file: "a.test.ts", test: "t", message: "" },
+    ];
+    expect(needsTestsMessage(failures)).toBe("テストが落ちているため計測できません: a.test.ts、b.test.ts");
+  });
+
+  it("取れていなければ理由だけ言う", () => {
+    expect(needsTestsMessage([])).toBe(CRAP_NEEDS_TESTS.message);
   });
 });
 
@@ -633,7 +709,7 @@ describe("violatorReport", () => {
   };
   // 覆われた関数を 1 つ混ぜる。全員 0% だと「測れていない」の方に当たる。
   const covered: FunctionReport = { ...violator, cc: 1, coverage: 1 };
-  const green = { passed: true, total: 10 };
+  const green = { passed: true, total: 10, failures: [] };
 
   it("違反を数えて並べる", () => {
     expect(violatorReport(reportOf([violator, covered]), green, 1)).toContain("CRAP 違反 1 件");
@@ -642,9 +718,16 @@ describe("violatorReport", () => {
   // テストが落ちていると coverage が無く、全関数が網羅率 0 に見える。
   // その一覧を出すと、直す相手を丸ごと取り違える。
   it("テストが落ちていれば一覧を出さない", () => {
-    expect(() => violatorReport(reportOf([violator, covered]), { passed: false, total: 10 }, 1)).toThrow(RunnerError);
-    expect(() => violatorReport(reportOf([violator, covered]), { passed: false, total: 10 }, 1)).toThrow(
-      CRAP_NEEDS_TESTS.message,
+    const red = { passed: false, total: 10, failures: [] };
+    expect(() => violatorReport(reportOf([violator, covered]), red, 1)).toThrow(RunnerError);
+    expect(() => violatorReport(reportOf([violator, covered]), red, 1)).toThrow(CRAP_NEEDS_TESTS.message);
+  });
+
+  // `list` の出力はこの 1 行で終わる。ファイル名が無いと切り分けの起点が無い（h3 が指摘）。
+  it("落ちたファイルを名指しする", () => {
+    const red = { passed: false, total: 10, failures: [{ file: "test/a.test.ts", test: null, message: "" }] };
+    expect(() => violatorReport(reportOf([violator, covered]), red, 1)).toThrow(
+      `${CRAP_NEEDS_TESTS.message}: test/a.test.ts`,
     );
   });
 

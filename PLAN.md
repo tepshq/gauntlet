@@ -471,6 +471,25 @@ CLI に LLM を入れる案は flaky そのもの（走るたびに違う提案�
 - baseline の `lint` キーは `loadBaseline` が読まなくなったので **`full` が保存する
   時点で自動的に落ちた**（guard を回避せずに移行できる形）
 
+### 0.19.1: 落ちた理由を default reporter から取る（2026-08-11、#7 の続き）
+
+#7 の 0.19.0 対応は「`message` が空のとき」だけを見ていたが、h3 の実測で**空でないが
+手掛かりが 0**という形が出た。同じ 1 回の実行を 2 つの reporter で見た比較が決定的だった:
+
+| reporter | 見えるもの |
+| --- | --- |
+| default | `Error: Test timed out in 5000ms.` |
+| json（gauntlet が読む側） | `Error: STACK_TRACE_ERROR` + スタックのみ |
+
+vitest は timeout の理由を JSON 側で内部の置き換え文字列にする。判定は JSON のまま、
+**理由が無いときだけ default reporter の出力から取る**形にした（`--reporter=json
+--reporter=default` は併用でき、`--outputFile` は json 側にだけ効くことを実測で確認）。
+両方出すと普通の失敗で同じ内容が 2 回並ぶので、`lacksReason` が真のときだけ添える。
+
+`gauntlet list` も 1 行（`テストが落ちているため計測できません`）で終わっていたので、
+落ちたファイルを名指しするようにした — `quick` / `full` なら直前の tests チェックが
+並べているが、`list` にはそれが無い。
+
 ### 0.19.0: coverage の範囲 / 落ちた理由 / mutation の疎通（2026-08-11、#6 #7 #8）
 
 h3 に 0.18.5 を入れた回の報告 3 件。どれも「赤の意味が伝わらない」形。

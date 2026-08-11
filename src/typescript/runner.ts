@@ -110,6 +110,8 @@ export interface TestOutcome {
   failed: number;
   failures: TestFailure[];
   coverage: IstanbulCoverage;
+  /** vitest が人向けに印字した出力。JSON 側に理由が無いときの最後の手がかり。 */
+  output: string;
 }
 
 /**
@@ -156,7 +158,7 @@ function fileFailures(result: VitestFileResult, root: string): TestFailure[] {
 }
 
 /** vitest の JSON reporter の出力から、判定に使う部分だけ取り出す。 */
-export function toOutcome(report: VitestJsonReport, root: string): Omit<TestOutcome, "coverage"> {
+export function toOutcome(report: VitestJsonReport, root: string): Omit<TestOutcome, "coverage" | "output"> {
   return {
     passed: report.success && report.numFailedTests === 0,
     total: report.numTotalTests,
@@ -197,7 +199,10 @@ export function vitestArgs(
   args.push(...projects.map((name) => `--project=${name}`));
   if (base !== null) args.push(`--changed=${base}`);
   args.push(`--coverage.reportsDirectory=${join(outDir, "coverage")}`);
-  args.push("--reporter=json", `--outputFile=${join(outDir, "result.json")}`);
+  // json は判定用、default は人（とエージェント）向け。**両方要る** — vitest の JSON は
+  // timeout の理由を `STACK_TRACE_ERROR` に差し替えることがあり、機械可読な側だけでは
+  // 「落ちた」以外が伝わらない（h3 で実測）。--outputFile は json 側にだけ効く。
+  args.push("--reporter=json", "--reporter=default", `--outputFile=${join(outDir, "result.json")}`);
   // 位置引数はテストファイルの絞り込み。フラグの後ろに置く。
   args.push(...files);
   return args;
@@ -234,10 +239,10 @@ export function runTests(
     // **テストが落ちていれば coverage は無い。** vitest はテストが落ちると
     // coverage を書き出さない。ここで coverage の不在を報告すると、
     // 本当の原因（テストが落ちた）が見えなくなる。
-    if (!outcome.passed) return { ...outcome, coverage: {} };
+    if (!outcome.passed) return { ...outcome, coverage: {}, output: combined };
 
     const path = join(outDir, "coverage", "coverage-final.json");
-    return { ...outcome, coverage: readJson<IstanbulCoverage>(path, "coverage-final.json", combined) };
+    return { ...outcome, coverage: readJson<IstanbulCoverage>(path, "coverage-final.json", combined), output: combined };
   } finally {
     rmSync(outDir, { recursive: true, force: true });
   }

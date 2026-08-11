@@ -158,17 +158,40 @@ export function condenseFailure(message: string, limit: number): string {
 }
 
 /**
+ * vitest の JSON 側に理由が無いか。
+ *
+ * 空のことも（ファイル自体の失敗）、`STACK_TRACE_ERROR` に差し替わっていることもある
+ * （timeout。h3 で実測。default reporter 側には `Test timed out in 5000ms.` と出ていた）。
+ * どちらも「落ちた」以外が伝わらないので、同じ扱いにする。
+ */
+export function lacksReason(message: string): boolean {
+  const body = condenseFailure(message, DETAIL_LIMIT);
+  return body === "" || body.split("\n").every((line) => line.includes("STACK_TRACE_ERROR"));
+}
+
+/**
  * 落ちたテスト 1 件を、再実行せずに直せる形で。
  *
- * **理由が空でも、次に打つものは必ず出す。** vitest が本文を持たないことがあり
- * （h3 では並列負荷の timeout でファイル単位の `message` が空だった）、
- * 名前だけ出すと「落ちた」以外の情報がゼロになる。手で 10 回近く回す羽目になった。
+ * **理由が無くても、次に打つものは必ず出す。** 名前だけ出すと「落ちた」以外の情報が
+ * ゼロになり、手で切り分ける以外になくなる（h3 では 10 回近く回すことになった）。
  */
 export function testViolation(failure: TestFailure): Violation {
   const title = `${failure.test ?? "(テストファイル自体が失敗)"}  ${failure.file}`;
-  const body = condenseFailure(failure.message, DETAIL_LIMIT);
-  const detail = body === "" ? `理由が出ていません。npx vitest run ${failure.file} で確認してください` : body;
+  const detail = lacksReason(failure.message)
+    ? `理由が出ていません。npx vitest run ${failure.file} で確認してください`
+    : condenseFailure(failure.message, DETAIL_LIMIT);
   return { message: `${title}\n${indented(detail)}`, file: failure.file };
+}
+
+/**
+ * vitest が人向けに印字した失敗の節。**JSON 側に理由が無いときだけ添える。**
+ *
+ * 判定は JSON のまま、理由は default reporter から取る。両方出すと、
+ * 理由が読める普通の失敗では同じ内容が 2 回並ぶ。
+ */
+export function failureReport(output: string): string {
+  const marker = output.indexOf("Failed Tests");
+  return marker === -1 ? "" : condenseFailure(output.slice(marker), DETAIL_LIMIT);
 }
 
 /**
@@ -178,7 +201,7 @@ export function testViolation(failure: TestFailure): Violation {
  * そのとき vitest の数え方では失敗 0 件なので、`0 / 1668 件が失敗` と出て
  * 「何も落ちていない」に読める（h3 で実測）。数え方を変えて言う。
  */
-export function testViolations(outcome: Pick<TestOutcome, "failed" | "total" | "failures">): Violation[] {
+export function testViolations(outcome: Pick<TestOutcome, "failed" | "total" | "failures" | "output">): Violation[] {
   const summary =
     outcome.failed === 0 && outcome.failures.length > 0
       ? `${outcome.failures.length} ファイルがテストを実行できませんでした（${outcome.total} 件中の失敗は 0 件）:`
@@ -188,16 +211,18 @@ export function testViolations(outcome: Pick<TestOutcome, "failed" | "total" | "
   }
   const shown = outcome.failures.slice(0, DETAIL_LIMIT).map(testViolation);
   const rest = outcome.failures.length - DETAIL_LIMIT;
+  const printed = outcome.failures.some((failure) => lacksReason(failure.message)) ? failureReport(outcome.output) : "";
   return [
     { message: summary },
     ...shown,
     ...(rest > 0 ? [{ message: `…他 ${rest} 件の失敗` }] : []),
+    ...(printed === "" ? [] : [{ message: `vitest が印字した理由:\n${indented(printed)}` }]),
   ];
 }
 
 /** テストの実行はチェックの評価より前に済んでいるので、所要時間は外から渡す。 */
 export function testsCheck(
-  outcome: Pick<TestOutcome, "passed" | "failed" | "total" | "failures">,
+  outcome: Pick<TestOutcome, "passed" | "failed" | "total" | "failures" | "output">,
   durationMs: number,
 ): CheckResult {
   const violations = outcome.passed ? [] : testViolations(outcome);
@@ -317,6 +342,18 @@ export function applyRatchet(report: ReturnType<typeof analyze>, changed: Map<st
  * 通さないが、理由はテストだと言う。
  */
 export const CRAP_NEEDS_TESTS: Violation = { message: "テストが落ちているため計測できません" };
+
+/**
+ * `list` が落ちるときの説明。**どのファイルかまで言う。**
+ *
+ * `quick` / `full` なら直前の tests チェックが落ちたテストを並べているが、
+ * `list` はこの 1 行で終わるので、ファイル名が無いと切り分けの起点が無い（h3 が指摘）。
+ */
+export function needsTestsMessage(failures: readonly TestFailure[]): string {
+  const files = [...new Set(failures.map((failure) => failure.file))];
+  if (files.length === 0) return CRAP_NEEDS_TESTS.message;
+  return `${CRAP_NEEDS_TESTS.message}: ${detailLines(files, DETAIL_LIMIT).join("、")}`;
+}
 
 /** gauntlet が走らせる vitest project の宣言。空 = 宣言なし（全部走らせる。DESIGN §2）。 */
 export function declaredProjects(config: GauntletConfig): string[] {
@@ -607,12 +644,12 @@ export function doctor(root: string): void {
  */
 export function violatorReport(
   report: ReturnType<typeof analyze>,
-  outcome: Pick<TestOutcome, "passed" | "total">,
+  outcome: Pick<TestOutcome, "passed" | "total" | "failures">,
   allowed: number | null,
   dead: readonly DeadInclude[] = [],
 ): string {
   // 測れていない状態で「違反 0 件」と言わない。`full` と同じ検査を先に通す。
-  if (!outcome.passed) throw new RunnerError(CRAP_NEEDS_TESTS.message);
+  if (!outcome.passed) throw new RunnerError(needsTestsMessage(outcome.failures));
   const faults = measurementFaults(report, outcome.total, true, dead);
   if (faults.length > 0) throw new RunnerError(faults[0]!.message);
   return formatViolators(repositoryViolators(report), scopeText(report), allowed);

@@ -102,6 +102,7 @@ describe("vitestArgs", () => {
       "--coverage.reporter=json",
       "--coverage.reportsDirectory=/tmp/out/coverage",
       "--reporter=json",
+      "--reporter=default",
       "--outputFile=/tmp/out/result.json",
     ]);
   });
@@ -119,6 +120,7 @@ describe("vitestArgs", () => {
       "--coverage.include=lib/**/*.ts",
       "--coverage.reportsDirectory=/tmp/out/coverage",
       "--reporter=json",
+      "--reporter=default",
       "--outputFile=/tmp/out/result.json",
     ]);
   });
@@ -135,6 +137,7 @@ describe("vitestArgs", () => {
       "--project=dom",
       "--coverage.reportsDirectory=/tmp/out/coverage",
       "--reporter=json",
+      "--reporter=default",
       "--outputFile=/tmp/out/result.json",
     ]);
   });
@@ -150,6 +153,7 @@ describe("vitestArgs", () => {
       "--changed=abc123",
       "--coverage.reportsDirectory=/tmp/out/coverage",
       "--reporter=json",
+      "--reporter=default",
       "--outputFile=/tmp/out/result.json",
     ]);
   });
@@ -166,6 +170,7 @@ describe("vitestArgs", () => {
       "--coverage.reporter=json",
       "--coverage.reportsDirectory=/tmp/out/coverage",
       "--reporter=json",
+      "--reporter=default",
       "--outputFile=/tmp/out/result.json",
       "a.test.ts",
       "b.test.ts",
