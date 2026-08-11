@@ -178,6 +178,15 @@ describe("init", () => {
     expect(skill).toContain("gauntlet.config.json");
   });
 
+  // 除外は「生成物」「e2e」などに今も要る。書いたものが落ちると範囲が黙って広がる。
+  it("渡した除外は config に入れる", () => {
+    init(root, { ...INIT_DEFAULTS, exclude: ["lib/generated/**"] });
+    expect(parseConfig(read("gauntlet.config.json"), "test").source).toEqual({
+      include: ["src/**/*.ts"],
+      exclude: ["lib/generated/**"],
+    });
+  });
+
   // テストは gauntlet が自動で外す（0.20.0）。既定に書いておくと
   // 「テストは自分で外すもの」と読ませてしまうし、空の配列は設定の飾りになる。
   it("除外が無ければ exclude を書かない", () => {

@@ -581,6 +581,13 @@ describe("formatResult", () => {
     expect(output.split(BASELINE_SEEDED.message).length - 1).toBe(2);
   });
 
+  // 1 つのゲートだけが種を置くこともある（記録に欄が増えたとき）。
+  it("種を置いたゲートが 1 つでも説明を出す", () => {
+    const seeded: CheckResult = { ...check("crap", "fail"), violations: [BASELINE_SEEDED] };
+    const output = formatResult(result([seeded, check("duplication", "pass")]));
+    expect(output).toContain(BASELINE_NOT_COMMITTED.message);
+  });
+
   it("種を置いていなければ説明を出さない", () => {
     expect(formatResult(result([check("crap", "fail", "CRAP 30.0")]))).not.toContain(BASELINE_NOT_COMMITTED.message);
   });

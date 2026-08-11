@@ -123,7 +123,7 @@ const IGNORED = ["coverage/", "reports/", ".stryker-tmp/", "*.tsbuildinfo"];
  * 動作は同じでも、読んだ人に「なぜ 2 回書くのか」と思わせる（h3 の導入で指摘された）。
  */
 function samePattern(line: string, entry: string): boolean {
-  const bare = (pattern: string): string => pattern.replace(/\/$/, "");
+  const bare = (pattern: string): string => (pattern.endsWith("/") ? pattern.slice(0, -1) : pattern);
   return bare(line.trim()) === bare(entry);
 }
 
