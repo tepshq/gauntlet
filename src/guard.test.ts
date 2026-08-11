@@ -179,3 +179,45 @@ describe("runsGitCommit の部品", () => {
     expect(runsGitCommit(command)).toBe(false);
   });
 });
+
+// stripQuoted と filter の部品。ここが崩れると「散文を止める」か「無関係な書き換えで止める」へ戻る。
+describe("writesBaseline の部品", () => {
+  // 引用が複数文字を包めること。1 文字しか包めない regex に変異すると、散文が裸に戻って止まる。
+  it("長い散文が単引用で包まれていても通す", () => {
+    const command = "echo 'sed -i や rm で gauntlet.baseline.json を書き換える話'";
+    expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(false);
+  });
+
+  // ファイル名を含む区間だけを見ること。filter を落とすと、別ファイルへの書き換えと
+  // このファイルの読み取りが並んだだけで止まる。
+  it("別ファイルへの書き換えと並んだ読み取りは通す", () => {
+    const command = "rm /tmp/x.txt && cat gauntlet.baseline.json";
+    expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(false);
+  });
+});
+
+// gatesCommit の条件の両翼。片翼が常に真に変異すると、Bash 以外や commit 以外まで検問にかかる。
+describe("gatesCommit の境界", () => {
+  it("Bash 以外は commit を含んでも検問にかけない", () => {
+    expect(gatesCommit({ tool_name: "Edit", tool_input: { command: "git commit -m x" } })).toBe(false);
+  });
+
+  it("tool_input が無くても落ちずに素通しする", () => {
+    expect(gatesCommit({ tool_name: "Bash" })).toBe(false);
+  });
+});
+
+// 空白の量に依存しないこと。\s+ が \s に変異すると、空白 2 つの正当なコミットが素通りする。
+describe("runsGitCommit と空白", () => {
+  it.each([
+    "git  commit",
+    "FOO=bar  git commit",
+    "git -C  /repo commit",
+    "git -C /repo  commit",
+    "git --no-pager  commit",
+    "git -v commit",
+    "\tgit commit",
+  ])("空白が揺れてもコミットに届く: %s", (command) => {
+    expect(runsGitCommit(command)).toBe(true);
+  });
+});

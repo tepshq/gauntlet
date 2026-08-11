@@ -832,6 +832,23 @@ describe("settleBaseline", () => {
     expect(settleBaseline(root, before, false)).toEqual([]);
   });
 
+  // duplication だけが動いた回も、書き戻しと知らせの対象。
+  it("duplication だけの変化も見る", () => {
+    saveBaseline(root, { crap: 5, mutation: {}, duplication: 7 });
+    const notes = settleBaseline(root, before, false);
+    expect(notes).toHaveLength(1);
+    expect(loadBaseline(root)?.duplication).toBe(10);
+  });
+
+  // mutation のキー順は保存のたびに揃うとは限らない（対象の順で書かれる）。
+  it("mutation のキー順が違うだけなら動いていない", () => {
+    const record = { survived: 1, measured: 5 };
+    saveBaseline(root, { crap: 5, mutation: { "b.ts": record, "a.ts": record }, duplication: 10 });
+    expect(settleBaseline(root, { crap: 5, mutation: { "a.ts": record, "b.ts": record }, duplication: 10 }, false)).toEqual(
+      [],
+    );
+  });
+
   // キー順に依存すると、手で編集された記録が「毎回動いた」ことになる。
   it("キー順が違うだけなら動いていない", () => {
     writeFileSync(

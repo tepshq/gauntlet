@@ -26,6 +26,8 @@ const EDITING_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
  * 名指しを避けた書き換え（動的に組んだパスなど）は元から止めようがない。
  */
 function stripQuoted(segment: string): string {
+  // Stryker disable next-line StringLiteral: 置換後を "''" にするか "" にするかで
+  // 判定は変わらない（見るのは裸のファイル名と書き換え構文だけ）。器は読みやすさのため。
   return segment.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
 }
 
@@ -74,6 +76,8 @@ export function writesBaseline(command: string): boolean {
  */
 /** precommit フックが quick を回すべき入力か。判断はここ、プロセスの入出力は main。 */
 export function gatesCommit(input: HookInput): boolean {
+  // Stryker disable next-line StringLiteral: 既定値はコマンドを含まない文字列なら
+  // 何でも同じ（runsGitCommit が false を返す）。空文字は意図の表明。
   return input.tool_name === "Bash" && runsGitCommit(input.tool_input?.command ?? "");
 }
 

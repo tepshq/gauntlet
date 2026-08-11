@@ -165,6 +165,8 @@ export function repoSourceSet(root: string): Set<string> {
  * 負ける（実際に 77 → 80 で落ちた）。clean なツリー = コミット済みの実測だけを記録する。
  */
 export function workingTreeClean(root: string): boolean {
+  // Stryker disable next-line MethodExpression: clean のとき porcelain は完全な空文字を
+  // 返すので trim は保険。外しても観測できる振る舞いは変わらない。
   return git(root, ["status", "--porcelain"]).trim() === "";
 }
 
