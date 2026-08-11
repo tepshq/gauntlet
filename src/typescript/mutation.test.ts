@@ -217,6 +217,12 @@ describe("fileModes / restoreModes", () => {
 });
 
 describe("strykerConfig", () => {
+  // 既定の 5 分は全スイート + perTest coverage には足りない（duct の CI で 5 分 02 秒で
+  // 打ち切られた）。手元では通り CI だけで落ちる、という形になるので必ず外側に置く。
+  it("初回実行の打ち切りを CI job の外側に置く", () => {
+    expect(strykerConfig([], "/tmp/out", null, "/p/x.js").dryRunTimeoutMinutes).toBe(60);
+  });
+
   // 設定は丸ごと固定する。1 つ欠けると duct で踏んだ形（退避先をリポジトリ内に作り、
   // その中のテストを vitest が拾って coverage 解析が壊れる）や、h3 で踏んだ形
   // （plugins 未指定だと Stryker が自分の隣を readdir するので、pnpm の分離レイアウトでは
@@ -225,6 +231,7 @@ describe("strykerConfig", () => {
     expect(strykerConfig(["a.ts", "b.ts"], "/tmp/out", "/conf/vitest.config.mjs", "/p/vitest-runner/index.js")).toEqual({
       testRunner: "vitest",
       inPlace: true,
+      dryRunTimeoutMinutes: 60,
       tempDirName: "/tmp/out",
       ignoreStatic: true,
       reporters: ["json"],

@@ -154,6 +154,15 @@ export function strykerConfig(
   return {
     testRunner: "vitest",
     inPlace: true,
+    // **初回実行の打ち切りを、誰も選んでいない 5 分（Stryker の既定）に任せない。**
+    // dry run は全スイートを perTest coverage 付きで走らせるので、CI が遅いリポジトリでは
+    // 原理的に収まらない（duct は手元 51 秒に対し CI 9 分 35 秒。5 分 02 秒で打ち切られた）。
+    // しかも**手元では通り CI だけで落ちる**という、他の 4 ゲートには無い形になる。
+    //
+    // gauntlet は 2 つ目の締切を持たない。**止める役は CI job の `timeout-minutes`** で、
+    // それは使う側が選んだ数。ここはその外側に置いて、先に噛まないようにするだけ
+    // （異常なハングを最後に捕まえる網であって、予算ではない）。
+    dryRunTimeoutMinutes: 60,
     tempDirName: tempDir,
     ignoreStatic: true,
     reporters: ["json"],

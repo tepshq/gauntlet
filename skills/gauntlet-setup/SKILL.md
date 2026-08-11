@@ -155,7 +155,10 @@ PR 運用へ移すなら branch protection の話になるが、**private + GitH
 - Node が **22 以上**（gauntlet が `node:fs` の `globSync` を使う）
 - **`timeout-minutes` が足りるか。** `full` は全テスト + mutation なので、既存の job の
   timeout では足りないことがある（duct は 15 分で打ち切られ、`full` 単体で 10 分 30 秒、
-  mutation が走る差分では 30 分でも足りなかった）
+  mutation が走る差分では 30 分でも足りなかった）。**mutation が走る回の見積もりは
+  「全テストの所要 × 数回」** — 変異を仕込む前に全スイートを 1 回走らせ、そのあと
+  変異ごとに関係するテストだけを回すため。CI のテストが 10 分なら、mutation 込みで
+  30 分は見ておく
 
 gauntlet は宣言されたテストしか走らせないので、**`full` の job にサービスコンテナや DB の
 初期化は要らない**。宣言外のテストは既存 CI の job がそのまま担う。
