@@ -19,7 +19,7 @@ import {
   type Violation,
   tierStatus,
 } from "./tier.ts";
-import { analyze, listSourceFiles } from "./typescript/adapter.ts";
+import { analyze, deadIncludes, listSourceFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
 import { type SurvivedMutant, requireMutationTools, runMutation } from "./typescript/mutation.ts";
@@ -88,7 +88,7 @@ export function runTier(root: string, tier: TierName): TierResult {
   const runners: Record<CheckName, () => CheckResult> = {
     typecheck: () => typecheck(root, config),
     tests: () => testsCheck(outcome, testsMs),
-    crap: () => crapCheck(tier, report, changed, outcome),
+    crap: () => crapCheck(tier, report, changed, outcome, deadIncludes(root, config.source)),
     mutation: () =>
       mutationCheck(
         root,
@@ -316,9 +316,10 @@ export function crapCheckViolations(
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
   outcome: Pick<TestOutcome, "passed" | "total">,
+  dead: readonly string[] = [],
 ): Violation[] {
   if (!outcome.passed) return [CRAP_NEEDS_TESTS];
-  const faults = measurementFaults(report, outcome.total, tier === "full");
+  const faults = measurementFaults(report, outcome.total, tier === "full", dead);
   return faults.length === 0 ? crapViolations(tier, report, changed) : faults;
 }
 
@@ -345,9 +346,10 @@ function crapCheck(
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
   outcome: Pick<TestOutcome, "passed" | "total">,
+  dead: readonly string[],
 ): CheckResult {
   return timed("crap", () => ({
-    violations: crapCheckViolations(tier, report, changed, outcome),
+    violations: crapCheckViolations(tier, report, changed, outcome, dead),
     scope: crapScope(report, changed),
   }));
 }
@@ -545,10 +547,11 @@ export function violatorReport(
   report: ReturnType<typeof analyze>,
   outcome: Pick<TestOutcome, "passed" | "total">,
   allowed: number | null,
+  dead: readonly string[] = [],
 ): string {
-  // 測れていない状態で「違反 0 件」と言わない。`full` と同じ 2 つの検査を先に通す。
+  // 測れていない状態で「違反 0 件」と言わない。`full` と同じ検査を先に通す。
   if (!outcome.passed) throw new RunnerError(CRAP_NEEDS_TESTS.message);
-  const faults = measurementFaults(report, outcome.total, true);
+  const faults = measurementFaults(report, outcome.total, true, dead);
   if (faults.length > 0) throw new RunnerError(faults[0]!.message);
   return formatViolators(repositoryViolators(report), scopeText(report), allowed);
 }
@@ -557,5 +560,10 @@ export function violatorReport(
 export function listViolators(root: string): string {
   const config = loadConfig(root);
   const outcome = runTests(root, null, declaredProjects(config));
-  return violatorReport(analyze(root, config, outcome.coverage), outcome, loadBaseline(root)?.crap ?? null);
+  return violatorReport(
+    analyze(root, config, outcome.coverage),
+    outcome,
+    loadBaseline(root)?.crap ?? null,
+    deadIncludes(root, config.source),
+  );
 }

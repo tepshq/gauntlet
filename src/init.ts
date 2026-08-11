@@ -275,7 +275,8 @@ const INIT_FLAGS = ["default-branch", "include", "exclude", "test-projects"] as 
 export const INIT_USAGE = `gauntlet init [フラグ]
 
   --default-branch=<branch>       差分の起点になるブランチ
-  --include=<glob,glob>           測る対象
+  --include=<glob,glob>           測る対象（ファイルを名指しする形で。
+                                  src ではなく 'src/**/*.ts'）
   --exclude=<glob,glob>           測る対象から外すもの
   --test-projects=<name,name>     走らせる vitest project の宣言（省略 = 全部）
 

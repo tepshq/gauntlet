@@ -39,7 +39,24 @@ function violatesThreshold(fn: FunctionReport): boolean {
  *
  * 配線が壊れていれば `full` が落とす。`quick` では網羅率 0% の違反として出る。
  */
-export function measurementFaults(report: AdapterReport, testsRan: number, fullRun: boolean): Violation[] {
+export function measurementFaults(
+  report: AdapterReport,
+  testsRan: number,
+  fullRun: boolean,
+  deadIncludes: readonly string[] = [],
+): Violation[] {
+  // 他の include が生きていても落とす。そこだけ抜けた範囲で緑になるのが一番危ない。
+  if (deadIncludes.length > 0) {
+    const named = deadIncludes.map((pattern) => `\`${pattern}\``).join("、");
+    return [
+      {
+        message:
+          `gauntlet.config.json の source.include の ${named} は、` +
+          "ディレクトリなど計測できないものにだけマッチしています。" +
+          "`src/**/*.ts` のようにファイルを名指しする形で書いてください",
+      },
+    ];
+  }
   if (report.functions.length === 0) {
     return [
       {

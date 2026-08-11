@@ -16,7 +16,7 @@ import { type IstanbulCoverage, coverageByFunction } from "./coverage.ts";
 export const ADAPTER_NAME = "typescript";
 
 /** 区切りを常に `/` に揃える。Windows と macOS で違うキーになると照合が壊れる。 */
-function toPosix(path: string): string {
+export function toPosix(path: string): string {
   return path.split("\\").join("/");
 }
 
@@ -37,6 +37,25 @@ export function listSourceFiles(root: string, source: GauntletConfig["source"]):
     .map(toPosix)
     .filter((file) => owned.has(file))
     .sort();
+}
+
+/**
+ * **何かにはマッチしているのに、ソースを 1 つも連れてこない** include。
+ *
+ * `--include=src` は glob として成立する（ディレクトリ `src` 自身にマッチする）ので、
+ * 綴りの誤りと同じ「対象 0」になりながら、原因は正反対（パスは実在する）。
+ * しかも include が複数あると**そこだけ黙って抜け落ちて全体は緑**になり、
+ * 範囲が狭いまま通るという、このツールが一番防ぎたい形になる（h3 で実測）。
+ *
+ * **1 つもマッチしないものは咎めない。** `src/**\/*.tsx` のような
+ * 「今は無いが将来 増える」書き方は害が無く、これを落とすと config が窮屈になる。
+ */
+export function deadIncludes(root: string, source: GauntletConfig["source"]): string[] {
+  const owned = repoSourceSet(root);
+  return source.include.filter((pattern) => {
+    const found = globSync(pattern, { cwd: root }).map(toPosix);
+    return found.length > 0 && !found.some((file) => owned.has(file));
+  });
 }
 
 /** coverage-final.json は絶対パスをキーに持つので、リポジトリ相対に直して引けるようにする。 */

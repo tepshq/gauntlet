@@ -171,6 +171,24 @@ describe("measurementFaults", () => {
     expect(measurementFaults(reportOf([covered]), 10, true)).toEqual([]);
   });
 
+  // `src` は実在するので「実在しないパスを指している」は原因を取り違える。
+  // h3 ではその案内どおり綴りとパスを疑って探すことになった。
+  it("ディレクトリ名の include は名指しして直し方を言う", () => {
+    expect(measurementFaults(reportOf([]), 10, true, ["src"])).toEqual([
+      {
+        message:
+          "gauntlet.config.json の source.include の `src` は、" +
+          "ディレクトリなど計測できないものにだけマッチしています。" +
+          "`src/**/*.ts` のようにファイルを名指しする形で書いてください",
+      },
+    ]);
+  });
+
+  // 全体としては測れているので、ここを通すと範囲が黙って狭いまま緑になる。
+  it("測れていても、死んだ include があれば落とす", () => {
+    expect(measurementFaults(reportOf([covered]), 10, true, ["src", "lib"])[0]!.message).toContain("`src`、`lib`");
+  });
+
   // メッセージだけ読んで直せる必要がある。原因の場所を名指しする。
   it("対象が 1 つも無ければ、どこを見るべきか言う", () => {
     expect(measurementFaults(reportOf([]), 10, true)).toEqual([

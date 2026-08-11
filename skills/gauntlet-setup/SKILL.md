@@ -162,6 +162,12 @@ gauntlet は宣言されたテストしか走らせないので、**`full` の j
 npx gauntlet init --default-branch=<branch> --include=<glob,glob> --exclude=<glob,glob> --test-projects=<name,name>
 ```
 
+**`--include` はファイルを名指しする glob で書く。** 3 で合意したのはディレクトリ名だが、
+`--include=src` はディレクトリ自身にマッチして**中の `.ts` を 1 つも連れてこない**
+（glob として成立するので、綴りの誤りと見分けがつかない形で対象が 0 になる。h3 で実測）。
+ディレクトリ 1 つを丸ごとなら `--include='src/**/*.ts'`、複数なら
+`--include='src/**/*.ts,lib/**/*.ts'`。**シェルの展開を避けるため引用符で囲む。**
+
 **範囲を書き換えるのはフラグを渡したときだけ。** フラグ無しの `init` は骨組み（フック・
 .gitignore）の整備だけで、既存の `gauntlet.config.json` はそのまま（出力が「変更なし」と言う）。
 だから gauntlet を上げたあと叩き直しても範囲は消えない。`--test-projects` は project を
