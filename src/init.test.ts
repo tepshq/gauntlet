@@ -283,7 +283,7 @@ describe("init", () => {
       },
       {
         matcher: "Bash",
-        hooks: [{ type: "command", if: "Bash(git commit *)", command: "npx gauntlet quick" }],
+        hooks: [{ type: "command", if: "Bash(git commit *)", command: "npx gauntlet precommit" }],
       },
     ]);
   });

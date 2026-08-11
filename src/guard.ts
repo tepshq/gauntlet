@@ -16,38 +16,70 @@ interface HookInput {
 const EDITING_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 
 /**
- * 内容を変えない git のサブコマンド。
+ * 引用符の中身を落とす。**散文とコマンドを見分けるため。**
  *
- * `add` はステージするだけでファイルを書き換えない。**`restore` / `checkout` は入れない** —
- * 締まった記録を元の緩い値に戻せてしまい、それは「基準を緩める」そのもの。
+ * `gh issue create --body "…ファイル名…"` のように、記録のファイル名が**文章として**
+ * 引用符の中に現れるだけのコマンドを止めていた（issue の本文にファイル名が書けず、
+ * gauntlet 自身の issue が立てられなかった）。パスとして使う名前は裸で書かれるのが
+ * 普通なので、引用の中は見ない。引用されたパスで書く形（`sed -i "…" "<file>"`）は
+ * すり抜けるが、guard は最短経路を塞ぐ柵であって金庫ではない —
+ * 名指しを避けた書き換え（動的に組んだパスなど）は元から止めようがない。
  */
-const READ_ONLY_GIT = /^\s*git\s+(?:(?:-C|-c)\s+\S+\s+|-\S+\s+)*(?:diff|log|show|status|ls-files|blame|add)\b/;
-
-/**
- * その 1 区間が記録を書き換えうるか。
- *
- * リダイレクト（`>` `>>`）があれば、先頭が何であれ書き換え。
- */
-function writes(segment: string): boolean {
-  if (segment.includes(">")) return true;
-  return !READ_ONLY_GIT.test(segment);
+function stripQuoted(segment: string): string {
+  return segment.replace(/'[^']*'/g, "''").replace(/"[^"]*"/g, '""');
 }
 
 /**
- * Bash コマンドが記録を書き換えうるか。**読むだけのものは通す。**
+ * 記録を書き換える形。**動詞（書き換える側）で判定する。**
  *
- * 一律に止めていたので `git diff` も `git add <path>` も止まっていた。前者は読むだけで、
- * 案内していた Read ツールでは差分が見られない。後者はファイルを書き換えない。
- * その結果 `git add -A` が唯一の道になり、**並行作業があると無関係な変更まで
- * 巻き込む**（導入中に実際に踏まれた）。
+ * - リダイレクトは**行き先がこのファイルのときだけ**（`cat <file> > 控え` は読むだけ）
+ * - `sed -i` / `perl -i` はその場で書く
+ * - `tee` は引数に書く
+ * - `rm` / `mv` / `cp` / `truncate` は消す・置き換える
+ * - `git restore` / `git checkout` は**締まった記録を緩い値に戻せる**ので書き換え扱い
+ */
+const WRITE_FORMS = [
+  new RegExp(`>>?\\s*\\S*${BASELINE_FILENAME.replace(/\./g, "\\.")}`),
+  /\b(?:sed|perl)\s+(?:-\S+\s+)*-\w*i/,
+  /\btee\b/,
+  /\b(?:rm|mv|cp|truncate|shred|unlink)\b/,
+  /\bgit\s+(?:(?:-C|-c)\s+\S+\s+|-\S+\s+)*(?:restore|checkout|clean)\b/,
+];
+
+/**
+ * Bash コマンドが記録を書き換えうるか。**書く形のときだけ止める。**
  *
- * 区間ごとに見る — `git diff <path> && sed -i ... <path>` の後半を見逃さないため。
+ * 「ファイル名に触れたら止める」から 2 段階で狭めてきた:
+ * 0.21.0 で読むだけの git を通し（`git add -A` の強制が並行作業を巻き込んだ）、
+ * ここで判定を動詞側に反転した（`gh issue create` の本文に名前が書けなかった）。
+ *
+ * 区間ごとに見る — `git diff <file> && sed -i ... <file>` の後半を見逃さないため。
  */
 export function writesBaseline(command: string): boolean {
   return command
     .split(/&&|\|\||;|\||\n/)
+    .map(stripQuoted)
     .filter((segment) => segment.includes(BASELINE_FILENAME))
-    .some(writes);
+    .some((segment) => WRITE_FORMS.some((form) => form.test(segment)));
+}
+
+/**
+ * その Bash コマンドが `git commit` を含むか。**precommit フックの発火条件。**
+ *
+ * Claude Code のフックの `if: "Bash(git commit *)"` に任せていたが、`if` を知らない
+ * 版の Claude Code は**未知のフィールドを黙って無視して全 Bash で quick を走らせる**。
+ * 作業ツリーが赤い間は復旧の git コマンドまで全部止まり、抜け出す道が
+ * 「ゲートを一時的に無効化する」しか無くなる（実際に踏まれた）。
+ * 発火条件を gauntlet 自身が持てば、どの版でも同じ意味になる。
+ */
+/** precommit フックが quick を回すべき入力か。判断はここ、プロセスの入出力は main。 */
+export function gatesCommit(input: HookInput): boolean {
+  return input.tool_name === "Bash" && runsGitCommit(input.tool_input?.command ?? "");
+}
+
+export function runsGitCommit(command: string): boolean {
+  const form = /^\s*(?:\w+=\S*\s+)*git\s+(?:(?:-C|-c)\s+\S+\s+|-\S+\s+)*commit\b/;
+  return command.split(/&&|\|\||;|\||\n/).some((segment) => form.test(segment));
 }
 
 export function shouldBlock(input: HookInput): boolean {
@@ -58,9 +90,8 @@ export function shouldBlock(input: HookInput): boolean {
   return false;
 }
 
-// 「編集できません」だけだと、指示どおり `git add gauntlet.baseline.json` した
-// エージェントに矛盾した 2 つの指示が並ぶ。止まる条件（ファイル名に触れること）と
-// 正規の経路（Read / git add -A）まで言う。
+// 「編集できません」だけだと、直しにいく先が分からない。止まる条件（書き換える形）と
+// 正規の経路（読む・ステージする・違反そのものを直す）まで言う。
 export const GUARD_MESSAGE =
   `${BASELINE_FILENAME} を書き換える操作は止めています。` +
   `これは許容する違反数の記録で、減らすのは gauntlet が自動で行います。` +

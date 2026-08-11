@@ -7,7 +7,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { GUARD_MESSAGE, shouldBlock } from "./guard.ts";
+import { GUARD_MESSAGE, gatesCommit, shouldBlock } from "./guard.ts";
 import { INIT_USAGE, formatInit, helpRequested, init, parseInitOptions } from "./init.ts";
 import { describeCrash, doctor, listViolators, run } from "./run.ts";
 import { EXIT_BLOCKED, EXIT_PASS, type TierName, exitCodeFor } from "./tier.ts";
@@ -45,6 +45,19 @@ function doctorCommand(): number {
   return EXIT_PASS;
 }
 
+/**
+ * コミットの検問。PreToolUse フックから呼ばれ、`git commit` のときだけ quick を回す。
+ *
+ * 発火条件を Claude Code の `if` に預けない — `if` を知らない版は未知フィールドを
+ * 黙って無視し、**全 Bash コマンドで quick が走る**。作業ツリーが赤い間は復旧の
+ * git コマンドまで止まり、抜け道が「ゲートの一時無効化」しか無くなる（実害あり）。
+ */
+function precommit(): number {
+  const input: unknown = JSON.parse(readFileSync(0, "utf8"));
+  if (!gatesCommit(input as Parameters<typeof gatesCommit>[0])) return EXIT_PASS;
+  return tierCommand("quick")();
+}
+
 /** tier はサブコマンド名で確定する。フックも CI も手動も同じ形で呼ぶ。 */
 function tierCommand(tier: TierName): () => number {
   return () => {
@@ -66,7 +79,8 @@ const USAGE = `gauntlet <command>
   list    baseline が許容している CRAP 違反を全部並べる（ゲートではない）
   doctor  Stryker が vitest を起動できるか確かめる（導入時に mutation は走らないため）
   init    設定とフックを置く（範囲の決め方と CI は skill が案内する）
-  guard   PreToolUse フックから。baseline の書き換えを止める
+  guard      PreToolUse フックから。baseline の書き換えを止める
+  precommit  PreToolUse フックから。git commit のときだけ quick を回す
 
   --version  入っている版を出す
 
@@ -107,6 +121,7 @@ function usageError(argv: readonly string[]): number {
 
 const COMMANDS: Record<string, (argv: readonly string[]) => number> = {
   guard,
+  precommit,
   init: initCommand,
   doctor: doctorCommand,
   list: listCommand,

@@ -88,11 +88,13 @@ const HOOKS = {
       hooks: [{ type: "command", command: "npx gauntlet guard" }],
     },
     {
-      // `if` は Claude Code の permission rule 構文で、コマンドの中身まで見る。
-      // 先頭の変数代入を除き、`&&` で繋いだ各コマンドも `$()` の中も検査するので、
-      // gauntlet 側でコマンドを解析する必要が無い（一度自前で書いて捨てた）。
+      // 発火条件は precommit 自身が stdin の JSON から判定する。`if`（permission rule
+      // 構文）にも同じ条件を書くが、これは対応する版で node の起動を省く最適化 —
+      // **`if` を知らない版の Claude Code は未知フィールドを黙って無視して全 Bash で
+      // 走らせる**ので、正しさを `if` に預けられない（作業ツリーが赤い間、復旧の
+      // git コマンドまで全部止まった実害がある）。
       matcher: "Bash",
-      hooks: [{ type: "command", if: "Bash(git commit *)", command: "npx gauntlet quick" }],
+      hooks: [{ type: "command", if: "Bash(git commit *)", command: "npx gauntlet precommit" }],
     },
   ],
 };
@@ -165,7 +167,11 @@ export function mergeSettings(existing: string | null): string {
   const settings: Settings = existing === null ? {} : parseSettings(existing);
   const hooks = settings.hooks ?? {};
   for (const [event, entries] of Object.entries(HOOKS)) {
-    const current = hooks[event] ?? [];
+    // 0.21 以前が置いた quick 直呼びのフックは撤去する。残すと、`if` を知らない版の
+    // Claude Code で全 Bash に quick が走り続ける（precommit への差し替えが効かない）。
+    const current = (hooks[event] ?? []).filter(
+      (entry) => !JSON.stringify(entry).includes('"npx gauntlet quick"'),
+    );
     const known = new Set(current.map((entry) => JSON.stringify(entry)));
     hooks[event] = [...current, ...entries.filter((entry) => !known.has(JSON.stringify(entry)))];
   }

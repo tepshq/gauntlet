@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, canRecordBaseline, mutationRecords, regressionText, settleBaseline, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -697,17 +698,29 @@ describe("ratchetNote", () => {
   });
 
   it("複数の欄が動けば並べる", () => {
-    expect(ratchetNote(base, { crap: 79, mutation: { "a.ts": 1 }, duplication: 90 })).toEqual([
-      "許容値を締めました（CRAP 違反 80 → 79 / 重複 100 → 90 トークン / mutation 1 ファイル）。" +
+    expect(
+      ratchetNote(base, { crap: 79, mutation: { "a.ts": { survived: 1, measured: 9 } }, duplication: 90 }),
+    ).toEqual([
+      "許容値を締めました（CRAP 違反 80 → 79 / 重複 100 → 90 トークン / " +
+        "mutation を新しく記録: a.ts（生き残り 1 件））。" +
         "git add -A などでコミットしてください",
     ]);
   });
 
   // 動いていないファイルまで数えると、締まった量を大きく見せてしまう。
   it("mutation は動いたファイルだけ数える", () => {
-    const before = { crap: 0, mutation: { "a.ts": 3, "b.ts": 5 }, duplication: 0 };
-    const after = { crap: 0, mutation: { "a.ts": 3, "b.ts": 1 }, duplication: 0 };
+    const record = (survived: number) => ({ survived, measured: 10 });
+    const before = { crap: 0, mutation: { "a.ts": record(3), "b.ts": record(5) }, duplication: 0 };
+    const after = { crap: 0, mutation: { "a.ts": record(3), "b.ts": record(1) }, duplication: 0 };
     expect(ratchetNote(before, after)[0]).toContain("mutation 1 ファイル");
+  });
+
+  // 初回観測がそのまま許容値になるので、コードを別ファイルに移すと生き残りが黙って
+  // 消える。新しい記録は名指しして、人がレビューで気づける形にする。
+  it("新しく記録したファイルは名指しする", () => {
+    const before = { crap: 0, mutation: {}, duplication: 0 };
+    const after = { crap: 0, mutation: { "src/refs.ts": { survived: 4, measured: 18 } }, duplication: 0 };
+    expect(ratchetNote(before, after)[0]).toContain("mutation を新しく記録: src/refs.ts（生き残り 4 件）");
   });
 
   it("読めなくなった記録では黙る", () => {
@@ -725,6 +738,121 @@ describe("ratchetNote", () => {
 });
 
 // 生き残りの数は記録の中にあるので、出すのはただの読み出し（Stryker は回さない）。
+// 作業途中の値で締めると、途中の一番良かった瞬間が基準になり、続きの編集が
+// 自分の未完成状態に負ける（77 → 80 で実際に落ちた）。
+// 書いた後に status を見ると、その書き込み自体がツリーを汚して常に false になる。
+describe("canRecordBaseline", () => {
+  function withRepo(body: (root: string, run: (...args: string[]) => void) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-record-"));
+    const run = (...args: string[]): void => {
+      execFileSync("git", args, { cwd: root, stdio: "ignore" });
+    };
+    try {
+      run("init", "-q");
+      run("config", "user.name", "t");
+      run("config", "user.email", "t@t");
+      writeFileSync(join(root, "a.txt"), "x");
+      run("add", "-A");
+      run("commit", "-qm", "init");
+      body(root, run);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+  const base = { crap: 5, mutation: {}, duplication: 10 };
+
+  it("full かつ clean かつ記録ありなら残せる", () => {
+    withRepo((root) => {
+      expect(canRecordBaseline(root, "full", base)).toBe(true);
+    });
+  });
+
+  // 作業途中の値で締めない（77 → 80 の事故）。
+  it("作業ツリーが汚れていれば残せない", () => {
+    withRepo((root) => {
+      writeFileSync(join(root, "b.txt"), "y");
+      expect(canRecordBaseline(root, "full", base)).toBe(false);
+    });
+  });
+
+  it("quick は記録しない", () => {
+    withRepo((root) => {
+      expect(canRecordBaseline(root, "quick", base)).toBe(false);
+    });
+  });
+
+  it("記録が無い回は settleBaseline の例外に任せる", () => {
+    withRepo((root) => {
+      expect(canRecordBaseline(root, "full", null)).toBe(false);
+    });
+  });
+});
+
+describe("settleBaseline", () => {
+  let root = "";
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "gauntlet-settle-"));
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  const before = { crap: 5, mutation: {}, duplication: 10 };
+  const tightened = { crap: 3, mutation: {}, duplication: 10 };
+
+  it("clean なら残して、締まったことを知らせる", () => {
+    saveBaseline(root, tightened);
+    const notes = settleBaseline(root, before, true);
+    expect(notes[0]).toContain("許容値を締めました（CRAP 違反 5 → 3）");
+    expect(loadBaseline(root)).toEqual(tightened);
+  });
+
+  it("clean でなければ書き戻して、そう言う", () => {
+    saveBaseline(root, tightened);
+    const notes = settleBaseline(root, before, false);
+    expect(notes[0]).toContain("clean でないため記録していません");
+    expect(loadBaseline(root)).toEqual(before);
+  });
+
+  // 種置き（before 無し）は例外 — init 直後は必ず未コミットで、書かないと導入が始まらない。
+  it("種を置いた回は clean でなくても残す", () => {
+    saveBaseline(root, tightened);
+    expect(settleBaseline(root, null, false)).toEqual([]);
+    expect(loadBaseline(root)).toEqual(tightened);
+  });
+
+  it("動いていなければ何も言わない", () => {
+    saveBaseline(root, before);
+    expect(settleBaseline(root, before, false)).toEqual([]);
+  });
+});
+
+describe("mutationRecords", () => {
+  it("実測を記録の形に揃える", () => {
+    expect(mutationRecords(["a.ts"], { "a.ts": 2 }, { "a.ts": 30 })).toEqual({
+      "a.ts": { survived: 2, measured: 30 },
+    });
+  });
+
+  // 報告に無い = 変異が全部殺された（または作られなかった）。0 として記録しないと、
+  // 次回の突き合わせ相手が消える。
+  it("報告に無い対象は 0 と記録する", () => {
+    expect(mutationRecords(["a.ts"], {}, {})).toEqual({ "a.ts": { survived: 0, measured: 0 } });
+  });
+});
+
+describe("regressionText", () => {
+  it("測った数を添えて言う", () => {
+    expect(
+      regressionText({ file: "a.ts", allowed: 39, actual: 41, measuredBefore: 210, measuredNow: 210 }),
+    ).toBe("テストを通り抜ける変異が 39 → 41 に増えました（測った変異 210 → 210）  a.ts");
+  });
+
+  // 旧記録には測った数が無い。「記録なし」と言えば、厳格比較が原因だと読み手が分かる。
+  it("旧記録なら記録が無いことを言う", () => {
+    expect(regressionText({ file: "a.ts", allowed: 2, actual: 3, measuredBefore: null, measuredNow: 12 })).toBe(
+      "テストを通り抜ける変異が 2 → 3 に増えました（測った変異 記録なし → 12）  a.ts",
+    );
+  });
+});
+
 describe("mutationDebt", () => {
   let root = "";
   beforeEach(() => {
@@ -737,11 +865,15 @@ describe("mutationDebt", () => {
   // 0.18.0 で消した lint.ts の記録が自分の baseline に残っていた。並べると
   // 存在しないファイルを探しに行かせる。
   it("もう無いファイルは並べない", () => {
-    expect(mutationDebt(root, { crap: 0, mutation: { "gone.ts": 9 }, duplication: 0 })).toBe("");
+    expect(mutationDebt(root, { crap: 0, mutation: { "gone.ts": { survived: 9, measured: null } }, duplication: 0 })).toBe("");
   });
 
   it("多い順に並べ、どこを見れば分かるかまで言う", () => {
-    const debt = mutationDebt(root, { crap: 0, mutation: { "a.ts": 2, "b.ts": 13 }, duplication: 0 });
+    const debt = mutationDebt(root, {
+      crap: 0,
+      mutation: { "a.ts": { survived: 2, measured: null }, "b.ts": { survived: 13, measured: 60 } },
+      duplication: 0,
+    });
     expect(debt).toBe(
       "\n記録している mutation の生き残り 15 件（2 ファイル）:\n" +
         "    13  b.ts\n" +
@@ -752,7 +884,7 @@ describe("mutationDebt", () => {
 
   // 0 件のファイルは「借金が無い」という記録。並べると読み手を惑わせる。
   it("0 件のファイルは並べない", () => {
-    expect(mutationDebt(root, { crap: 0, mutation: { "a.ts": 0 }, duplication: 0 })).toBe("");
+    expect(mutationDebt(root, { crap: 0, mutation: { "a.ts": { survived: 0, measured: 5 } }, duplication: 0 })).toBe("");
   });
 
   it("記録が無ければ何も出さない", () => {

@@ -67,6 +67,21 @@ export function survivedFrom(report: MutationReport): SurvivedMutant[] {
   );
 }
 
+/**
+ * ファイルごとに「測った変異」の数（Ignored / NoCoverage を除く）。
+ *
+ * 記録（`MutationRecord.measured`）に入り、生き残りの増加が「テストが弱くなった」のか
+ * 「測定集合が広がった」のかを突き合わせ側が区別できるようにする。
+ */
+export function measuredByFile(report: MutationReport): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(report.files).map(([file, entry]) => [
+      file,
+      entry.mutants.filter((mutant) => mutant.status !== "Ignored" && mutant.status !== "NoCoverage").length,
+    ]),
+  );
+}
+
 /** `--ignoreStatic` で測らなかった変異の数。黙って落とさず、件数として出す。 */
 export function ignoredCount(report: MutationReport): number {
   return Object.values(report.files).reduce(
@@ -289,6 +304,8 @@ export interface MutationOutcome {
   ignored: number;
   /** 上流が置けなくて外した mutator。これも測っていない分。 */
   excluded: string[];
+  /** ファイルごとの「測った変異」の数。記録に入り、増加の理由の切り分けに使う。 */
+  measured: Record<string, number>;
 }
 
 /**
@@ -528,6 +545,7 @@ export function runMutation(
     survived: survivedFrom(report),
     ignored: ignoredCount(report),
     excluded,
+    measured: measuredByFile(report),
   };
 }
 

@@ -157,6 +157,17 @@ export function repoSourceSet(root: string): Set<string> {
  * mode を控えても足りない（h3 では `bin/h3.mjs` が 755 → 644 に落ちた）。
  * 何を触るかを gauntlet が知らなくても、git が持っている一覧なら過不足なく戻せる。
  */
+/**
+ * 作業ツリーがコミット済みの状態と一致しているか。
+ *
+ * 許容値の記録を**作業途中の値で**締めないための判定。分割の途中は数字が上下する
+ * のが普通で、途中の一番良かった瞬間が基準になると、続きの編集が自分の未完成状態に
+ * 負ける（実際に 77 → 80 で落ちた）。clean なツリー = コミット済みの実測だけを記録する。
+ */
+export function workingTreeClean(root: string): boolean {
+  return git(root, ["status", "--porcelain"]).trim() === "";
+}
+
 export function executableFiles(root: string): Set<string> {
   const entries = lines(git(root, ["ls-files", "-s"]))
     .filter((line) => line.startsWith("100755"))

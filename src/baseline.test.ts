@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -15,11 +15,12 @@ afterEach(() => {
 });
 
 const put = (contents: string): void => writeFileSync(join(root, BASELINE_FILENAME), contents);
+const read = (): string => readFileSync(join(root, BASELINE_FILENAME), "utf8");
 
 describe("loadBaseline", () => {
   it("記録を読む", () => {
     put('{"crap": 7, "mutation": {"a.ts": 3}}');
-    expect(loadBaseline(root)).toEqual({ crap: 7, mutation: { "a.ts": 3 } });
+    expect(loadBaseline(root)).toEqual({ crap: 7, mutation: { "a.ts": { survived: 3, measured: null } } });
   });
 
   it("mutation が無ければ空とみなす", () => {
@@ -39,8 +40,21 @@ describe("loadBaseline", () => {
   });
 
   it("書いたものを読み戻せる", () => {
-    saveBaseline(root, { crap: 3, mutation: { "a.ts": 1 } });
-    expect(loadBaseline(root)).toEqual({ crap: 3, mutation: { "a.ts": 1 } });
+    saveBaseline(root, { crap: 3, mutation: { "a.ts": { survived: 1, measured: 12 } } });
+    expect(loadBaseline(root)).toEqual({ crap: 3, mutation: { "a.ts": { survived: 1, measured: 12 } } });
+  });
+
+  // 0.22 より前は生き残りの数だけを記録していた。読めなくなると全リポジトリの記録が消える。
+  it("旧形式（数だけ）を読める", () => {
+    put('{"crap": 3, "mutation": {"a.ts": 7}}');
+    expect(loadBaseline(root)?.mutation).toEqual({ "a.ts": { survived: 7, measured: null } });
+  });
+
+  // null を書くと「測って 0 だった」と区別できない。measured が無いまま保存するときは欄ごと省く。
+  it("measured の無い記録は survived だけで書く", () => {
+    saveBaseline(root, { crap: 3, mutation: { "a.ts": { survived: 7, measured: null } } });
+    expect(read()).not.toContain("null");
+    expect(loadBaseline(root)?.mutation).toEqual({ "a.ts": { survived: 7, measured: null } });
   });
 
   // 「無い」と 0 は違う — 無ければ種を置く判定（duplicationViolations）に使う。
@@ -61,41 +75,75 @@ describe("loadBaseline", () => {
 });
 
 describe("ratchetByFile", () => {
-  const allowed = { "a.ts": 2, "b.ts": 5 };
+  const record = (survived: number, measured: number | null = null) => ({ survived, measured });
+  const allowed = { "a.ts": record(2, 10), "b.ts": record(5, 20) };
 
   it("許容数ちょうどなら通す", () => {
-    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": 2 })).toEqual({
+    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(2, 10) })).toEqual({
       regressed: [],
-      updated: { "a.ts": 2, "b.ts": 5 },
+      updated: { "a.ts": record(2, 10), "b.ts": record(5, 20) },
     });
   });
 
   it("増えていたら落とし、記録は上げない", () => {
-    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": 4 })).toEqual({
-      regressed: [{ file: "a.ts", allowed: 2, actual: 4 }],
-      updated: { "a.ts": 2, "b.ts": 5 },
+    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(4, 10) })).toEqual({
+      regressed: [{ file: "a.ts", allowed: 2, actual: 4, measuredBefore: 10, measuredNow: 10 }],
+      updated: { "a.ts": record(2, 10), "b.ts": record(5, 20) },
     });
   });
 
+  // **生き残りの数は単調ではない。** テストを足すと ignoreStatic で外れていた変異が
+  // 測定に入り、触っていないファイルの生き残りが増える（39 → 41 で実際に落ちた）。
+  // 測定集合が広がった分だけ増加を許す。
+  it("測った数が増えた分だけは、生き残りの増加を許す", () => {
+    const outcome = ratchetByFile(allowed, ["a.ts"], { "a.ts": record(4, 12) });
+    expect(outcome.regressed).toEqual([]);
+    expect(outcome.updated["a.ts"]).toEqual(record(4, 12));
+  });
+
+  it("測った数の増加を超える分は落とす", () => {
+    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(5, 12) }).regressed).toEqual([
+      { file: "a.ts", allowed: 2, actual: 5, measuredBefore: 10, measuredNow: 12 },
+    ]);
+  });
+
+  // assert を消す形の攻撃は測った数が変わらない。余裕は生まれず、今までどおり落ちる。
+  it("測った数が同じなら 1 件の増加も許さない", () => {
+    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(3, 10) }).regressed).toHaveLength(1);
+  });
+
+  // 旧記録には測った数が無いので、余裕を作れない。従来どおり厳格に比べる。
+  it("旧記録（measured 無し）は厳格に比べる", () => {
+    const legacy = { "a.ts": record(2) };
+    expect(ratchetByFile(legacy, ["a.ts"], { "a.ts": record(3, 12) }).regressed).toEqual([
+      { file: "a.ts", allowed: 2, actual: 3, measuredBefore: null, measuredNow: 12 },
+    ]);
+  });
+
+  // 旧記録でも、通った回に measured 付きへ書き換わる（記録が徐々に新形式へ移る）。
+  it("通った回に measured を記録する", () => {
+    const legacy = { "a.ts": record(2) };
+    expect(ratchetByFile(legacy, ["a.ts"], { "a.ts": record(1, 12) }).updated["a.ts"]).toEqual(record(1, 12));
+  });
+
   it("減っていたら記録を下げる", () => {
-    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": 1 }).updated["a.ts"]).toBe(1);
+    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(1, 10) }).updated["a.ts"]).toEqual(record(1, 10));
   });
 
   it("生き残りが無くなれば 0 にする", () => {
-    expect(ratchetByFile(allowed, ["a.ts"], {}).updated["a.ts"]).toBe(0);
+    expect(ratchetByFile(allowed, ["a.ts"], {}).updated["a.ts"]).toEqual(record(0, 0));
   });
 
   // 既存リポジトリは導入時点で大量に抱えている。0 から始めると誰も入れられない。
   it("記録が無いファイルは実測値を種にする", () => {
-    expect(ratchetByFile(allowed, ["c.ts"], { "c.ts": 9 })).toEqual({
-      regressed: [],
-      updated: { "a.ts": 2, "b.ts": 5, "c.ts": 9 },
-    });
+    expect(ratchetByFile(allowed, ["c.ts"], { "c.ts": record(9, 30) }).updated["c.ts"]).toEqual(record(9, 30));
   });
 
   // 対象外のファイルまで書き換えると、差分と無関係な記録が動いて追えなくなる。
   it("今回の対象でないファイルの記録は動かさない", () => {
-    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": 0, "b.ts": 99 }).updated["b.ts"]).toBe(5);
+    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(0, 10), "b.ts": record(99, 20) }).updated["b.ts"]).toEqual(
+      record(5, 20),
+    );
   });
 });
 

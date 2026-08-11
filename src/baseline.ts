@@ -21,13 +21,40 @@ export interface Baseline {
    */
   duplication?: number;
   /**
-   * ファイルごとに許容する「生き残った変異」の数。
+   * ファイルごとに許容する「生き残った変異」。
    *
    * CRAP と違って単一の数にできない。mutation は差分に関係するファイルだけを
    * 対象にするので、件数は差分の大きさで変わり、リポジトリ全体の 1 つの数と
    * 比べても意味を持たない。今回の対象になったファイルだけを突き合わせる。
    */
-  mutation: Record<string, number>;
+  mutation: Record<string, MutationRecord>;
+}
+
+/**
+ * ファイル 1 つ分の mutation の記録。
+ *
+ * **生き残りの数は単調ではない。** テストを足すと `--ignoreStatic` で外れていた変異が
+ * 測定に入り、触っていないファイルの生き残りが**増える**（39 → 41 で実際に落ちた。
+ * テストを足したのに赤くなる、というゲートの動機と逆の向き）。だから測った数も残し、
+ * 突き合わせるときに**測定集合が広がった分だけ増加を許す**。assert を消す形の攻撃は
+ * 測った数が変わらないので、余裕は生まれず今までどおり落ちる。
+ */
+export interface MutationRecord {
+  /** 生き残った変異の数。 */
+  survived: number;
+  /** 測った変異の数（Ignored / NoCoverage を除く）。0.22 より前の記録には無い。 */
+  measured: number | null;
+}
+
+/** 0.22 より前は生き残りの数だけを記録していた。読める形は全部受ける。 */
+function toRecord(value: unknown): MutationRecord | null {
+  if (typeof value === "number") return { survived: value, measured: null };
+  if (typeof value === "object" && value !== null && "survived" in value) {
+    const { survived, measured } = value as { survived: unknown; measured?: unknown };
+    if (typeof survived !== "number") return null;
+    return { survived, measured: typeof measured === "number" ? measured : null };
+  }
+  return null;
 }
 
 /**
@@ -41,11 +68,16 @@ export function loadBaseline(root: string): Baseline | null {
   try {
     const data = JSON.parse(readFileSync(join(root, BASELINE_FILENAME), "utf8")) as Partial<Baseline>;
     if (typeof data.crap !== "number") return null;
+    const mutation: Record<string, MutationRecord> = {};
+    for (const [file, value] of Object.entries(data.mutation ?? {})) {
+      const record = toRecord(value);
+      if (record !== null) mutation[file] = record;
+    }
     return {
       crap: data.crap,
       // 無いのと 0 は違う。無ければ欄ごと無し（種を置く判定に使う）。
       ...(typeof data.duplication === "number" ? { duplication: data.duplication } : {}),
-      mutation: data.mutation ?? {},
+      mutation,
     };
   } catch {
     return null;
@@ -53,7 +85,15 @@ export function loadBaseline(root: string): Baseline | null {
 }
 
 export function saveBaseline(root: string, baseline: Baseline): void {
-  writeFileSync(join(root, BASELINE_FILENAME), `${JSON.stringify(baseline, null, 2)}\n`);
+  // measured が無い（旧形式から読んだ）記録は survived だけで書く。null を書くと
+  // 「測って 0 だった」と区別できない。
+  const mutation = Object.fromEntries(
+    Object.entries(baseline.mutation).map(([file, record]) => [
+      file,
+      record.measured === null ? { survived: record.survived } : record,
+    ]),
+  );
+  writeFileSync(join(root, BASELINE_FILENAME), `${JSON.stringify({ ...baseline, mutation }, null, 2)}\n`);
 }
 
 export type RatchetOutcome =
@@ -80,10 +120,15 @@ export function ratchet(baseline: Baseline, actual: number): RatchetOutcome {
 }
 
 export interface FileRatchet {
-  /** 許容数を超えたファイル。 */
-  regressed: { file: string; allowed: number; actual: number }[];
-  /** 対象になったファイルの新しい許容数。対象外のファイルは元のまま残す。 */
-  updated: Record<string, number>;
+  regressed: {
+    file: string;
+    allowed: number;
+    actual: number;
+    /** 旧記録（0.22 より前）は null。突き合わせの条件が読み手に見えるように残す。 */
+    measuredBefore: number | null;
+    measuredNow: number | null;
+  }[];
+  updated: Record<string, MutationRecord>;
 }
 
 /**
@@ -93,17 +138,28 @@ export interface FileRatchet {
  * 大量に抱えているので、0 から始めると誰も入れられない。
  */
 export function ratchetByFile(
-  allowed: Record<string, number>,
+  allowed: Record<string, MutationRecord>,
   scanned: readonly string[],
-  counts: Record<string, number>,
+  counts: Record<string, MutationRecord>,
 ): FileRatchet {
   const regressed: FileRatchet["regressed"] = [];
   const updated = { ...allowed };
   for (const file of scanned) {
-    const actual = counts[file] ?? 0;
+    const actual = counts[file] ?? { survived: 0, measured: 0 };
     const limit = allowed[file];
-    if (limit !== undefined && actual > limit) regressed.push({ file, allowed: limit, actual });
-    else updated[file] = actual;
+    // 測定集合が広がった分（テストが増えて static が測定に入った等）は増加を許す。
+    // 旧記録（measured 無し）には余裕を作れないので、従来どおり厳格に比べる。
+    const slack =
+      limit?.measured == null ? 0 : Math.max(0, (actual.measured ?? 0) - limit.measured);
+    if (limit !== undefined && actual.survived > limit.survived + slack) {
+      regressed.push({
+        file,
+        allowed: limit.survived,
+        actual: actual.survived,
+        measuredBefore: limit.measured,
+        measuredNow: actual.measured,
+      });
+    } else updated[file] = actual;
   }
   return { regressed, updated };
 }

@@ -5,12 +5,12 @@
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { type GauntletConfig, loadConfig } from "./config.ts";
-import { BASELINE_FILENAME, type Baseline, loadBaseline, ratchetByFile, ratchetNumber, saveBaseline } from "./baseline.ts";
+import { BASELINE_FILENAME, type Baseline, type FileRatchet, type MutationRecord, loadBaseline, ratchetByFile, ratchetNumber, saveBaseline } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
 import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, touchedFunctions } from "./gate.ts";
 import { crap } from "./crap.ts";
 import type { FunctionReport } from "./report.ts";
-import { changedLines, mergeBase } from "./git.ts";
+import { changedLines, mergeBase, workingTreeClean } from "./git.ts";
 import {
   type CheckName,
   type CheckResult,
@@ -99,6 +99,7 @@ export function runTier(root: string, tier: TierName, notify: Notify = () => {})
 
   const report = analyze(root, config, outcome.coverage);
   const changed = changedLines(root, base);
+  const canSave = canRecordBaseline(root, tier, before);
 
   const runners: Record<CheckName, () => CheckResult> = {
     typecheck: () => typecheck(root, config),
@@ -136,8 +137,51 @@ export function runTier(root: string, tier: TierName, notify: Notify = () => {})
     status: tierStatus(checks),
     checks,
     durationMs: performance.now() - started,
-    notes: ratchetNote(before, loadBaseline(root)),
+    notes: settleBaseline(root, before, canSave),
   };
+}
+
+/**
+ * この実行が書いた記録を、残すか・書き戻すか決めて、知らせる文を返す。
+ *
+ * **作業途中の値で締めない。** 分割の途中は数字が上下するのが普通で、途中の一番
+ * 良かった瞬間が基準になると、続きの編集が自分の未完成状態に負ける（77 → 80 で
+ * 実際に落ちた）。stash 中の実行が記録を汚して `git stash pop` が衝突する事故も同根。
+ * clean なツリーの実測（= コミット済みの状態そのもの）だけを記録する。
+ *
+ * 例外は種置き（`before` が無い）— init 直後は必ず未コミットなので、そこで
+ * 書かないと導入が始まらない。種の回は「コミットしてください」で落ちるので、
+ * 作業途中の値が黙って基準になることはない。
+ */
+/**
+ * この実行の記録の更新を残してよいか。**チェックが記録を書く前に**判定する —
+ * 書いた後に status を見ると、その書き込み自体がツリーを汚して常に「clean でない」になる。
+ *
+ * 種置き（`before` が無い）はここでは扱わない。`settleBaseline` が例外として残す。
+ */
+export function canRecordBaseline(root: string, tier: TierName, before: Baseline | null): boolean {
+  return tier === "full" && before !== null && workingTreeClean(root);
+}
+
+/** キー順に依存しない比較のための正規形。手で編集された記録は順序が揃っていない。 */
+function canonicalBaseline(baseline: Baseline): string {
+  return JSON.stringify({
+    crap: baseline.crap,
+    duplication: baseline.duplication ?? null,
+    mutation: Object.fromEntries(Object.entries(baseline.mutation).sort()),
+  });
+}
+
+export function settleBaseline(root: string, before: Baseline | null, canSave: boolean): string[] {
+  const after = loadBaseline(root);
+  if (before === null || after === null) return [];
+  if (canonicalBaseline(after) === canonicalBaseline(before)) return [];
+  if (canSave) return ratchetNote(before, after);
+  saveBaseline(root, before);
+  return [
+    "実測は記録より良くなっていましたが、作業ツリーが clean でないため記録していません" +
+      "（作業途中の値を基準にしないため）。コミットしてから full を回すと記録が締まります",
+  ];
 }
 
 /**
@@ -160,9 +204,18 @@ export function ratchetChanges(before: Baseline, after: Baseline): string[] {
     changes.push(`重複 ${before.duplication ?? 0} → ${after.duplication ?? 0} トークン`);
   }
   const files = [...new Set([...Object.keys(before.mutation), ...Object.keys(after.mutation)])].filter(
-    (file) => before.mutation[file] !== after.mutation[file],
+    (file) => JSON.stringify(before.mutation[file]) !== JSON.stringify(after.mutation[file]),
   );
-  if (files.length > 0) changes.push(`mutation ${files.length} ファイル`);
+  // 新しく記録したファイルは名指しする。初回観測がそのまま許容値になるので、コードを
+  // 別ファイルに移すと生き残りが黙って消える — 見えていれば人がレビューで気づける。
+  const seeded = files.filter(
+    (file) => before.mutation[file] === undefined && (after.mutation[file]?.survived ?? 0) > 0,
+  );
+  for (const file of seeded) {
+    changes.push(`mutation を新しく記録: ${file}（生き残り ${after.mutation[file]!.survived} 件）`);
+  }
+  const rest = files.length - seeded.length;
+  if (rest > 0) changes.push(`mutation ${rest} ファイル`);
   return changes;
 }
 
@@ -538,12 +591,35 @@ const EMPTY_BASELINE = { crap: 0, mutation: {} };
  * 0 件を要求すると既存リポジトリはどこも導入できない（gauntlet 自身ですら
  * 生き残りが 53 件あった）。CRAP と同じく「増やさない」だけを課す。
  */
+/** ファイルごとの実測を記録の形に揃える。対象なのに報告に無いファイルは 0（全部殺した）。 */
+export function mutationRecords(
+  targets: readonly string[],
+  survived: Record<string, number>,
+  measured: Record<string, number>,
+): Record<string, MutationRecord> {
+  return Object.fromEntries(
+    targets.map((file) => [file, { survived: survived[file] ?? 0, measured: measured[file] ?? 0 }]),
+  );
+}
+
+/**
+ * 生き残りが増えたことの説明。**測った数を添える。**
+ *
+ * 同じなら「テストが弱くなった」、増えていれば旧記録（余裕を計算できない）が原因なので、
+ * 読み手が増加の理由を区別できる（テストを足しただけで落ちた h3/duct の切り分けに、
+ * この情報が無くて Stryker の単体実行までやらせてしまった）。
+ */
+export function regressionText(entry: FileRatchet["regressed"][number]): string {
+  const measured = `測った変異 ${entry.measuredBefore ?? "記録なし"} → ${entry.measuredNow ?? 0}`;
+  return `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました（${measured}）  ${entry.file}`;
+}
+
 function gateByFile(
   root: string,
   key: "mutation",
   targets: readonly string[],
-  counts: Record<string, number>,
-  describe: (entry: { file: string; allowed: number; actual: number }) => string,
+  counts: Record<string, MutationRecord>,
+  describe: (entry: FileRatchet["regressed"][number]) => string,
 ): Violation[] {
   const baseline = loadBaseline(root) ?? EMPTY_BASELINE;
   const { regressed, updated } = ratchetByFile(baseline[key], targets, counts);
@@ -606,14 +682,13 @@ function mutationCheck(
     // 一番長い段。件数が分かれば時間の見積もりが立つ。書き換えの予告も兼ねる —
     // `--inPlace` は実ファイルを書き換えるので、途中で止めると計装が残る（duct で実測）。
     notify(`mutation 変異対象 ${targets.length} ファイル。作業ツリーを一時的に書き換えます`);
-    const { survived, ignored, excluded } = runMutation(root, targets, declaredProjects(config));
+    const { survived, ignored, excluded, measured } = runMutation(root, targets, declaredProjects(config));
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
       scope: mutationScopeText(targets.length, ignored, untested, excluded),
-      violations: gateByFile(root, "mutation", targets, countByFile(survived), (entry) =>
+      violations: gateByFile(root, "mutation", targets, mutationRecords(targets, countByFile(survived), measured), (entry) =>
         withDetails(
-          // 一覧は「そのファイルの生き残り全部」。記録は数だけなので、どれが増えた分かは特定できない。
-          `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}`,
+          regressionText(entry),
           survived.filter((mutant) => mutant.file === entry.file).map(describeSurvivor),
         ),
       ),
@@ -749,9 +824,9 @@ export function mutationDebt(root: string, baseline: Baseline | null): string {
   // 消えたファイルの記録は残り続ける（ratchet は締める方向にしか動かず、
   // 対象から外れたファイルは二度と触られない）。並べると存在しないファイルを
   // 探しに行かせるので、今あるものだけ出す。
-  const counts = Object.entries(baseline?.mutation ?? {}).filter(
-    ([file, n]) => n > 0 && existsSync(join(root, file)),
-  );
+  const counts = Object.entries(baseline?.mutation ?? {})
+    .map(([file, record]) => [file, record.survived] as const)
+    .filter(([file, n]) => n > 0 && existsSync(join(root, file)));
   if (counts.length === 0) return "";
   const total = counts.reduce((sum, [, n]) => sum + n, 0);
   const worstFirst = [...counts].sort(([, a], [, b]) => b - a);

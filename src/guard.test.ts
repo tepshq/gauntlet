@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GUARD_MESSAGE, shouldBlock } from "./guard.ts";
+import { GUARD_MESSAGE, gatesCommit, runsGitCommit, shouldBlock } from "./guard.ts";
 
 describe("shouldBlock", () => {
   // 塞がなければ「赤 → baseline を緩める → 緑」が最短経路になる。
@@ -41,6 +41,22 @@ describe("GUARD_MESSAGE", () => {
     );
   });
 
+  // ファイル名が**散文として**引用符の中にあるだけのコマンドを止めていた。
+  // issue の本文にファイル名が書けず、gauntlet 自身の issue が立てられなかった。
+  it.each([
+    'gh issue create --title "guard の件" --body "gauntlet.baseline.json を書き換える操作が…"',
+    'git commit -m "gauntlet.baseline.json の許容値を締めた"',
+    "echo 'gauntlet.baseline.json は ratchet の記録'",
+  ])("散文として引用の中にあるだけなら通す: %s", (command) => {
+    expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(false);
+  });
+
+  // 中身を控えに写すのは読むだけ。行き先がこのファイルのときだけ書き換え。
+  it("控えへの書き出しは通す", () => {
+    const command = "cat gauntlet.baseline.json > /tmp/copy.json";
+    expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(false);
+  });
+
   // 一律に止めていたので、読むだけの git まで止まっていた。案内していた Read ツールでは
   // 差分が見られず、`git add -A` が唯一の道になって並行作業を巻き込んだ（導入中に実測）。
   it.each([
@@ -71,5 +87,49 @@ describe("GUARD_MESSAGE", () => {
   it("繋いだコマンドは区間ごとに見る", () => {
     const command = "git diff gauntlet.baseline.json && sed -i '' s/1/2/ gauntlet.baseline.json";
     expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(true);
+  });
+});
+
+// 発火条件を Claude Code の `if` に預けない — `if` を知らない版は未知フィールドを黙って
+// 無視し、全 Bash で quick が走る。赤いツリーでは復旧の git コマンドまで止まった。
+describe("runsGitCommit", () => {
+  it.each([
+    'git commit -m "x"',
+    "git commit",
+    'git -C /repo commit -m "x"',
+    'GIT_AUTHOR_NAME=t git commit -m "x"',
+    'git add -A && git commit -m "x"',
+    'echo msg | git commit -F -',
+  ])("コミットは検問にかける: %s", (command) => {
+    expect(runsGitCommit(command)).toBe(true);
+  });
+
+  it.each([
+    "git status",
+    "git stash pop",
+    "git checkout -- src/a.ts",
+    "npx tsx src/compose.ts",
+    "npm run catalog",
+    'git diff HEAD~1',
+    'echo "git commit の話"',
+    "gh pr create --title 'git commit を止める'",
+  ])("コミット以外は素通しする: %s", (command) => {
+    expect(runsGitCommit(command)).toBe(false);
+  });
+});
+
+// 発火の判断。ここが緩むと、コミットでないコマンドまで quick で止まる（#22 の形に戻る）。
+describe("gatesCommit", () => {
+  it("Bash の git commit だけを検問にかける", () => {
+    expect(gatesCommit({ tool_name: "Bash", tool_input: { command: 'git commit -m "x"' } })).toBe(true);
+  });
+
+  it.each([
+    { tool_name: "Bash", tool_input: { command: "npx tsx src/compose.ts" } },
+    { tool_name: "Edit", tool_input: {} },
+    { tool_name: "Bash", tool_input: {} },
+    {},
+  ])("それ以外は素通しする", (input) => {
+    expect(gatesCommit(input as Parameters<typeof gatesCommit>[0])).toBe(false);
   });
 });
