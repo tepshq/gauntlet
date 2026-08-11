@@ -263,12 +263,24 @@ export function testsCheck(
  *    **触っていない 17 ファイルの生き残り 587 件が baseline に焼かれた**。
  *    最小再現でも `export const B = 2` だけのファイルが文 hit 1 / 関数 hit 0 になる。
  *
+ * 3. **関数 hit だけでも足りない。** `--coverage.include` を渡すようになった（#6）ので、
+ *    テストが 1 度もロードしていないファイルも coverage に載る。duct ではその合成エントリの
+ *    一部が「文は全部 0 なのに関数 hit 1」になり、**変異対象が 18 → 700 ファイルに増えた**。
+ *    最小構成では vitest 3.2.6 でも 4.1.10 でも再現できず、原因は掴めていない。
+ *
+ * **だから両方を要求する。** 実際に走ったなら関数の中の文も走るので、
+ * `関数 hit > 0` かつ `文 hit = 0` は現実の実行では起こりえない — この AND が落とすのは
+ * 計測の作り物だけで、本物を落とすことはない。
+ *
  * 関数を 1 つも持たないファイル（定数だけ）はここに現れないが、そこに作れる変異は
  * static なものだけで、`--ignoreStatic` が最初から測っていない。
  */
 export function coveredFiles(root: string, coverage: IstanbulCoverage): string[] {
   return Object.entries(coverage)
-    .filter(([, entry]) => Object.values(entry.f).some((count) => count > 0))
+    .filter(
+      ([, entry]) =>
+        Object.values(entry.s).some((count) => count > 0) && Object.values(entry.f).some((count) => count > 0),
+    )
     .map(([absolute]) => relative(root, absolute).split("\\").join("/"));
 }
 

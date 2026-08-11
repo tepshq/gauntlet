@@ -1009,6 +1009,13 @@ describe("coveredFiles", () => {
     ).toEqual(["src/run.ts"]);
   });
 
+  // `--coverage.include` を渡すので、ロードされていないファイルも coverage に載る。
+  // duct ではその合成エントリの一部が「文は全部 0 なのに関数 hit 1」になり、
+  // 変異対象が 18 → 700 に増えた。実際に走ったなら文も走るので、この形は作り物。
+  it("文が 1 つも動いていなければ、関数 hit が付いていても触れられていない", () => {
+    expect(coveredFiles("/repo", { "/repo/src/never.ts": entry({ "0": 1 }, { "0": 0, "1": 0 }) })).toEqual([]);
+  });
+
   // **import は top-level を走らせる。** バレルを 1 つ import しただけで、その先の
   // 全ファイルに文の実行が付く（duct では変異対象が 1 → 18 ファイルに膨らみ、
   // 触っていない 17 ファイルの生き残り 587 件が baseline に焼かれた）。
