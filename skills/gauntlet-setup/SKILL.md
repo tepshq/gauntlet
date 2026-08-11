@@ -136,6 +136,18 @@ DB・ネットワーク・実ファイルシステムに触れるテストを探
 
 ### CI はどうなっているか
 
+**PR を使っているかを先に確かめる。** `git log --merges | head` が空なら、既定ブランチへ
+直コミットする運用。そのリポジトリに `on: pull_request` の workflow を置くと**一度も
+走らない** — 設定はあるので済んだように見えるのに、全量検査が事実上存在しない状態になる
+（実際に踏まれた）。
+
+**PR 運用へ移すのを勧める。** `on: push` にもできるが、その `full` は**何も止められない**
+（既にコミット済みのものを事後に検査するだけ）。ゲートのつもりで置いたものが通知に
+なるのは、`pull_request` のまま一度も走らないのと同じ種類の失敗。止める力があるのは
+PR を塞ぐ `full` と、コミットを止める `quick`（フック）の 2 つだけ。
+PR 運用へ移すなら branch protection の話になるが、**private + GitHub Free では ruleset が
+使えない**（`Upgrade to GitHub Pro or make this repository public`）ので、そこも伝える。
+
 `.github/workflows/` を全部見て、**`full` を足せる job** を探す。lint / 型チェック / テストを
 回している job が普通は該当する。条件は 2 つ:
 
@@ -236,6 +248,7 @@ projects: [
 
 ```yaml
 name: gauntlet
+# 直コミット運用なら on: push も置けるが、それは通知であってゲートではない（上記）
 on: pull_request
 
 jobs:

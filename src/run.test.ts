@@ -1,11 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -20,7 +20,7 @@ function check(name: CheckResult["name"], status: CheckResult["status"], message
 }
 
 function result(checks: CheckResult[]): TierResult {
-  return { tier: "quick", status: "fail", checks, durationMs: 34 };
+  return { tier: "quick", status: "fail", checks, durationMs: 34, notes: [] };
 }
 
 describe("applyRatchet", () => {
@@ -685,6 +685,81 @@ describe("scopeText", () => {
 
 // ratchet は数しか記録しないので、`{ "crap": 35 }` から「どの 35 件か」に辿れなかった
 // （h3 の導入報告）。赤を減らす作業に取りかかるための出力。
+// 記録は改善のたびに gauntlet 自身が書き換える。言わないとコミットし忘れ、
+// 次の実行でまた同じ値が置き直される（新規導入で実測）。
+describe("ratchetNote", () => {
+  const base = { crap: 80, mutation: {}, duplication: 100 };
+
+  it("締まった中身を言い、コミットを促す", () => {
+    expect(ratchetNote(base, { ...base, crap: 79 })).toEqual([
+      "許容値を締めました（CRAP 違反 80 → 79）。git add -A などでコミットしてください",
+    ]);
+  });
+
+  it("複数の欄が動けば並べる", () => {
+    expect(ratchetNote(base, { crap: 79, mutation: { "a.ts": 1 }, duplication: 90 })).toEqual([
+      "許容値を締めました（CRAP 違反 80 → 79 / 重複 100 → 90 トークン / mutation 1 ファイル）。" +
+        "git add -A などでコミットしてください",
+    ]);
+  });
+
+  // 動いていないファイルまで数えると、締まった量を大きく見せてしまう。
+  it("mutation は動いたファイルだけ数える", () => {
+    const before = { crap: 0, mutation: { "a.ts": 3, "b.ts": 5 }, duplication: 0 };
+    const after = { crap: 0, mutation: { "a.ts": 3, "b.ts": 1 }, duplication: 0 };
+    expect(ratchetNote(before, after)[0]).toContain("mutation 1 ファイル");
+  });
+
+  it("読めなくなった記録では黙る", () => {
+    expect(ratchetNote(base, null)).toEqual([]);
+  });
+
+  it("変わっていなければ黙る", () => {
+    expect(ratchetNote(base, { ...base })).toEqual([]);
+  });
+
+  // 種を置いた回は別の案内（コミットしてください）が出る。二重に言わない。
+  it("記録が無かった回は黙る", () => {
+    expect(ratchetNote(null, base)).toEqual([]);
+  });
+});
+
+// 生き残りの数は記録の中にあるので、出すのはただの読み出し（Stryker は回さない）。
+describe("mutationDebt", () => {
+  let root = "";
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "gauntlet-debt-"));
+    writeFileSync(join(root, "a.ts"), "");
+    writeFileSync(join(root, "b.ts"), "");
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  // 0.18.0 で消した lint.ts の記録が自分の baseline に残っていた。並べると
+  // 存在しないファイルを探しに行かせる。
+  it("もう無いファイルは並べない", () => {
+    expect(mutationDebt(root, { crap: 0, mutation: { "gone.ts": 9 }, duplication: 0 })).toBe("");
+  });
+
+  it("多い順に並べ、どこを見れば分かるかまで言う", () => {
+    const debt = mutationDebt(root, { crap: 0, mutation: { "a.ts": 2, "b.ts": 13 }, duplication: 0 });
+    expect(debt).toBe(
+      "\n記録している mutation の生き残り 15 件（2 ファイル）:\n" +
+        "    13  b.ts\n" +
+        "     2  a.ts\n" +
+        "  どの変異かは、そのファイルを差分に入れて full を回すと reports/mutation/mutation.json に出ます",
+    );
+  });
+
+  // 0 件のファイルは「借金が無い」という記録。並べると読み手を惑わせる。
+  it("0 件のファイルは並べない", () => {
+    expect(mutationDebt(root, { crap: 0, mutation: { "a.ts": 0 }, duplication: 0 })).toBe("");
+  });
+
+  it("記録が無ければ何も出さない", () => {
+    expect(mutationDebt(root, null)).toBe("");
+  });
+});
+
 describe("formatViolators", () => {
   const violator = (cc: number, line: number): FunctionReport => ({
     location: { file: "a.ts", name: "f", scope: [], startLine: line, startColumn: 0, endLine: line, endColumn: 0 },

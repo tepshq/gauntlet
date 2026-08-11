@@ -511,8 +511,10 @@ export function runMutation(
       `Stryker がレポートを出しませんでした:\n${lastReasons(captured.combined, 15)}`,
     );
   }
+  // **消さない。** どの変異が生き残ったかを後から見る唯一の材料で、
+  // 消すと確かめるには Stryker のフル実行（分単位）をやり直すしかない。
+  // `reports/` は init が .gitignore に足している。
   const report = JSON.parse(readFileSync(path, "utf8")) as MutationReport;
-  rmSync(path, { force: true });
   return {
     survived: survivedFrom(report),
     ignored: ignoredCount(report),

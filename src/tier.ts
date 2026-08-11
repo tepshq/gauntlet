@@ -62,6 +62,8 @@ export interface TierResult {
   status: "pass" | "fail";
   checks: CheckResult[];
   durationMs: number;
+  /** 違反ではないが伝える出来事（記録が締まった、など）。 */
+  notes: string[];
 }
 
 /** 全チェック通過。 */

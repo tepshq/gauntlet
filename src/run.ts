@@ -2,9 +2,10 @@
  * tier の実行。CLI から切り離してテスト可能にしてある。
  */
 
-import { relative } from "node:path";
+import { existsSync } from "node:fs";
+import { join, relative } from "node:path";
 import { type GauntletConfig, loadConfig } from "./config.ts";
-import { BASELINE_FILENAME, loadBaseline, ratchetByFile, ratchetNumber, saveBaseline } from "./baseline.ts";
+import { BASELINE_FILENAME, type Baseline, loadBaseline, ratchetByFile, ratchetNumber, saveBaseline } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
 import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, touchedFunctions } from "./gate.ts";
 import { crap } from "./crap.ts";
@@ -22,7 +23,7 @@ import {
 import { type DeadInclude, type IncludeReview, analyze, isTestFile, listSourceFiles, reviewIncludes, unmeasuredFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
-import { type SurvivedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
+import { REPORT_PATH, type SurvivedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
 import { RunnerError, type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
 
@@ -83,6 +84,10 @@ export type Notify = (line: string) => void;
 
 export function runTier(root: string, tier: TierName, notify: Notify = () => {}): TierResult {
   const started = performance.now();
+  // 記録は改善のたびに gauntlet 自身が書き換える。**書き換えたことを言わないと
+  // コミットし忘れ、次の実行でまた同じ値が置き直される**（新規導入で実測）。
+  // 前後を突き合わせるだけなので、各ゲートに手を入れずに済む。
+  const before = loadBaseline(root);
   const config = loadConfig(root);
   const base = mergeBase(root, config.defaultBranch);
   const projects = declaredProjects(config);
@@ -126,7 +131,39 @@ export function runTier(root: string, tier: TierName, notify: Notify = () => {})
     return runners[name]();
   });
 
-  return { tier, status: tierStatus(checks), checks, durationMs: performance.now() - started };
+  return {
+    tier,
+    status: tierStatus(checks),
+    checks,
+    durationMs: performance.now() - started,
+    notes: ratchetNote(before, loadBaseline(root)),
+  };
+}
+
+/**
+ * 記録が締まったことの知らせ。**違反ではないので落とさない。**
+ *
+ * 種を置いた回（`before` が無い）は別の案内が出るので、ここでは黙る。
+ */
+export function ratchetNote(before: Baseline | null, after: Baseline | null): string[] {
+  if (before === null || after === null) return [];
+  const changes = ratchetChanges(before, after);
+  if (changes.length === 0) return [];
+  return [`許容値を締めました（${changes.join(" / ")}）。git add -A などでコミットしてください`];
+}
+
+/** 記録のどこが動いたか。言い方は `ratchetNote` の仕事。 */
+export function ratchetChanges(before: Baseline, after: Baseline): string[] {
+  const changes: string[] = [];
+  if (after.crap !== before.crap) changes.push(`CRAP 違反 ${before.crap} → ${after.crap}`);
+  if (after.duplication !== before.duplication) {
+    changes.push(`重複 ${before.duplication ?? 0} → ${after.duplication ?? 0} トークン`);
+  }
+  const files = [...new Set([...Object.keys(before.mutation), ...Object.keys(after.mutation)])].filter(
+    (file) => before.mutation[file] !== after.mutation[file],
+  );
+  if (files.length > 0) changes.push(`mutation ${files.length} ファイル`);
+  return changes;
 }
 
 /**
@@ -636,8 +673,8 @@ export function formatResult(result: TierResult): string {
   const seeded = result.checks.some((check) =>
     check.violations.some((violation) => violation.message === BASELINE_SEEDED.message),
   );
-  const footer = seeded ? ["", BASELINE_NOT_COMMITTED.message] : [];
-  return [header, ...lines, ...footer].join("\n");
+  const footer = seeded ? [BASELINE_NOT_COMMITTED.message] : result.notes;
+  return [header, ...lines, ...(footer.length === 0 ? [] : ["", ...footer])].join("\n");
 }
 
 /** 自分で名づけているエラー。メッセージが一行の説明そのものになっている。 */
@@ -702,6 +739,29 @@ export function doctor(root: string): string[] {
  *
  * mutation の生き残りは含めない — Stryker のフル実行（分単位）が要る別の道具になる。
  */
+/**
+ * 記録している mutation の生き残り。**Stryker は回さない。**
+ *
+ * 数はもう記録の中にあるので、出すのはただの読み出し。どの変異かまでは
+ * フル実行が要るので、そこは在り処だけ言う（`list` の性格を変えないため）。
+ */
+export function mutationDebt(root: string, baseline: Baseline | null): string {
+  // 消えたファイルの記録は残り続ける（ratchet は締める方向にしか動かず、
+  // 対象から外れたファイルは二度と触られない）。並べると存在しないファイルを
+  // 探しに行かせるので、今あるものだけ出す。
+  const counts = Object.entries(baseline?.mutation ?? {}).filter(
+    ([file, n]) => n > 0 && existsSync(join(root, file)),
+  );
+  if (counts.length === 0) return "";
+  const total = counts.reduce((sum, [, n]) => sum + n, 0);
+  const worstFirst = [...counts].sort(([, a], [, b]) => b - a);
+  return [
+    `\n記録している mutation の生き残り ${total} 件（${counts.length} ファイル）:`,
+    ...worstFirst.map(([file, n]) => `  ${String(n).padStart(4)}  ${file}`),
+    `  どの変異かは、そのファイルを差分に入れて full を回すと ${REPORT_PATH} に出ます`,
+  ].join("\n");
+}
+
 export function violatorReport(
   report: ReturnType<typeof analyze>,
   outcome: Pick<TestOutcome, "passed" | "total" | "failures">,
@@ -719,10 +779,12 @@ export function violatorReport(
 export function listViolators(root: string): string {
   const config = loadConfig(root);
   const outcome = runTests(root, null, declaredProjects(config), [], config.source.include);
-  return violatorReport(
+  const baseline = loadBaseline(root);
+  const crap = violatorReport(
     analyze(root, config, outcome.coverage),
     outcome,
-    loadBaseline(root)?.crap ?? null,
+    baseline?.crap ?? null,
     reviewIncludes(root, config.source).dead,
   );
+  return `${crap}${mutationDebt(root, baseline)}`;
 }

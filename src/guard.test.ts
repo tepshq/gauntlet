@@ -33,10 +33,43 @@ describe("GUARD_MESSAGE", () => {
   // 矛盾した 2 つの指示が並ぶ。止まる条件と正規の経路まで言う。
   it("止まる条件と正規の経路を丸ごと固定する", () => {
     expect(GUARD_MESSAGE).toBe(
-      "gauntlet.baseline.json に触れる Bash コマンドと編集は止めています。" +
+      "gauntlet.baseline.json を書き換える操作は止めています。" +
         "これは許容する違反数の記録で、減らすのは gauntlet が自動で行います。" +
         "赤を消すには違反そのものを直してください。" +
-        "読むには Read ツールを、コミットするには git add -A のようにファイル名を含まない形を使ってください。",
+        "読むのは通ります（Read ツール、git diff / log / show / status）。" +
+        "コミットは git add でも git add -A でも構いません。",
     );
+  });
+
+  // 一律に止めていたので、読むだけの git まで止まっていた。案内していた Read ツールでは
+  // 差分が見られず、`git add -A` が唯一の道になって並行作業を巻き込んだ（導入中に実測）。
+  it.each([
+    "git diff gauntlet.baseline.json",
+    "git log -p gauntlet.baseline.json",
+    "git show HEAD:gauntlet.baseline.json",
+    "git status gauntlet.baseline.json",
+    "git add gauntlet.baseline.json",
+    "git -C /repo diff gauntlet.baseline.json",
+  ])("読むだけ・ステージするだけは通す: %s", (command) => {
+    expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(false);
+  });
+
+  // 締まった記録を元の緩い値に戻せる。これは「基準を緩める」そのもの。
+  it.each([
+    "git checkout -- gauntlet.baseline.json",
+    "git restore gauntlet.baseline.json",
+    "sed -i '' s/9/99/ gauntlet.baseline.json",
+    "rm gauntlet.baseline.json",
+    "echo '{}' > gauntlet.baseline.json",
+    "cat x.json > gauntlet.baseline.json",
+    "git diff > gauntlet.baseline.json",
+  ])("書き換えは止める: %s", (command) => {
+    expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(true);
+  });
+
+  // 前半が読むだけでも、後半で書き換えられる。区間ごとに見ないと素通りする。
+  it("繋いだコマンドは区間ごとに見る", () => {
+    const command = "git diff gauntlet.baseline.json && sed -i '' s/1/2/ gauntlet.baseline.json";
+    expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(true);
   });
 });

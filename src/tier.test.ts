@@ -52,7 +52,7 @@ describe("exitCodeFor", () => {
     ["pass", EXIT_PASS],
     ["fail", EXIT_BLOCKED],
   ] as const)("%s → %i", (status, expected) => {
-    const result: TierResult = { tier: "quick", status, checks: [], durationMs: 0 };
+    const result: TierResult = { tier: "quick", status, checks: [], durationMs: 0, notes: [] };
     expect(exitCodeFor(result)).toBe(expected);
   });
 
