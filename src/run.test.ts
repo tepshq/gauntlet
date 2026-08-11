@@ -840,6 +840,13 @@ describe("settleBaseline", () => {
     expect(loadBaseline(root)).toEqual(before);
   });
 
+  // 記録ファイルが消えた・壊れた回に落ちない。null の早期 return が消えると
+  // canonicalBaseline(null) で例外になる。
+  it("記録が読めなくなっていても落ちない", () => {
+    rmSync(join(root, "gauntlet.baseline.json".split("/").join("/")), { force: true });
+    expect(settleBaseline(root, before, false)).toEqual([]);
+  });
+
   // 種置き（before 無し）は例外 — init 直後は必ず未コミットで、書かないと導入が始まらない。
   it("種を置いた回は clean でなくても残す", () => {
     saveBaseline(root, tightened);

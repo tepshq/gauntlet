@@ -89,6 +89,8 @@ export function runsGitCommit(command: string): boolean {
 export function shouldBlock(input: HookInput): boolean {
   const { tool_name: tool, tool_input: args } = input;
   if (tool === undefined || args === undefined) return false;
+  // Stryker disable next-line StringLiteral: 既定値は記録の名前で終わらない文字列なら
+  // 何でも同じ（endsWith が false を返す）。空文字は意図の表明。
   if (EDITING_TOOLS.has(tool)) return (args.file_path ?? "").endsWith(BASELINE_FILENAME);
   if (tool === "Bash") return writesBaseline(args.command ?? "");
   return false;

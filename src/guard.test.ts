@@ -240,3 +240,21 @@ describe("shouldBlock のツール分岐", () => {
     ).toBe(false);
   });
 });
+
+// 入力の欠けへの防御。ここの早期 return が消えると、tool_input の無い呼び出しで落ちる。
+describe("shouldBlock と欠けた入力", () => {
+  it("編集ツールに tool_input が無くても落ちずに通す", () => {
+    expect(shouldBlock({ tool_name: "Edit" })).toBe(false);
+  });
+
+  it("Bash に tool_input が無くても落ちずに通す", () => {
+    expect(shouldBlock({ tool_name: "Bash" })).toBe(false);
+  });
+
+  // Bash の判定が常に真に変異すると、command を持つ未知ツールまで Bash 扱いになる。
+  it("未知ツールの command は見ない", () => {
+    expect(
+      shouldBlock({ tool_name: "Grep", tool_input: { command: "sed -i s/x/y/ gauntlet.baseline.json" } }),
+    ).toBe(false);
+  });
+});
