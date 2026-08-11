@@ -164,13 +164,11 @@ describe("init", () => {
     expect(skill).toContain("gauntlet.config.json");
   });
 
-  // 既定の exclude が消えると、テストファイル自身を測り始める。
-  it("既定でテストファイルを除く", () => {
+  // テストは gauntlet が自動で外す（0.20.0）。既定に書いておくと
+  // 「テストは自分で外すもの」と読ませてしまうし、空の配列は設定の飾りになる。
+  it("除外が無ければ exclude を書かない", () => {
     init(root);
-    expect(parseConfig(read("gauntlet.config.json"), "test").source).toEqual({
-      include: ["src/**/*.ts"],
-      exclude: ["src/**/*.test.ts"],
-    });
+    expect(parseConfig(read("gauntlet.config.json"), "test").source).toEqual({ include: ["src/**/*.ts"] });
   });
 
   it("指定した値を config に入れる", () => {

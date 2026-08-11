@@ -72,6 +72,10 @@ gauntlet が上書きします。ただし `coverage.exclude` は上書きでき
 「文句を言ったか」だけなので、2 パスや `vue-tsc` などコマンドが違っても
 `commands.typecheck` に書けば動きます。
 
+**テストファイルは測りません**（`*.test.ts` / `*.spec.ts`）。テストにテストは書けないので、
+テストの中の複雑な関数は網羅率 0% で必ず違反になります。重複も、`beforeEach` の並びや
+AAA の骨格が似るのは自然です。`exclude` に書く必要はありません。
+
 **lint は見ません。** どのルールを有効にするかはリポジトリが決めることで、gauntlet は
 そこに判断を持ちません — 何を守っているか言えないゲートは置かない、という判断です
 （0.18.0 で外しました。lint は各リポジトリの CI が回してください）。
@@ -143,7 +147,7 @@ npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
 # 版は npm view で調べて明示する — pnpm は既定で公開から 24 時間経った版しか選ばないので、
 # latest を任せると古い版が黙って入ります（minimumReleaseAge。実測）。
 npm i -D "@teps/gauntlet@$(npm view @teps/gauntlet version)" @stryker-mutator/core @stryker-mutator/vitest-runner
-npx gauntlet init --default-branch=main --include='src/**/*.ts' --exclude='src/**/*.test.ts'
+npx gauntlet init --default-branch=main --include='src/**/*.ts'
 npx gauntlet quick
 ```
 

@@ -368,6 +368,10 @@ rm -rf .claude/skills/gauntlet      # 0.9.x の旧名 skill
   するため、**追跡済みの `SKILL.md` が「削除」扱いになる**（h3 で実測。6 行の変更が
   324 行削除に化けた）。`update` のオプションは `-g` / `-p` / `-y` だけで、置き場所を
   指定する `-a` を受け付けない
+- **0.20.0 より前に mutation を回した記録は、触っていないファイルの生き残りを含みうる。**
+  0.19 までは「1 文でも実行された」で変異対象を決めていたので、バレルを import しただけの
+  ファイルまで対象になり、その生き残りが許容値として記録された（duct では 17 ファイル
+  587 件）。記録の `mutation` を空（`{}`）にして `full` を回し直し、置き直す
 - `.npmrc` に `@tepshq:registry=https://npm.pkg.github.com` があれば消す。gauntlet は
   0.9.0 から public npm にあり認証は要らない（残っていると新しい版が見えない）。
   workflow の `registry-url` / `NODE_AUTH_TOKEN` も、gauntlet のためだけなら外す

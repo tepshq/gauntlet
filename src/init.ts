@@ -26,7 +26,9 @@ export interface InitOptions {
 export const INIT_DEFAULTS: InitOptions = {
   defaultBranch: "main",
   include: ["src/**/*.ts"],
-  exclude: ["src/**/*.test.ts"],
+  // テストは gauntlet が自動で外すので、既定の除外は無い（0.20.0）。
+  // 既定に書いておくと「テストは自分で外すもの」と読ませてしまう。
+  exclude: [],
   testProjects: [],
 };
 
@@ -45,7 +47,7 @@ function configFor(options: InitOptions, existing: GauntletConfig | null): Gaunt
     adapter: "typescript",
     runner: "vitest",
     defaultBranch: options.defaultBranch,
-    source: { include: options.include, exclude: options.exclude },
+    source: { include: options.include, ...(options.exclude.length === 0 ? {} : { exclude: options.exclude }) },
     ...(options.testProjects.length === 0 ? {} : { tests: { projects: options.testProjects } }),
     ...(existing?.commands === undefined ? {} : { commands: existing.commands }),
   };
