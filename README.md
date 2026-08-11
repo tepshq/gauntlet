@@ -119,7 +119,15 @@ npx skills add tepshq/gauntlet -a claude-code
 してあるのはそのためです（`tsconfig.json` の `include` は当てになりません —
 生成物・設定ファイル・e2e が混ざります）。
 
-skill が更新されたら `npx skills update` で追随できます。
+skill が更新されたら、**同じ `add` をもう一度**打って追随します。
+
+```bash
+npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y --copy
+```
+
+`npx skills update` は使わないでください。実体を `.agents/skills/`（多数の agent が
+共有する置き場）へ移して `.claude/skills/` を symlink にするため、**コミット済みの
+`SKILL.md` が git から「削除」に見えます**。`update` は `-a` も `--copy` も受け付けません。
 
 <details>
 <summary>Claude Code を使わず手で入れる場合</summary>

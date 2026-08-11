@@ -323,8 +323,17 @@ rm -rf .claude/skills/gauntlet      # 0.9.x の旧名 skill
 
 - `.claude/settings.json` に `Stop` フック（0.12 以前）が残っていたら消す
 - **skill が古いまま残る**（0.17.0 で `init` は skill を書かなくなった）。
-  `npx skills add tepshq/gauntlet -a claude-code` で正本に置き換わり、以降は
-  `npx skills update` で追随できる
+  **`add` で置き換える。追随も同じコマンドで行う**:
+
+  ```
+  npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y --copy
+  ```
+
+  `npx skills update` は使わない — 実体を `.agents/skills/`（多数の agent が共有する
+  置き場。`~/.agents` があると対象が広がる）へ移して `.claude/skills/` を symlink に
+  するため、**追跡済みの `SKILL.md` が「削除」扱いになる**（h3 で実測。6 行の変更が
+  324 行削除に化けた）。`update` は `-a` も `--copy` も受けないので、置き場所を
+  保てるのは `add` だけ
 - `.npmrc` に `@tepshq:registry=https://npm.pkg.github.com` があれば消す。gauntlet は
   0.9.0 から public npm にあり認証は要らない（残っていると新しい版が見えない）。
   workflow の `registry-url` / `NODE_AUTH_TOKEN` も、gauntlet のためだけなら外す

@@ -45,31 +45,46 @@ export interface DeadInclude {
   fix: string | null;
 }
 
+export interface IncludeReview {
+  /** マッチはしているのに、測れるファイルに 1 つも届かないもの。落とす。 */
+  dead: DeadInclude[];
+  /** 1 件もマッチしないもの。**落とさずに言う。** */
+  unmatched: string[];
+}
+
 /**
- * **何かにはマッチしているのに、ソースを 1 つも連れてこない** include。
+ * include を 1 本ずつ当てて、測る対象を連れてこないものを分ける。
  *
  * `--include=src` は glob として成立する（ディレクトリ `src` 自身にマッチする）ので、
  * 綴りの誤りと同じ「対象 0」になりながら、原因は正反対（パスは実在する）。
  * しかも include が複数あると**そこだけ黙って抜け落ちて全体は緑**になり、
  * 範囲が狭いまま通るという、このツールが一番防ぎたい形になる（h3 で実測）。
  *
- * **1 つもマッチしないものは咎めない。** `src/**\/*.tsx` のような
- * 「今は無いが将来 増える」書き方は害が無く、これを落とすと config が窮屈になる。
+ * **1 件もマッチしないものは落とさない。** ディレクトリを指す書き方は
+ * *どんなリポジトリでも* ファイルを連れてこないと言い切れるが、0 件マッチは
+ * 「今このリポジトリに無い」だけで、`src/**\/*.tsx` のような先回りは正しい書き方でありうる。
+ * 落とすと、**最後の 1 ファイルを消しただけで無関係な赤**が出る（環境で答えが変わる方向）。
+ * ただし綴りの誤り（`testt/**\/*.ts`）も同じ形なので、黙りはしない — 言うだけにする。
  */
-export function deadIncludes(root: string, source: GauntletConfig["source"]): DeadInclude[] {
+export function reviewIncludes(root: string, source: GauntletConfig["source"]): IncludeReview {
   const owned = repoSourceSet(root);
   const reaches = (pattern: string): boolean =>
     globSync(pattern, { cwd: root })
       .map(toPosix)
       .some((file) => owned.has(file));
-  return source.include
-    .filter((pattern) => globSync(pattern, { cwd: root }).length > 0 && !reaches(pattern))
-    .map((pattern) => {
-      // ディレクトリを指していただけなら、その下を辿る形が答え。**当てて確かめてから言う** —
-      // `src/**/*.ts` を決め打ちで案内すると、`lib/` のリポジトリに当たらない助言になる。
-      const descended = `${pattern.replace(/\/$/, "")}/**/*.ts`;
-      return { pattern, fix: reaches(descended) ? descended : null };
-    });
+  const review: IncludeReview = { dead: [], unmatched: [] };
+  for (const pattern of source.include) {
+    if (reaches(pattern)) continue;
+    if (globSync(pattern, { cwd: root }).length === 0) {
+      review.unmatched.push(pattern);
+      continue;
+    }
+    // ディレクトリを指していただけなら、その下を辿る形が答え。**当てて確かめてから言う** —
+    // `src/**/*.ts` を決め打ちで案内すると、`lib/` のリポジトリに当たらない助言になる。
+    const descended = `${pattern.replace(/\/$/, "")}/**/*.ts`;
+    review.dead.push({ pattern, fix: reaches(descended) ? descended : null });
+  }
+  return review;
 }
 
 /** coverage-final.json は絶対パスをキーに持つので、リポジトリ相対に直して引けるようにする。 */

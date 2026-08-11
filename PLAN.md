@@ -471,6 +471,33 @@ CLI に LLM を入れる案は flaky そのもの（走るたびに違う提案�
 - baseline の `lint` キーは `loadBaseline` が読まなくなったので **`full` が保存する
   時点で自動的に落ちた**（guard を回避せずに移行できる形）
 
+### 0.18.5: 0 件マッチの include と `skills update`（2026-08-11、tepshq/gauntlet#4 / #5）
+
+**#4: 綴りを誤った include が永久に咎められなかった。** `--include='src/**/*.ts,testt/**/*.ts'`
+は 0.18.4 でも緑になる（`testt/**/*.ts` は 1 件もマッチしないので `reviewIncludes` の候補に
+入らず、`src` が生きているので対象 0 にもならない）。書き手の意図は #3 の
+`--include='src/**/*.ts,lib'` と同じで、実害も同じ「半分が測られないまま緑」。
+
+**落とさず、scope に出す**形にした。落とせないのは、0 件マッチが「今このリポジトリに無い」
+としか言っていないため — `src/**/*.tsx` を落とすと、**最後の .tsx を消しただけで無関係な赤**が
+出る（環境で答えが変わる方向）。ディレクトリを指す書き方が落とせるのは、どのリポジトリでも
+ファイルを連れてこないと言い切れるから。この非対称が判定の分かれ目。
+
+```
+✓ crap (0ms)  触った関数 11 / 測る対象 242 関数（23 ファイル）
+  source.include の `testt/**/*.ts` は 1 件もマッチしていません（意図した書き方なら無視してください）
+```
+
+判定は `reviewIncludes` の 1 か所のままで、返す型が `{ dead, unmatched }` になっただけ。
+`formatResult` は scope の 2 行目以降も違反と同じ段に入れるようにした。
+
+**#5: skill の更新手段が `npx skills update` ではいけない。** `~/.agents` があると実体を
+`.agents/skills/`（多数の agent が共有する置き場）へ移して `.claude/skills/` を symlink に
+するので、**追跡済みの `SKILL.md` が「削除」扱い**になる（h3 で 6 行の変更が 324 行削除に
+化けた）。`update` は `-a` も `--copy` も受けないため、置き場所を保てるのは `add` だけ。
+SKILL.md と README の追随手順を
+`npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y --copy` に差し替えた。
+
 ### 0.18.3: `--include=src` が対象 0 の設定を書いていた（2026-08-11、tepshq/gauntlet#3）
 
 0.18.2 を h3 に入れ直したときの報告。前回は `--include='src/**/*.ts'` を渡していたので

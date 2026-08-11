@@ -19,7 +19,7 @@ import {
   type Violation,
   tierStatus,
 } from "./tier.ts";
-import { type DeadInclude, analyze, deadIncludes, listSourceFiles } from "./typescript/adapter.ts";
+import { type DeadInclude, type IncludeReview, analyze, listSourceFiles, reviewIncludes } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
 import { type SurvivedMutant, requireMutationTools, runMutation } from "./typescript/mutation.ts";
@@ -88,7 +88,7 @@ export function runTier(root: string, tier: TierName): TierResult {
   const runners: Record<CheckName, () => CheckResult> = {
     typecheck: () => typecheck(root, config),
     tests: () => testsCheck(outcome, testsMs),
-    crap: () => crapCheck(tier, report, changed, outcome, deadIncludes(root, config.source)),
+    crap: () => crapCheck(tier, report, changed, outcome, reviewIncludes(root, config.source)),
     mutation: () =>
       mutationCheck(
         root,
@@ -296,6 +296,9 @@ export function declaredProjects(config: GauntletConfig): string[] {
   return config.tests?.projects ?? [];
 }
 
+/** include を見ずに呼べるようにする既定。テストから閾値だけを当てたいときに使う。 */
+const EMPTY_REVIEW: IncludeReview = { dead: [], unmatched: [] };
+
 /** リポジトリ全体のラチェットはフル実行のある `full` でだけ判定する。 */
 export function crapViolations(
   tier: TierName,
@@ -316,10 +319,10 @@ export function crapCheckViolations(
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
   outcome: Pick<TestOutcome, "passed" | "total">,
-  dead: readonly DeadInclude[] = [],
+  includes: IncludeReview = EMPTY_REVIEW,
 ): Violation[] {
   if (!outcome.passed) return [CRAP_NEEDS_TESTS];
-  const faults = measurementFaults(report, outcome.total, tier === "full", dead);
+  const faults = measurementFaults(report, outcome.total, tier === "full", includes.dead);
   return faults.length === 0 ? crapViolations(tier, report, changed) : faults;
 }
 
@@ -336,9 +339,22 @@ export function scopeText(report: ReturnType<typeof analyze>): string {
   return `${report.functions.length} 関数（${files} ファイル）`;
 }
 
-/** 何を見たかを一行で。緑のときに「対象 0 件で緑」と区別するために出す。 */
-export function crapScope(report: ReturnType<typeof analyze>, changed: Map<string, Set<number>>): string {
-  return `触った関数 ${touchedFunctions(report, changed).length} / 測る対象 ${scopeText(report)}`;
+/**
+ * 何を見たかを一行で。緑のときに「対象 0 件で緑」と区別するために出す。
+ *
+ * 1 件もマッチしない include はここに足す。**落とさないが黙らない** —
+ * 綴りを 1 文字誤った include（`testt/**\/*.ts`）は、他が生きていれば緑のまま
+ * 半分が測られない状態を作る（h3 で実測）。落とせない理由は `reviewIncludes` 参照。
+ */
+export function crapScope(
+  report: ReturnType<typeof analyze>,
+  changed: Map<string, Set<number>>,
+  unmatched: readonly string[] = [],
+): string {
+  const head = `触った関数 ${touchedFunctions(report, changed).length} / 測る対象 ${scopeText(report)}`;
+  if (unmatched.length === 0) return head;
+  const named = unmatched.map((pattern) => `\`${pattern}\``).join("、");
+  return `${head}\nsource.include の ${named} は 1 件もマッチしていません（意図した書き方なら無視してください）`;
 }
 
 function crapCheck(
@@ -346,11 +362,11 @@ function crapCheck(
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
   outcome: Pick<TestOutcome, "passed" | "total">,
-  dead: readonly DeadInclude[],
+  includes: IncludeReview,
 ): CheckResult {
   return timed("crap", () => ({
-    violations: crapCheckViolations(tier, report, changed, outcome, dead),
-    scope: crapScope(report, changed),
+    violations: crapCheckViolations(tier, report, changed, outcome, includes),
+    scope: crapScope(report, changed, includes.unmatched),
   }));
 }
 
@@ -490,7 +506,9 @@ export function formatResult(result: TierResult): string {
     // 複数行の違反（tsc の診断、詳細つきの違反）も 2 行目以降ごと段に入れる。
     // 先頭行しか下げないと、詳細がチェックの木から外れて見える。
     const detail = check.violations.map((violation) => `\n    ${violation.message.split("\n").join("\n    ")}`).join("");
-    return `  ${mark} ${check.name} (${check.durationMs.toFixed(0)}ms)  ${check.scope}${detail}`;
+    // scope も複数行になりうる（マッチ 0 件の include）。違反と同じ段に入れる。
+    const scope = check.scope.split("\n").join("\n    ");
+    return `  ${mark} ${check.name} (${check.durationMs.toFixed(0)}ms)  ${scope}${detail}`;
   });
   const header = `gauntlet ${result.tier}: ${result.status} (${result.durationMs.toFixed(0)}ms)`;
   return [header, ...lines].join("\n");
@@ -564,6 +582,6 @@ export function listViolators(root: string): string {
     analyze(root, config, outcome.coverage),
     outcome,
     loadBaseline(root)?.crap ?? null,
-    deadIncludes(root, config.source),
+    reviewIncludes(root, config.source).dead,
   );
 }

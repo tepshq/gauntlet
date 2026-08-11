@@ -479,6 +479,14 @@ describe("formatResult", () => {
     );
   });
 
+  // scope も複数行になりうる（マッチ 0 件の include）。段に入れないとチェックの木から外れる。
+  it("複数行の scope も段に入れる", () => {
+    const scoped: CheckResult = { ...check("crap", "pass"), scope: "触った関数 0 / 測る対象 5 関数\n続き" };
+    expect(formatResult(result([scoped]))).toBe(
+      ["gauntlet quick: fail (34ms)", "  ✓ crap (12ms)  触った関数 0 / 測る対象 5 関数", "    続き"].join("\n"),
+    );
+  });
+
   it("チェックを 1 行ずつ並べる", () => {
     const output = formatResult(result([check("typecheck", "pass"), check("tests", "pass")]));
     expect(output.split("\n")).toHaveLength(3);
@@ -523,6 +531,15 @@ describe("crapScope", () => {
 
   it("測る対象が無ければ両方 0", () => {
     expect(crapScope(report(0), new Map())).toBe("触った関数 0 / 測る対象 0 関数（0 ファイル）");
+  });
+
+  // 落とさないが黙らない。綴りを 1 文字誤った include は、他が生きていれば
+  // 緑のまま半分が測られない状態を作る（h3 で実測）。
+  it("1 件もマッチしない include を続けて言う", () => {
+    expect(crapScope(report(5), new Map(), ["testt/**/*.ts", "libb"])).toBe(
+      "触った関数 0 / 測る対象 5 関数（1 ファイル）\n" +
+        "source.include の `testt/**/*.ts`、`libb` は 1 件もマッチしていません（意図した書き方なら無視してください）",
+    );
   });
 });
 
