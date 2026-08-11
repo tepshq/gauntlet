@@ -273,7 +273,10 @@ describe("testsCheck", () => {
       violations: [
         { message: "2 / 5 件が失敗:" },
         { message: "sum > 足せる  a.test.ts\n  expected 1 to be 2", file: "a.test.ts" },
-        { message: "(テストファイル自体が失敗)  b.test.ts", file: "b.test.ts" },
+        {
+          message: "(テストファイル自体が失敗)  b.test.ts\n  理由が出ていません。npx vitest run b.test.ts で確認してください",
+          file: "b.test.ts",
+        },
       ],
       scope: "5 件",
     });
@@ -299,6 +302,13 @@ describe("testViolations", () => {
     ]);
   });
 
+  // assert が 1 つも落ちずにファイルが落ちる形（import エラー、timeout）では
+  // vitest の失敗数が 0 になる。そのまま出すと「何も落ちていない」に読める（h3 で実測）。
+  it("失敗 0 件でファイルが落ちていれば、そう数え直す", () => {
+    const violations = testViolations({ failed: 0, total: 1668, failures: [failure(1), failure(2)] });
+    expect(violations[0]!.message).toBe("2 ファイルがテストを実行できませんでした（1668 件中の失敗は 0 件）:");
+  });
+
   // 大規模なリファクタで 200 件落ちたとき、全部並べると本当の原因が量に埋もれる。
   it("11 件目からは件数に畳む", () => {
     const failures = Array.from({ length: 12 }, (_, index) => failure(index));
@@ -322,9 +332,11 @@ describe("testViolation", () => {
     });
   });
 
-  it("理由が無ければ 1 行に収める", () => {
-    expect(testViolation({ file: "a.test.ts", test: "t", message: "" })).toEqual({
-      message: "t  a.test.ts",
+  // vitest が本文を持たないことがある（h3 では並列負荷の timeout）。名前だけ出すと
+  // 「落ちた」以外の情報がゼロになり、手で切り分ける以外になくなる。
+  it("理由が無ければ、次に打つコマンドを出す", () => {
+    expect(testViolation({ file: "a.test.ts", test: null, message: "" })).toEqual({
+      message: "(テストファイル自体が失敗)  a.test.ts\n  理由が出ていません。npx vitest run a.test.ts で確認してください",
       file: "a.test.ts",
     });
   });
@@ -649,7 +661,7 @@ describe("violatorReport", () => {
 
 describe("typecheckViolations", () => {
   it("診断が無ければ通す", () => {
-    expect(typecheckViolations({ stdout: "", combined: "" })).toEqual([]);
+    expect(typecheckViolations({ stdout: "", combined: "", code: 0 })).toEqual([]);
   });
 
   // 既定は tsc。プロジェクトが上書きしなければこれが走る。
@@ -661,18 +673,18 @@ describe("typecheckViolations", () => {
 
   // 前後の空白を落とさないと、報告に無駄な改行が混ざる。
   it("報告から前後の空白を落とす", () => {
-    expect(typecheckViolations({ stdout: "x", combined: "\n  a.ts(1,1): error  \n" })).toEqual([
+    expect(typecheckViolations({ stdout: "x", combined: "\n  a.ts(1,1): error  \n", code: 0 })).toEqual([
       { message: "a.ts(1,1): error" },
     ]);
   });
 
   it("空白だけなら通す", () => {
-    expect(typecheckViolations({ stdout: "\n  \n", combined: "" })).toEqual([]);
+    expect(typecheckViolations({ stdout: "\n  \n", combined: "", code: 0 })).toEqual([]);
   });
 
   // 原因が標準エラーにしか出ないこともあるので、報告には combined を使う。
   it("診断があれば combined を出す", () => {
-    const result = { stdout: "a.ts(1,1): error TS1005", combined: "a.ts(1,1): error TS1005\nextra" };
+    const result = { stdout: "a.ts(1,1): error TS1005", combined: "a.ts(1,1): error TS1005\nextra", code: 2 };
     expect(typecheckViolations(result)).toEqual([{ message: "a.ts(1,1): error TS1005\nextra" }]);
   });
 });

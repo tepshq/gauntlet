@@ -186,8 +186,14 @@ export function vitestArgs(
   outDir: string,
   projects: readonly string[],
   files: readonly string[] = [],
+  include: readonly string[] = [],
 ): string[] {
   const args = ["vitest", "run", "--coverage", "--coverage.provider=v8", "--coverage.reporter=json"];
+  // **測る範囲は gauntlet の宣言で決める。** 渡さないとリポジトリの `coverage.include`
+  // 次第で、範囲に入れたのに coverage に現れないファイルが出る。それは網羅率 0% と
+  // 区別がつかず、テストを書いても直らない赤になる（h3 で実測）。
+  // これで「full の coverage に現れない = リポジトリの coverage.exclude が消した」に絞れる。
+  args.push(...include.map((glob) => `--coverage.include=${glob}`));
   args.push(...projects.map((name) => `--project=${name}`));
   if (base !== null) args.push(`--changed=${base}`);
   args.push(`--coverage.reportsDirectory=${join(outDir, "coverage")}`);
@@ -215,12 +221,13 @@ export function runTests(
   base: string | null,
   projects: readonly string[],
   files: readonly string[] = [],
+  include: readonly string[] = [],
 ): TestOutcome {
   requireCoverageProvider(root);
   const outDir = mkdtempSync(join(tmpdir(), "gauntlet-"));
   try {
     // exit code は握り潰す。閾値違反とテスト失敗が区別できないため。
-    const { combined } = capture("npx", vitestArgs(base, outDir, projects, files), root);
+    const { combined } = capture("npx", vitestArgs(base, outDir, projects, files, include), root);
     const report = readJson<VitestJsonReport>(join(outDir, "result.json"), "vitest の実行結果", combined);
     const outcome = toOutcome(report, root);
 

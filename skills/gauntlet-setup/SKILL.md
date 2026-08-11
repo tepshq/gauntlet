@@ -94,6 +94,9 @@ vitest が無いリポジトリは対象外（gauntlet の要件）。その場�
   何も言わない
 - テストファイルの命名規則（`*.test.ts` / `*.spec.ts` / `__tests__/`）
 - 既定ブランチ（`git symbolic-ref --short HEAD` や `origin/HEAD`）
+- **`vitest.config.*` の `coverage.exclude`。** ここで消されたファイルは網羅率が
+  永久に 0% になる（gauntlet は `coverage.include` は上書きするが、`exclude` は
+  上書きできない）。測る範囲に入れるなら、vitest 側の除外から外してもらう
 
 ### どう型チェックしているか
 
@@ -303,7 +306,21 @@ npx gauntlet list
 ここで未参照コードや網羅率 0 の公開 API が見つかることがある（h3 では 3 件）。
 直すかどうかは導入とは別の判断なので、一覧を見せて終わりでよい。
 
+### mutation が実際に走ることを確かめる
+
+`full` の mutation は差分から対象を決めるので、**導入コミット（設定ファイルだけ）では
+必ず「変異対象 0 ファイル」で緑になる**。4 つのゲートのうち mutation だけが一度も
+動かないまま終わるので、ここで一度だけ確かめる。
+
+```
+npx gauntlet doctor
+```
+
+Stryker が対象リポジトリの vitest を起動できるかだけを見る（変異は作らない）。
+落ちたら Stryker の出力が添えられるので、それを読んで直す。
+
 **完了条件** — `gauntlet.baseline.json` が履歴にあり、`npx gauntlet full` が通ること。
+`npx gauntlet doctor` が通ること。
 
 ## 触らないもの
 

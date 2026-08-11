@@ -29,10 +29,9 @@ export function toPosix(path: string): string {
  */
 export function listSourceFiles(root: string, source: GauntletConfig["source"]): string[] {
   const owned = repoSourceSet(root);
-  const found = globSync(source.include, {
-    cwd: root,
-    ...(source.exclude === undefined ? {} : { exclude: source.exclude }),
-  });
+  // Stryker disable next-line all: 除外なしと空の除外は同じ振る舞いなので、
+  // ここの変異は区別できる結果を持たない（`exclude: undefined` も同じ）。
+  const found = globSync(source.include, { cwd: root, exclude: source.exclude ?? [] });
   return found
     .map(toPosix)
     .filter((file) => owned.has(file))
@@ -85,6 +84,26 @@ export function reviewIncludes(root: string, source: GauntletConfig["source"]): 
     review.dead.push({ pattern, fix: reaches(descended) ? descended : null });
   }
   return review;
+}
+
+/**
+ * 測る対象に入っているのに、coverage に現れないファイル。**フル実行にだけ当てる。**
+ *
+ * gauntlet は `--coverage.include` に自分の宣言を渡すので、対象のファイルは
+ * テストが触れていなくてもゼロ行の項目として載る。それでも現れないのは、
+ * **リポジトリ側の `coverage.exclude` が消している**ときだけ（CLI から上書きできない）。
+ *
+ * 放置すると網羅率 0% と区別がつかない。しかし直し方は正反対で、
+ * こちらは**テストを書いても網羅率が上がらない** — 複雑度が閾値に触れた瞬間に
+ * 「網羅率 N% で通ります」という到達できない出口を案内する赤になる（h3 が指摘）。
+ */
+export function unmeasuredFiles(
+  root: string,
+  source: GauntletConfig["source"],
+  coverage: IstanbulCoverage,
+): string[] {
+  const measured = new Set(Object.keys(coverage).map((absolute) => toPosix(relative(root, absolute))));
+  return listSourceFiles(root, source).filter((file) => !measured.has(file));
 }
 
 /** coverage-final.json は絶対パスをキーに持つので、リポジトリ相対に直して引けるようにする。 */

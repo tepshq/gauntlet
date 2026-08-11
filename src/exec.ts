@@ -14,16 +14,22 @@ export interface Captured {
   stdout: string;
   /** 標準出力と標準エラーを繋いだもの。失敗の原因を人に見せるときはこちら。 */
   combined: string;
+  /** 終了コード。0 以外を落とすかどうかは呼び出し側が決める（vitest では握り潰す）。 */
+  code: number;
 }
 
 function toCaptured(run: () => string): Captured {
   try {
     const stdout = run();
-    return { stdout, combined: stdout };
+    return { stdout, combined: stdout, code: 0 };
   } catch (error) {
-    const failure = error as { stdout?: string; stderr?: string };
+    const failure = error as { stdout?: string; stderr?: string; status?: number };
     const stdout = failure.stdout ?? "";
-    return { stdout, combined: `${stdout}${failure.stderr ?? (error as Error).message}`.trim() };
+    return {
+      stdout,
+      combined: `${stdout}${failure.stderr ?? (error as Error).message}`.trim(),
+      code: failure.status ?? 1,
+    };
   }
 }
 

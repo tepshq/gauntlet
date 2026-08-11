@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { GUARD_MESSAGE, shouldBlock } from "./guard.ts";
 import { INIT_USAGE, formatInit, helpRequested, init, parseInitOptions } from "./init.ts";
-import { describeCrash, listViolators, run } from "./run.ts";
+import { describeCrash, doctor, listViolators, run } from "./run.ts";
 import { EXIT_BLOCKED, EXIT_PASS, type TierName, exitCodeFor } from "./tier.ts";
 
 function guard(): number {
@@ -35,6 +35,13 @@ function listCommand(): number {
   return EXIT_PASS;
 }
 
+/** 導入時に一度も動かないゲート（mutation）を動かして確かめる。走れば exit 0。 */
+function doctorCommand(): number {
+  doctor(process.cwd());
+  process.stderr.write("gauntlet doctor: ok  Stryker が vitest を起動できました（変異は作らず初回実行のみ）\n");
+  return EXIT_PASS;
+}
+
 /** tier はサブコマンド名で確定する。フックも CI も手動も同じ形で呼ぶ。 */
 function tierCommand(tier: TierName): () => number {
   return () => {
@@ -50,6 +57,7 @@ const USAGE = `gauntlet <command>
           （PreToolUse フックが git commit の直前に呼ぶ。手動でもそのまま叩ける）
   full    全量検査。上に加えて全テスト・重複・ラチェット・mutation（CI から）
   list    baseline が許容している CRAP 違反を全部並べる（ゲートではない）
+  doctor  Stryker が vitest を起動できるか確かめる（導入時に mutation は走らないため）
   init    設定とフックを置く（範囲の決め方と CI は skill が案内する）
   guard   PreToolUse フックから。baseline の書き換えを止める
 
@@ -77,6 +85,7 @@ function usageError(argv: readonly string[]): number {
 const COMMANDS: Record<string, (argv: readonly string[]) => number> = {
   guard,
   init: initCommand,
+  doctor: doctorCommand,
   list: listCommand,
   quick: tierCommand("quick"),
   full: tierCommand("full"),

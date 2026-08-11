@@ -205,6 +205,25 @@ describe("measurementFaults", () => {
     ]);
   });
 
+  // 網羅率 0% と同じ顔をしているが、直し方は正反対（テストを書いても上がらない）。
+  // 名指ししないと、到達できない出口（網羅率 N% で通ります）を案内する赤になる。
+  it("測れていないファイルを名指しする", () => {
+    const [fault] = measurementFaults(reportOf([covered]), 10, true, [], ["src/types/x.ts", "src/_entries/y.ts"]);
+    expect(fault!.message).toBe(
+      "測る対象に入っているのに、vitest が網羅率を測っていないファイルが 2 件あります。" +
+        "vitest 側の coverage.exclude が消しています（gauntlet からは上書きできません）。" +
+        "テストを書いても網羅率は上がらないので、どちらかの範囲を揃えてください:\n" +
+        "  src/types/x.ts\n  src/_entries/y.ts",
+    );
+  });
+
+  it("名指しは 10 件までにして、残りは数で言う", () => {
+    const many = Array.from({ length: 12 }, (_, index) => `src/f${index}.ts`);
+    const [fault] = measurementFaults(reportOf([covered]), 10, true, [], many);
+    expect(fault!.message).toContain("12 件あります");
+    expect(fault!.message).toContain("…他 2 件");
+  });
+
   // 「テストが無いから 0%」と「coverage 設定が噛み合っていない」を区別できないまま
   // 全関数を違反にしてはいけない。件数を出すと、どちらか判断しやすい。
   it("テストが走ったのに誰も覆われていなければ、件数つきで落とす", () => {

@@ -61,6 +61,11 @@ CRAP 31.0 (> 8)  複雑度 31 / 網羅率 100%  src/proxy.ts:278 proxy  → 複�
 **増やさないこと**だけを要求します（絶対閾値なし・`full` のみ・減れば自動で締まる）。
 jscpd は gauntlet が同梱するので、対象リポジトリに入れるものはありません。
 
+**網羅率の対象は gauntlet の宣言で決まります。** vitest の `coverage.include` は
+gauntlet が上書きします。ただし `coverage.exclude` は上書きできないので、そこで消された
+ファイルが測る範囲に入っていると**テストを書いても網羅率が上がりません**。`full` はそれを
+検出して名指しで落とします（網羅率 0% と同じ顔で通すと、直せない赤を仕込むことになります）。
+
 ### 型チェック
 
 リポジトリの `tsc --noEmit` を走らせ、診断が出たら落とします。gauntlet が見るのは
@@ -251,7 +256,8 @@ projects: [
 ```bash
 npx gauntlet quick
 npx gauntlet full
-npx gauntlet list   # ゲートではない。baseline が許容している CRAP 違反を全部並べる
+npx gauntlet list     # ゲートではない。baseline が許容している CRAP 違反を全部並べる
+npx gauntlet doctor   # Stryker が vitest を起動できるか（導入時に mutation は走らないため）
 ```
 
 通れば exit 0、違反または gauntlet 自身が走れなければ exit 2 です。**「走れなかった」を緑に

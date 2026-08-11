@@ -11,7 +11,7 @@ import { chmodSync, existsSync, globSync, mkdtempSync, readFileSync, rmSync, sta
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import { capture } from "../exec.ts";
+import { type Captured, capture } from "../exec.ts";
 import { detectPackageManager, installDevCommand } from "../package-manager.ts";
 import { RunnerError, lastLines } from "./runner.ts";
 
@@ -270,33 +270,60 @@ export function restoreModes(modes: ReadonlyMap<string, number>): void {
   }
 }
 
-/** 変異させる対象が 1 つ以上あることは呼び出し側が保証する。 */
-export function runMutation(root: string, files: readonly string[], projects: readonly string[]): MutationOutcome {
+/**
+ * Stryker が対象リポジトリの vitest を**実際に起動できるか**だけを見る。
+ *
+ * `--dryRunOnly` は変異を作らず最初のテスト実行だけを行う（Stryker が CI 用に
+ * 用意している確認モード）。道具が揃っていること（`requireMutationTools`）と、
+ * 揃った道具が噛み合うことは別で、後者は変異対象が 0 の回には確かめられない。
+ * **導入直後は差分にソースが無いので必ず 0 になる** — mutation だけが一度も
+ * 走らないまま「導入完了」になっていた（h3 が指摘）。
+ */
+export function dryRunMutation(root: string, files: readonly string[], projects: readonly string[]): void {
+  const { combined, code } = launchStryker(root, files, projects, ["--dryRunOnly"]);
+  if (code !== 0) throw new RunnerError(`Stryker が vitest を起動できませんでした:\n${lastLines(combined, 15)}`);
+}
+
+/**
+ * Stryker を起動して出力を返す。**後片付けまでが仕事。**
+ *
+ * 設定は退避先と別のディレクトリに置く。Stryker は `tempDirName` の中身を管理する
+ * （作成・掃除）ので、同居させると設定ファイルごと消されうる。
+ */
+function launchStryker(
+  root: string,
+  files: readonly string[],
+  projects: readonly string[],
+  extra: readonly string[],
+): Captured {
   const bin = strykerBin(root);
   const runner = vitestRunnerPlugin(root);
   const modes = fileModes(root, files);
   const tempDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-"));
-  // 設定は退避先と別のディレクトリに置く。Stryker は tempDirName の中身を管理する
-  // （作成・掃除）ので、同居させると設定ファイルごと消されうる。
   const confDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-conf-"));
   try {
     const launch = strykerFiles(confDir, tempDir, root, findRepoVitestConfig(root), projects, files, runner);
     launch.forEach((file) => writeFileSync(file.path, file.content));
-    const { combined } = capture(bin, ["run", launch[0]!.path], root);
-
-    const path = join(root, REPORT_PATH);
-    if (!existsSync(path)) {
-      throw new RunnerError(`Stryker がレポートを出しませんでした:\n${lastLines(combined, 15)}`);
-    }
-    const report = JSON.parse(readFileSync(path, "utf8")) as MutationReport;
-    rmSync(path, { force: true });
+    const captured = capture(bin, ["run", launch[0]!.path, ...extra], root);
     cleanLeftovers(root);
-    return { survived: survivedFrom(report), ignored: ignoredCount(report) };
+    return captured;
   } finally {
     restoreModes(modes);
     rmSync(tempDir, { recursive: true, force: true });
     rmSync(confDir, { recursive: true, force: true });
   }
+}
+
+/** 変異させる対象が 1 つ以上あることは呼び出し側が保証する。 */
+export function runMutation(root: string, files: readonly string[], projects: readonly string[]): MutationOutcome {
+  const { combined } = launchStryker(root, files, projects, []);
+  const path = join(root, REPORT_PATH);
+  if (!existsSync(path)) {
+    throw new RunnerError(`Stryker がレポートを出しませんでした:\n${lastLines(combined, 15)}`);
+  }
+  const report = JSON.parse(readFileSync(path, "utf8")) as MutationReport;
+  rmSync(path, { force: true });
+  return { survived: survivedFrom(report), ignored: ignoredCount(report) };
 }
 
 /**

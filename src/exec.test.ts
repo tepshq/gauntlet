@@ -45,6 +45,13 @@ describe("capture", () => {
     expect(result.stdout).toBe("partial");
   });
 
+  // 落とすかどうかは呼び出し側が決める（vitest では握り潰し、Stryker の dry run では見る）。
+  // 実際のコードを返さないと、道具の「起動できなかった」と「違反があった」を区別できない。
+  it("終了コードをそのまま返す", () => {
+    expect(capture(NODE, ["-e", "process.exit(3)"], process.cwd()).code).toBe(3);
+    expect(capture(NODE, ["-e", ""], process.cwd()).code).toBe(0);
+  });
+
   // 原因が標準エラーにしか出ないことがあるので、両方を繋いで載せる。
   it("失敗の原因を combined に載せる", () => {
     const result = capture(NODE, ["-e", "process.stdout.write('out'); process.stderr.write('why'); process.exit(1)"], process.cwd());

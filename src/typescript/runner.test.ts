@@ -106,6 +106,23 @@ describe("vitestArgs", () => {
     ]);
   });
 
+  // 測る範囲は gauntlet の宣言で決める。渡さないとリポジトリの coverage.include 次第で、
+  // 範囲に入れたのに coverage に現れないファイルが出て、網羅率 0% と区別できなくなる。
+  it("測る範囲を coverage.include に渡す", () => {
+    expect(vitestArgs(null, "/tmp/out", [], [], ["src/**/*.ts", "lib/**/*.ts"])).toEqual([
+      "vitest",
+      "run",
+      "--coverage",
+      "--coverage.provider=v8",
+      "--coverage.reporter=json",
+      "--coverage.include=src/**/*.ts",
+      "--coverage.include=lib/**/*.ts",
+      "--coverage.reportsDirectory=/tmp/out/coverage",
+      "--reporter=json",
+      "--outputFile=/tmp/out/result.json",
+    ]);
+  });
+
   // 宣言は正の選択。宣言に無い project は gauntlet の世界に存在しない。
   it("宣言された project だけを走らせる", () => {
     expect(vitestArgs(null, "/tmp/out", ["node", "dom"])).toEqual([

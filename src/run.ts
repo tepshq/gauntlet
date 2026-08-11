@@ -19,10 +19,10 @@ import {
   type Violation,
   tierStatus,
 } from "./tier.ts";
-import { type DeadInclude, type IncludeReview, analyze, listSourceFiles, reviewIncludes } from "./typescript/adapter.ts";
+import { type DeadInclude, type IncludeReview, analyze, listSourceFiles, reviewIncludes, unmeasuredFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
-import { type SurvivedMutant, requireMutationTools, runMutation } from "./typescript/mutation.ts";
+import { type SurvivedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
 import { RunnerError, type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
 
@@ -79,7 +79,7 @@ export function runTier(root: string, tier: TierName): TierResult {
 
   // quick は差分に関係するテストだけ、full は全体を走らせる。
   const testsStarted = performance.now();
-  const outcome = runTests(root, tier === "quick" ? base : null, projects);
+  const outcome = runTests(root, tier === "quick" ? base : null, projects, [], config.source.include);
   const testsMs = performance.now() - testsStarted;
 
   const report = analyze(root, config, outcome.coverage);
@@ -88,12 +88,23 @@ export function runTier(root: string, tier: TierName): TierResult {
   const runners: Record<CheckName, () => CheckResult> = {
     typecheck: () => typecheck(root, config),
     tests: () => testsCheck(outcome, testsMs),
-    crap: () => crapCheck(tier, report, changed, outcome, reviewIncludes(root, config.source)),
+    crap: () =>
+      crapCheck(
+        tier,
+        report,
+        changed,
+        outcome,
+        reviewIncludes(root, config.source),
+        // 部分実行の coverage は変更ファイルに絞られるので、不在に意味が無い。
+        tier === "full" ? unmeasuredFiles(root, config.source, outcome.coverage) : [],
+      ),
     mutation: () =>
       mutationCheck(
         root,
         config,
-        mutationScope(changed.keys(), (tests) => coveredFiles(root, runTests(root, null, projects, tests).coverage)),
+        mutationScope(changed.keys(), (tests) =>
+          coveredFiles(root, runTests(root, null, projects, tests, config.source.include).coverage),
+        ),
         // フル実行の coverage に現れたファイル = 何かのテストが触れるファイル。
         new Set(coveredFiles(root, outcome.coverage)),
       ),
@@ -146,16 +157,32 @@ export function condenseFailure(message: string, limit: number): string {
   return detailLines(lines, limit).join("\n");
 }
 
-/** 落ちたテスト 1 件を、再実行せずに直せる形で。 */
+/**
+ * 落ちたテスト 1 件を、再実行せずに直せる形で。
+ *
+ * **理由が空でも、次に打つものは必ず出す。** vitest が本文を持たないことがあり
+ * （h3 では並列負荷の timeout でファイル単位の `message` が空だった）、
+ * 名前だけ出すと「落ちた」以外の情報がゼロになる。手で 10 回近く回す羽目になった。
+ */
 export function testViolation(failure: TestFailure): Violation {
   const title = `${failure.test ?? "(テストファイル自体が失敗)"}  ${failure.file}`;
   const body = condenseFailure(failure.message, DETAIL_LIMIT);
-  return { message: body === "" ? title : `${title}\n${indented(body)}`, file: failure.file };
+  const detail = body === "" ? `理由が出ていません。npx vitest run ${failure.file} で確認してください` : body;
+  return { message: `${title}\n${indented(detail)}`, file: failure.file };
 }
 
-/** 「N 件が失敗」だけでは再実行しないと直せない。落ちたテストごとに理由を並べる。 */
+/**
+ * 「N 件が失敗」だけでは再実行しないと直せない。落ちたテストごとに理由を並べる。
+ *
+ * **assert が 1 つも落ちずにファイルが落ちる形がある**（import エラー、timeout）。
+ * そのとき vitest の数え方では失敗 0 件なので、`0 / 1668 件が失敗` と出て
+ * 「何も落ちていない」に読める（h3 で実測）。数え方を変えて言う。
+ */
 export function testViolations(outcome: Pick<TestOutcome, "failed" | "total" | "failures">): Violation[] {
-  const summary = `${outcome.failed} / ${outcome.total} 件が失敗:`;
+  const summary =
+    outcome.failed === 0 && outcome.failures.length > 0
+      ? `${outcome.failures.length} ファイルがテストを実行できませんでした（${outcome.total} 件中の失敗は 0 件）:`
+      : `${outcome.failed} / ${outcome.total} 件が失敗:`;
   if (outcome.failures.length === 0) {
     return [{ message: `${summary} 詳細を取れませんでした。npx vitest run で確認してください` }];
   }
@@ -320,9 +347,10 @@ export function crapCheckViolations(
   changed: Map<string, Set<number>>,
   outcome: Pick<TestOutcome, "passed" | "total">,
   includes: IncludeReview = EMPTY_REVIEW,
+  unmeasured: readonly string[] = [],
 ): Violation[] {
   if (!outcome.passed) return [CRAP_NEEDS_TESTS];
-  const faults = measurementFaults(report, outcome.total, tier === "full", includes.dead);
+  const faults = measurementFaults(report, outcome.total, tier === "full", includes.dead, unmeasured);
   return faults.length === 0 ? crapViolations(tier, report, changed) : faults;
 }
 
@@ -363,9 +391,10 @@ function crapCheck(
   changed: Map<string, Set<number>>,
   outcome: Pick<TestOutcome, "passed" | "total">,
   includes: IncludeReview,
+  unmeasured: readonly string[],
 ): CheckResult {
   return timed("crap", () => ({
-    violations: crapCheckViolations(tier, report, changed, outcome, includes),
+    violations: crapCheckViolations(tier, report, changed, outcome, includes, unmeasured),
     scope: crapScope(report, changed, includes.unmatched),
   }));
 }
@@ -553,6 +582,21 @@ export function formatViolators(
 }
 
 /**
+ * 4 つのゲートのうち、**導入時に一度も動かないもの**を動かして確かめる。
+ *
+ * `full` の mutation は差分から対象を決めるので、導入コミット（設定ファイルだけ）では
+ * 必ず「変異対象 0 ファイル」で緑になる。道具が揃っていること（`requireMutationTools`）と
+ * **その道具が対象リポジトリの vitest を起動できること**は別で、後者は最初に src を
+ * 触る PR の CI まで分からなかった（h3 が指摘）。
+ *
+ * 変異は作らない（Stryker の `--dryRunOnly`）ので、確かめるのは疎通だけ。
+ */
+export function doctor(root: string): void {
+  const config = loadConfig(root);
+  dryRunMutation(root, listSourceFiles(root, config.source), declaredProjects(config));
+}
+
+/**
  * baseline が今許容している CRAP 違反を全部並べる。**ゲートではない。**
  *
  * ratchet は数しか記録しないので、`{ "crap": 35 }` から「どの 35 件か」に辿れなかった
@@ -577,7 +621,7 @@ export function violatorReport(
 /** 判断は `violatorReport` にある。ここはプロセスとファイルを触るだけの殻。 */
 export function listViolators(root: string): string {
   const config = loadConfig(root);
-  const outcome = runTests(root, null, declaredProjects(config));
+  const outcome = runTests(root, null, declaredProjects(config), [], config.source.include);
   return violatorReport(
     analyze(root, config, outcome.coverage),
     outcome,

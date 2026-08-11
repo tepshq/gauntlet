@@ -22,6 +22,13 @@ function isTouched(location: FunctionLocation, changed: Map<string, Set<number>>
   return false;
 }
 
+/** 名指しは 10 件まで。全部並べると本当の原因が量に埋もれる（切った分は件数で言う）。 */
+function withList(head: string, items: readonly string[]): string {
+  const shown = items.slice(0, 10);
+  const rest = items.length - shown.length;
+  return [head, ...shown.map((item) => `  ${item}`), ...(rest > 0 ? [`  …他 ${rest} 件`] : [])].join("\n");
+}
+
 function violatesThreshold(fn: FunctionReport): boolean {
   return crap(fn.cc, fn.coverage) > CRAP_THRESHOLD;
 }
@@ -58,6 +65,7 @@ export function measurementFaults(
   testsRan: number,
   fullRun: boolean,
   deadIncludes: readonly DeadInclude[] = [],
+  unmeasured: readonly string[] = [],
 ): Violation[] {
   // 他の include が生きていても落とす。そこだけ抜けた範囲で緑になるのが一番危ない。
   if (deadIncludes.length > 0) {
@@ -69,6 +77,19 @@ export function measurementFaults(
         message:
           "測る対象が 1 つもありません。gauntlet.config.json の source.include が" +
           "実在しないパスを指している可能性があります",
+      },
+    ];
+  }
+  // 網羅率 0% として扱うと、テストを書いても直らない赤を仕込むことになる。
+  if (unmeasured.length > 0) {
+    return [
+      {
+        message: withList(
+          `測る対象に入っているのに、vitest が網羅率を測っていないファイルが ${unmeasured.length} 件あります。` +
+            "vitest 側の coverage.exclude が消しています（gauntlet からは上書きできません）。" +
+            "テストを書いても網羅率は上がらないので、どちらかの範囲を揃えてください:",
+          unmeasured,
+        ),
       },
     ];
   }
