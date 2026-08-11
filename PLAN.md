@@ -494,7 +494,7 @@ CLI に LLM を入れる案は flaky そのもの（走るたびに違う提案�
 **#5: skill の更新手段が `npx skills update` ではいけない。** `~/.agents` があると実体を
 `.agents/skills/`（多数の agent が共有する置き場）へ移して `.claude/skills/` を symlink に
 するので、**追跡済みの `SKILL.md` が「削除」扱い**になる（h3 で 6 行の変更が 324 行削除に
-化けた）。`update` は `-a` も `--copy` も受けないため、置き場所を保てるのは `add` だけ。
+化けた）。`update` のオプションは `-g` / `-p` / `-y` だけで、置き場所を指定する `-a` を受けない。
 SKILL.md と README の追随手順を
 `npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y` に差し替えた。
 `--copy` は書かない — 使い捨てリポジトリで 3 手順とも実測した結果、**`-a` があれば

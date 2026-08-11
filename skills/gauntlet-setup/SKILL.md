@@ -332,8 +332,8 @@ rm -rf .claude/skills/gauntlet      # 0.9.x の旧名 skill
   `npx skills update` は使わない — 実体を `.agents/skills/`（多数の agent が共有する
   置き場。`~/.agents` があると対象が広がる）へ移して `.claude/skills/` を symlink に
   するため、**追跡済みの `SKILL.md` が「削除」扱いになる**（h3 で実測。6 行の変更が
-  324 行削除に化けた）。`update` は `-a` も `--copy` も受けないので、置き場所を
-  保てるのは `add` だけ
+  324 行削除に化けた）。`update` のオプションは `-g` / `-p` / `-y` だけで、置き場所を
+  指定する `-a` を受け付けない
 - `.npmrc` に `@tepshq:registry=https://npm.pkg.github.com` があれば消す。gauntlet は
   0.9.0 から public npm にあり認証は要らない（残っていると新しい版が見えない）。
   workflow の `registry-url` / `NODE_AUTH_TOKEN` も、gauntlet のためだけなら外す
