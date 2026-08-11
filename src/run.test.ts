@@ -715,6 +715,15 @@ describe("ratchetNote", () => {
     expect(ratchetNote(before, after)[0]).toContain("mutation 1 ファイル");
   });
 
+  // 生き残り 0 の新規記録まで名指しすると、対象になっただけのファイルが並んで埋もれる。
+  it("生き残り 0 の新規記録は名指ししない", () => {
+    const before = { crap: 0, mutation: {}, duplication: 0 };
+    const after = { crap: 0, mutation: { "src/clean.ts": { survived: 0, measured: 9 } }, duplication: 0 };
+    const note = ratchetNote(before, after)[0]!;
+    expect(note).not.toContain("新しく記録");
+    expect(note).toContain("mutation 1 ファイル");
+  });
+
   // 初回観測がそのまま許容値になるので、コードを別ファイルに移すと生き残りが黙って
   // 消える。新しい記録は名指しして、人がレビューで気づける形にする。
   it("新しく記録したファイルは名指しする", () => {
@@ -821,6 +830,22 @@ describe("settleBaseline", () => {
   it("動いていなければ何も言わない", () => {
     saveBaseline(root, before);
     expect(settleBaseline(root, before, false)).toEqual([]);
+  });
+
+  // キー順に依存すると、手で編集された記録が「毎回動いた」ことになる。
+  it("キー順が違うだけなら動いていない", () => {
+    writeFileSync(
+      join(root, "gauntlet.baseline.json".split("/").join("/")),
+      JSON.stringify({ duplication: 10, mutation: {}, crap: 5 }),
+    );
+    expect(settleBaseline(root, before, false)).toEqual([]);
+  });
+
+  // duplication の無い記録と 0 の記録は別物。潰すと「欄が消えた」ことに気づけない。
+  it("duplication が消えたら動いたと見なす", () => {
+    saveBaseline(root, { crap: 5, mutation: {} });
+    const notes = settleBaseline(root, before, false);
+    expect(notes).toHaveLength(1);
   });
 });
 

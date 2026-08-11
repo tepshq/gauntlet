@@ -44,6 +44,23 @@ describe("loadBaseline", () => {
     expect(loadBaseline(root)).toEqual({ crap: 3, mutation: { "a.ts": { survived: 1, measured: 12 } } });
   });
 
+  // 読めない値を黙って数に変えると、壊れた記録が「生き残り 0」に化ける。欄ごと落とす。
+  it.each([
+    ['{"crap": 3, "mutation": {"a.ts": "many"}}', "文字列"],
+    ['{"crap": 3, "mutation": {"a.ts": null}}', "null"],
+    ['{"crap": 3, "mutation": {"a.ts": {"survived": "x"}}}', "survived が数でない"],
+    ['{"crap": 3, "mutation": {"a.ts": {"measured": 5}}}', "survived 欠落"],
+  ])("読めない記録は欄ごと落とす（%s）", (contents) => {
+    put(contents);
+    expect(loadBaseline(root)?.mutation).toEqual({});
+  });
+
+  // measured が数でなければ「無い」として読む（null と書かれた旧試行を許す）。
+  it("measured が数でなければ null として読む", () => {
+    put('{"crap": 3, "mutation": {"a.ts": {"survived": 2, "measured": "x"}}}');
+    expect(loadBaseline(root)?.mutation).toEqual({ "a.ts": { survived: 2, measured: null } });
+  });
+
   // 0.22 より前は生き残りの数だけを記録していた。読めなくなると全リポジトリの記録が消える。
   it("旧形式（数だけ）を読める", () => {
     put('{"crap": 3, "mutation": {"a.ts": 7}}');

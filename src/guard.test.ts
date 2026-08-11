@@ -133,3 +133,49 @@ describe("gatesCommit", () => {
     expect(gatesCommit(input as Parameters<typeof gatesCommit>[0])).toBe(false);
   });
 });
+
+// 引用の落とし方そのもの。1 文字ずれると「散文を止める」か「引用パスの書き換えを通す」に戻る。
+describe("引用の扱い", () => {
+  // 空文字に潰すと `echo '' > gauntlet.baseline.json` の空引用が消えて隣とくっつき、
+  // リダイレクトの行き先の判定がずれる。中身だけ落とし、引用の器は残す。
+  it("引用の器は残して中身だけ落とす", () => {
+    const command = `echo 'x' > gauntlet.baseline.json`;
+    expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(true);
+  });
+
+  it("二重引用の中の書き換え構文は無視される", () => {
+    const command = `echo "sed -i tee rm > gauntlet.baseline.json の話" && ls gauntlet.baseline.json`;
+    expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(false);
+  });
+
+  // 引用の外に構文があれば、引用の中に説明文が混ざっていても止める。
+  it("引用の外の書き換えは引用に紛れない", () => {
+    const command = `sed -i 's/"crap": 9/"crap": 99/' gauntlet.baseline.json`;
+    expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(true);
+  });
+});
+
+// commit 検出の regex を 1 部品ずつ。ここが緩むと #22（全 Bash で quick）か、
+// 逆にコミットの素通り（検問の消滅）に倒れる。
+describe("runsGitCommit の部品", () => {
+  it.each([
+    "  git commit",
+    "FOO=bar BAZ=qux git commit",
+    "git -c core.editor=true commit",
+    "git --no-pager commit",
+    "git -C /a -c x=y --no-pager commit -m 'z'",
+  ])("コミットに届く形: %s", (command) => {
+    expect(runsGitCommit(command)).toBe(true);
+  });
+
+  it.each([
+    "gito commit",
+    "git commitx",
+    "mygit commit",
+    "git recommit",
+    "git log --grep commit",
+    "FOO=bar-git-commit ls",
+  ])("コミットでない形: %s", (command) => {
+    expect(runsGitCommit(command)).toBe(false);
+  });
+});

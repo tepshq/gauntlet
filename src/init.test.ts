@@ -4,9 +4,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigError, parseConfig } from "./config.ts";
-import { INIT_DEFAULTS, INIT_USAGE, formatInit, helpRequested, init, mergeGitignore, parseInitOptions } from "./init.ts";
+import { INIT_DEFAULTS, INIT_USAGE, formatInit, helpRequested, init, mergeGitignore, parseInitOptions, mergeSettings } from "./init.ts";
 
 // 出力の体裁ごと固定する。部分一致で見ると、改行の数や区切りが崩れても気づかない。
+// 0.21 以前が置いた quick 直呼びのフックを残すと、`if` を知らない版の Claude Code で
+// 全 Bash に quick が走り続ける（precommit への差し替えが効かない）。
+describe("mergeSettings の移行", () => {
+  it("旧 quick 直呼びのフックを撤去して precommit に置き換える", () => {
+    const legacy = JSON.stringify({
+      hooks: {
+        PreToolUse: [
+          { matcher: "Bash", hooks: [{ type: "command", if: "Bash(git commit *)", command: "npx gauntlet quick" }] },
+        ],
+      },
+    });
+    const merged = mergeSettings(legacy);
+    expect(merged).not.toContain('"npx gauntlet quick"');
+    expect(merged).toContain('"npx gauntlet precommit"');
+  });
+
+  it("他人のフックは撤去しない", () => {
+    const theirs = JSON.stringify({
+      hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "npx their-tool quick" }] }] },
+    });
+    expect(mergeSettings(theirs)).toContain("npx their-tool quick");
+  });
+});
+
 describe("mergeGitignore", () => {
   // `coverage` はディレクトリにも当たるので `coverage/` を含む。h3 には元から
   // `coverage` があり、そこへ `coverage/` を足していた（動作は同じでも二度書きに見える）。
