@@ -498,6 +498,24 @@ describe("withDetails", () => {
   });
 });
 
+describe("mutationScopeText の除外表示", () => {
+  // 黙って落とすと、緑が「弱いテストが無い」ではなく「そこは見ていない」を意味していることが
+  // 伝わらない（--ignoreStatic の件数を出しているのと同じ理由）。
+  it("外した mutator を並べる", () => {
+    expect(mutationScopeText(3, 0, 0, ["StringLiteral"])).toBe(
+      "変異対象 3 ファイル（StringLiteral の変異は Stryker が置けないので測っていません）",
+    );
+  });
+
+  it("外していなければ何も足さない", () => {
+    expect(mutationScopeText(3, 0, 0, [])).toBe("変異対象 3 ファイル");
+  });
+
+  it("複数なら並べる", () => {
+    expect(mutationScopeText(3, 0, 0, ["A", "B"])).toContain("A、B の変異は");
+  });
+});
+
 describe("oneLine", () => {
   it("複数行を空白 1 つで繋ぐ", () => {
     expect(oneLine("a\n  b\nc", 60)).toBe("a b c");

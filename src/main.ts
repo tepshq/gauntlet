@@ -37,8 +37,10 @@ function listCommand(): number {
 
 /** 導入時に一度も動かないゲート（mutation）を動かして確かめる。走れば exit 0。 */
 function doctorCommand(): number {
-  doctor(process.cwd());
-  process.stderr.write("gauntlet doctor: ok  Stryker が vitest を起動できました（変異は作らず初回実行のみ）\n");
+  const excluded = doctor(process.cwd());
+  const dropped =
+    excluded.length === 0 ? "" : `\n  ${excluded.join("、")} の変異は Stryker が置けないので、以降も測りません`;
+  process.stderr.write(`gauntlet doctor: ok  Stryker が vitest を起動できました（変異は作らず初回実行のみ）${dropped}\n`);
   return EXIT_PASS;
 }
 

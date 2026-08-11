@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } fr
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { REPORT_PATH, type MutationReport, fileModes, findRepoVitestConfig, ignoredCount, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, requireMutationTools, survivedFrom, vitestRunnerPlugin } from "./mutation.ts";
+import { REPORT_PATH, type MutationReport, fileModes, findRepoVitestConfig, ignoredCount, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
 import { RunnerError, lastLines } from "./runner.ts";
 
 // レポートが出ていないときは Stryker の出力が唯一の手がかりになる。
@@ -234,9 +234,54 @@ describe("strykerConfig", () => {
     });
   });
 
+  // 上流が置けないと言った 1 種類だけを外す。ここが消えると全損に戻る。
+  it("外す mutator を渡されたら設定に載せる", () => {
+    const config = strykerConfig(["a.ts"], "/tmp/out", null, "/p/x.js", ["StringLiteral"]);
+    expect(config.mutator).toEqual({ excludedMutations: ["StringLiteral"] });
+  });
+
+  // 何も外していない回に空の指定を書くと、外したように読める。
+  it("外すものが無ければ mutator キーを足さない", () => {
+    expect(strykerConfig(["a.ts"], "/tmp/out", null, "/p/x.js", [])).not.toHaveProperty("mutator");
+  });
+
   // リポジトリに vitest 設定が無ければラッパーも無い。既定の解決に任せる。
   it("ラッパーが無ければ vitest キーを足さない", () => {
     expect(strykerConfig([], "/tmp/out", null, "/p/vitest-runner/index.js")).not.toHaveProperty("vitest");
+  });
+});
+
+// 上流は 2020 年から 1〜2 年おきに「置けない構文」で全損している（StringLiteral →
+// MethodExpression → BooleanLiteral）。構文ごとの特例を持たず、エラー文が名乗る名前を読む。
+describe("unplaceableMutators", () => {
+  const message =
+    'ERROR Stryker SyntaxError: src/h3.ts:73:2 expressionMutantPlacer could not place mutants ' +
+    'with type(s): "StringLiteral". Either remove this file from the list of files to be mutated';
+
+  it("置けなかった mutator を読む", () => {
+    expect(unplaceableMutators(message)).toEqual(["StringLiteral"]);
+  });
+
+  it("複数あれば全部読む", () => {
+    expect(unplaceableMutators('could not place mutants with type(s): "StringLiteral", "BooleanLiteral".')).toEqual([
+      "StringLiteral",
+      "BooleanLiteral",
+    ]);
+  });
+
+  it("同じものは畳む", () => {
+    expect(unplaceableMutators('could not place mutants with type(s): "A", "A".')).toEqual(["A"]);
+  });
+
+  // 名前を読めなければ何も外さない。ここで例外になると Stryker の失敗が gauntlet の
+  // クラッシュに化けて、原因が 1 段遠くなる。
+  it("名前を読めなければ何も外さない", () => {
+    expect(unplaceableMutators("could not place mutants with type(s): unknown.")).toEqual([]);
+  });
+
+  // 別の理由で落ちた回まで外すと、測る範囲が黙って狭くなる。
+  it("別の失敗では何も外さない", () => {
+    expect(unplaceableMutators("ERROR Stryker Something went wrong in the initial test run")).toEqual([]);
   });
 });
 
@@ -250,6 +295,8 @@ describe("strykerVitestWrapper", () => {
         'import base from "/repo/vitest.config.ts";',
         'const config = (await (typeof base === "function" ? base({ command: "serve", mode: "test" }) : base)) ?? {};',
         'config.root ??= "/repo";',
+        "config.test ??= {};",
+        "config.test.typecheck = { enabled: false };",
         'const declared = ["node","dom"];',
         "if (declared.length > 0 && Array.isArray(config.test?.projects)) {",
         "  config.test.projects = config.test.projects.filter(",

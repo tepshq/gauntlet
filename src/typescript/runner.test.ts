@@ -8,6 +8,7 @@ import {
   installedVitestVersion,
   requireCoverageProvider,
   toOutcome,
+  lastReasons,
   vitestArgs,
 } from "./runner.ts";
 
@@ -91,6 +92,26 @@ describe("RunnerError", () => {
 
 // 呼び出しは必ず it の中で行う。describe の直下で値を作ると、
 // 変異が有効になる前に計算が終わっていて、テストが変異を検知できない。
+// 道具は理由を出したあとに長いスタックを吐く。そのまま末尾を取ると窓に入るのが
+// スタックだけになり、理由が消える（h3 で Stryker の失敗が 13 行すべて at になった）。
+describe("lastReasons", () => {
+  it("スタックの行を落としてから末尾を取る", () => {
+    const output = ["ERROR 置けませんでした", "    at a (x.js:1:1)", "    at b (y.js:2:2)"].join("\n");
+    expect(lastReasons(output, 2)).toBe("ERROR 置けませんでした");
+  });
+
+  // 落とすのは行頭のスタックだけ。理由の文中の " at " まで落とすと、理由が消える。
+  it("理由の中の at は落とさない", () => {
+    expect(lastReasons("Error: Test timed out at 5000ms\n    at task (x.js:1:1)", 2)).toBe(
+      "Error: Test timed out at 5000ms",
+    );
+  });
+
+  it("スタックが無ければ末尾をそのまま返す", () => {
+    expect(lastReasons("a\nb\nc", 2)).toBe("b\nc");
+  });
+});
+
 describe("vitestArgs", () => {
   // 引数は丸ごと固定する。部分一致で見ると、コマンド名や出力先が変わっても気づかない。
   it("宣言が無ければ全部走らせる", () => {

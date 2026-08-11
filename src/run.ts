@@ -481,10 +481,18 @@ function gateByFile(
  * `--ignoreStatic` で外した分を黙って落とすと、緑が「弱いテストが無い」ではなく
  * 「そこは見ていない」を意味していることが読み手に伝わらない。
  */
-export function mutationScopeText(targets: number, ignored: number, untested = 0): string {
+export function mutationScopeText(
+  targets: number,
+  ignored: number,
+  untested = 0,
+  excluded: readonly string[] = [],
+): string {
   const bare = untested === 0 ? "" : `（テストが触れない ${untested} ファイルは対象外 — 網羅率 0 は CRAP が見る）`;
   const skipped = ignored === 0 ? "" : `（静的な変異 ${ignored} 件は測っていません）`;
-  return `変異対象 ${targets} ファイル${bare}${skipped}`;
+  // 上流が置けずに外した分。黙って落とすと、緑が「弱いテストが無い」ではなく
+  // 「そこは見ていない」を意味していることが伝わらない（`--ignoreStatic` と同じ扱い）。
+  const dropped = excluded.length === 0 ? "" : `（${excluded.join("、")} の変異は Stryker が置けないので測っていません）`;
+  return `変異対象 ${targets} ファイル${bare}${skipped}${dropped}`;
 }
 
 /** 一覧の 1 行に収める。変異後のコードは複数行のことがある。 */
@@ -518,10 +526,10 @@ function mutationCheck(
   return timed("mutation", () => {
     requireMutationTools(root);
     if (targets.length === 0) return { scope: mutationScopeText(0, 0, untested), violations: [] };
-    const { survived, ignored } = runMutation(root, targets, declaredProjects(config));
+    const { survived, ignored, excluded } = runMutation(root, targets, declaredProjects(config));
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
-      scope: mutationScopeText(targets.length, ignored, untested),
+      scope: mutationScopeText(targets.length, ignored, untested, excluded),
       violations: gateByFile(root, "mutation", targets, countByFile(survived), (entry) =>
         withDetails(
           // 一覧は「そのファイルの生き残り全部」。記録は数だけなので、どれが増えた分かは特定できない。
@@ -628,9 +636,9 @@ export function formatViolators(
  *
  * 変異は作らない（Stryker の `--dryRunOnly`）ので、確かめるのは疎通だけ。
  */
-export function doctor(root: string): void {
+export function doctor(root: string): string[] {
   const config = loadConfig(root);
-  dryRunMutation(root, listSourceFiles(root, config.source), declaredProjects(config));
+  return dryRunMutation(root, listSourceFiles(root, config.source), declaredProjects(config));
 }
 
 /**

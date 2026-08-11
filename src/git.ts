@@ -150,6 +150,20 @@ export function repoSourceSet(root: string): Set<string> {
   return new Set(lines(git(root, ["ls-files", "--cached", "--others", "--exclude-standard"])));
 }
 
+/**
+ * git が実行ビット付き（100755）として持っているファイル。
+ *
+ * Stryker の `--inPlace` は**プロジェクト全体**を退避して戻すので、変異対象だけ
+ * mode を控えても足りない（h3 では `bin/h3.mjs` が 755 → 644 に落ちた）。
+ * 何を触るかを gauntlet が知らなくても、git が持っている一覧なら過不足なく戻せる。
+ */
+export function executableFiles(root: string): Set<string> {
+  const entries = lines(git(root, ["ls-files", "-s"]))
+    .filter((line) => line.startsWith("100755"))
+    .map((line) => line.slice(line.indexOf("\t") + 1));
+  return new Set(entries);
+}
+
 export function changedLines(root: string, base: string): Map<string, Set<number>> {
   const result = new Map<string, Set<number>>();
   collectHunks(git(root, ["diff", "--unified=0", `${base}...HEAD`]), result);

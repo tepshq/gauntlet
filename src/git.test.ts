@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { branchCandidates, changedLines, collectHunks, hunkLines, lines, repoSourceSet } from "./git.ts";
+import { branchCandidates, changedLines, collectHunks, executableFiles, hunkLines, lines, repoSourceSet } from "./git.ts";
 
 describe("branchCandidates", () => {
   // PR がマージされる先は origin/main。手元の main は fetch では動かず、いくらでも古くなる
@@ -87,6 +87,40 @@ describe("changedLines", () => {
     repo((root) => {
       writeFileSync(join(root, "new.ts"), "a\n");
       expect([...changedLines(root, "main").keys()]).toEqual(["new.ts"]);
+    });
+  });
+});
+
+// Stryker の --inPlace はプロジェクト全体を退避して戻すので、変異対象だけ mode を
+// 控えても足りない（h3 で bin/h3.mjs が 755 → 644 に落ちた）。git の一覧なら過不足が無い。
+describe("executableFiles", () => {
+  function withRepo(body: (root: string, run: (...args: string[]) => void) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-mode-"));
+    const run = (...args: string[]): void => {
+      execFileSync("git", args, { cwd: root, stdio: "ignore" });
+    };
+    try {
+      run("init", "-q");
+      body(root, run);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("実行ビット付きだけを返す", () => {
+    withRepo((root, run) => {
+      writeFileSync(join(root, "bin.mjs"), "#!/usr/bin/env node\n", { mode: 0o755 });
+      writeFileSync(join(root, "src.ts"), "export const a = 1;\n", { mode: 0o644 });
+      run("add", "-A");
+      expect([...executableFiles(root)]).toEqual(["bin.mjs"]);
+    });
+  });
+
+  it("無ければ空", () => {
+    withRepo((root, run) => {
+      writeFileSync(join(root, "src.ts"), "export const a = 1;\n", { mode: 0o644 });
+      run("add", "-A");
+      expect(executableFiles(root).size).toBe(0);
     });
   });
 });

@@ -132,6 +132,22 @@ export function lastLines(text: string, count: number): string {
   return text.split("\n").slice(-count).join("\n").trim();
 }
 
+/**
+ * 末尾を取る前にスタックの行を落とす。
+ *
+ * 道具は理由を出したあとに長いスタックを吐くので、そのまま末尾 N 行を取ると
+ * **窓に入るのがスタックだけ**になる（h3 で Stryker の失敗が 13 行すべて `at` になった）。
+ */
+export function lastReasons(text: string, count: number): string {
+  return lastLines(
+    text
+      .split("\n")
+      .filter((line) => !/^\s+at\s/.test(line))
+      .join("\n"),
+    count,
+  );
+}
+
 /** vitest は絶対パスで報告する。差分や baseline と同じリポジトリ相対に揃える。 */
 function relativeName(root: string, path: string): string {
   return (isAbsolute(path) ? relative(root, path) : path).split("\\").join("/");
