@@ -1000,10 +1000,12 @@ describe("coveredFiles", () => {
     expect(coveredFiles("/repo", { "/repo/src/main.ts": entry({ "0": 0, "1": 0 }, { "0": 0 }) })).toEqual([]);
   });
 
+  // 部分的にしか走っていないのが普通（全部走ったファイルだけを対象にすると、
+  // 変異させたい弱いところがまるごと外れる）。
   it("関数が呼ばれたファイルをリポジトリ相対で返す", () => {
     expect(
       coveredFiles("/repo", {
-        "/repo/src/run.ts": entry({ "0": 3, "1": 0 }),
+        "/repo/src/run.ts": entry({ "0": 3, "1": 0 }, { "0": 1, "1": 0 }),
         "/repo/src/dead.ts": entry({ "0": 0 }),
       }),
     ).toEqual(["src/run.ts"]);
