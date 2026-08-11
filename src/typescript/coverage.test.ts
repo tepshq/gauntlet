@@ -12,7 +12,8 @@ function fileCoverage(statements: readonly Statement[]): IstanbulFileCoverage {
     statementMap[String(index)] = { start: { line, column } };
     s[String(index)] = hits;
   });
-  return { statementMap, s };
+  // f は coveredFiles だけが読む（網羅率は文で測る）。ここでは要らないので空。
+  return { statementMap, s, f: {} };
 }
 
 function rates(source: string, statements: readonly Statement[]): [string, number][] {

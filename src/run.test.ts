@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, duplicationViolations, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -154,24 +154,6 @@ describe("countByFile", () => {
   it("1 件なら 1", () => {
     expect(countByFile([{ file: "a.ts" }])).toEqual({ "a.ts": 1 });
   });
-});
-
-describe("isTestFile", () => {
-  it.each(["a.test.ts", "a.test.tsx", "a.spec.ts", "a.spec.tsx", "a.integration.test.ts"])(
-    "%s はテスト",
-    (file) => {
-      expect(isTestFile(file)).toBe(true);
-    },
-  );
-
-  // ここを取りこぼすとテストファイル自身を変異させ、それを守るテストは無いので必ず生き残る。
-  // 末尾で判定しないと、スナップショットや sourcemap の隣接ファイルまで拾う。
-  it.each(["a.ts", "a.tsx", "testing.ts", "spec.ts", "a.test.md", "a.test.ts.snap"])(
-    "%s はテストではない",
-    (file) => {
-      expect(isTestFile(file)).toBe(false);
-    },
-  );
 });
 
 describe("mutationScope", () => {
@@ -981,21 +963,32 @@ describe("duplicationViolations", () => {
 });
 
 describe("coveredFiles", () => {
-  const entry = (counts: Record<string, number>) => ({ statementMap: {}, s: counts });
+  const entry = (fns: Record<string, number>, statements: Record<string, number> = { "0": 1 }) => ({
+    statementMap: {},
+    s: statements,
+    f: fns,
+  });
 
   // vitest は coverage.include に合致する未ロードのファイルもゼロ行で載せる。
   // キーの存在で判定すると、mutation の範囲が include の全ファイルに膨張する（実測）。
-  it("1 文も実行されていないファイルは触れられていない", () => {
-    expect(coveredFiles("/repo", { "/repo/src/main.ts": entry({ "0": 0, "1": 0 }) })).toEqual([]);
+  it("何も呼ばれていないファイルは触れられていない", () => {
+    expect(coveredFiles("/repo", { "/repo/src/main.ts": entry({ "0": 0, "1": 0 }, { "0": 0 }) })).toEqual([]);
   });
 
-  it("1 文でも実行されたファイルをリポジトリ相対で返す", () => {
+  it("関数が呼ばれたファイルをリポジトリ相対で返す", () => {
     expect(
       coveredFiles("/repo", {
         "/repo/src/run.ts": entry({ "0": 3, "1": 0 }),
         "/repo/src/dead.ts": entry({ "0": 0 }),
       }),
     ).toEqual(["src/run.ts"]);
+  });
+
+  // **import は top-level を走らせる。** バレルを 1 つ import しただけで、その先の
+  // 全ファイルに文の実行が付く（duct では変異対象が 1 → 18 ファイルに膨らみ、
+  // 触っていない 17 ファイルの生き残り 587 件が baseline に焼かれた）。
+  it("文だけ動いて関数が呼ばれていなければ触れられていない", () => {
+    expect(coveredFiles("/repo", { "/repo/src/b.ts": entry({ "0": 0 }, { "0": 1 }) })).toEqual([]);
   });
 
   // Windows の区切りが混ざったキーも POSIX に揃える。

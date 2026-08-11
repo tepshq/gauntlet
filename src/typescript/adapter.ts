@@ -27,6 +27,20 @@ export function toPosix(path: string): string {
  * 生成クライアント 61 ファイルが `lib/**` に合致していた（`repoSourceSet` 参照）。
  * エージェントの書きたての新規ファイルは gitignore されていないので残る。
  */
+/**
+ * テストファイルか。**測る対象からも変異対象からも外す。**
+ *
+ * テストにテストは書けないので、テストファイルの複雑な関数は網羅率 0% で必ず CRAP
+ * 違反になる（duct では `vi.fn().mockImplementation()` に渡した switch が CRAP 110 で、
+ * テストを 1 行直すとコミットが止まった）。変異させても、守るテストが無いので必ず生き残る。
+ * 重複も、`beforeEach` の並びや AAA の骨格が似るのは自然なので、数えると本体が量に埋もれる
+ * （duct で 133437 → 30196 トークン）。**どのリポジトリでも答えが同じ**なので config で
+ * 決めることではない。
+ */
+export function isTestFile(file: string): boolean {
+  return /\.(test|spec)\.tsx?$/.test(file);
+}
+
 export function listSourceFiles(root: string, source: GauntletConfig["source"]): string[] {
   const owned = repoSourceSet(root);
   // Stryker disable next-line all: 除外なしと空の除外は同じ振る舞いなので、
@@ -34,7 +48,7 @@ export function listSourceFiles(root: string, source: GauntletConfig["source"]):
   const found = globSync(source.include, { cwd: root, exclude: source.exclude ?? [] });
   return found
     .map(toPosix)
-    .filter((file) => owned.has(file))
+    .filter((file) => owned.has(file) && !isTestFile(file))
     .sort();
 }
 

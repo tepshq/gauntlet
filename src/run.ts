@@ -19,7 +19,7 @@ import {
   type Violation,
   tierStatus,
 } from "./tier.ts";
-import { type DeadInclude, type IncludeReview, analyze, listSourceFiles, reviewIncludes, unmeasuredFiles } from "./typescript/adapter.ts";
+import { type DeadInclude, type IncludeReview, analyze, isTestFile, listSourceFiles, reviewIncludes, unmeasuredFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
 import { type SurvivedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
@@ -71,7 +71,17 @@ function typecheck(root: string, config: GauntletConfig): CheckResult {
   return timed("typecheck", () => ({ scope: command, violations: typecheckViolations(captureShell(command, root)) }));
 }
 
-export function runTier(root: string, tier: TierName): TierResult {
+/**
+ * 段の開始を知らせる先。**打ち切られた回に何も残らないのを防ぐ。**
+ *
+ * 出力が最後の 1 回だけだと、CI の timeout で殺された回は情報ゼロになる
+ * （duct の CI で 2 回。17 分走って 1 行も出ず、「壊れているのか・設定が違うのか・
+ * 単に遅いのか」が区別できなかった）。`quick` は数秒で終わり、出力はフック経由で
+ * エージェントの文脈に入るので黙らせる — 呼び出し側が渡さなければ何も出ない。
+ */
+export type Notify = (line: string) => void;
+
+export function runTier(root: string, tier: TierName, notify: Notify = () => {}): TierResult {
   const started = performance.now();
   const config = loadConfig(root);
   const base = mergeBase(root, config.defaultBranch);
@@ -107,10 +117,14 @@ export function runTier(root: string, tier: TierName): TierResult {
         ),
         // フル実行の coverage に現れたファイル = 何かのテストが触れるファイル。
         new Set(coveredFiles(root, outcome.coverage)),
+        notify,
       ),
     duplication: () => duplicationCheck(root, config),
   };
-  const checks = TIER_CHECKS[tier].map((name) => runners[name]());
+  const checks = TIER_CHECKS[tier].map((name) => {
+    notify(`${name} …`);
+    return runners[name]();
+  });
 
   return { tier, status: tierStatus(checks), checks, durationMs: performance.now() - started };
 }
@@ -236,22 +250,26 @@ export function testsCheck(
 }
 
 /**
- * この実行で実際に走ったテストが触れた（= 1 文でも実行された）ソース。
+ * この実行で走ったテストが**振る舞いを動かした**ソース。判定は関数が 1 つでも呼ばれたか。
  *
- * **「coverage に現れた」では足りない。** vitest は `coverage.include` に合致する
- * 未ロードのファイルもゼロ行の項目として載せる（gauntlet 自身の main.ts で実測）。
- * キーの存在で判定すると、mutation の探索範囲が「include の全ファイル」に膨張し、
- * テストが触れないファイルまで変異させる（gauntlet 自身で毎回 22 ファイルになっていた）。
- * coverage-final.json は絶対パスをキーに持つので、リポジトリ相対に直す。
+ * ここまで 2 段しくじっている。
+ *
+ * 1. **「coverage に現れた」では足りない。** vitest は `coverage.include` に合致する
+ *    未ロードのファイルもゼロ行の項目として載せる（gauntlet 自身の main.ts で実測）。
+ *    キーの存在で判定すると探索範囲が「include の全ファイル」に膨張した。
+ * 2. **「1 文でも実行された」でも足りない。** `import` はモジュールの top-level を
+ *    走らせるので、バレル（re-export）を 1 つ import しただけで、その先の全ファイルに
+ *    文の実行が付く。duct では 44 行のテスト 1 本で変異対象が 18 ファイルに膨らみ、
+ *    **触っていない 17 ファイルの生き残り 587 件が baseline に焼かれた**。
+ *    最小再現でも `export const B = 2` だけのファイルが文 hit 1 / 関数 hit 0 になる。
+ *
+ * 関数を 1 つも持たないファイル（定数だけ）はここに現れないが、そこに作れる変異は
+ * static なものだけで、`--ignoreStatic` が最初から測っていない。
  */
 export function coveredFiles(root: string, coverage: IstanbulCoverage): string[] {
   return Object.entries(coverage)
-    .filter(([, entry]) => Object.values(entry.s).some((count) => count > 0))
+    .filter(([, entry]) => Object.values(entry.f).some((count) => count > 0))
     .map(([absolute]) => relative(root, absolute).split("\\").join("/"));
-}
-
-export function isTestFile(file: string): boolean {
-  return /\.(test|spec)\.tsx?$/.test(file);
 }
 
 /**
@@ -516,6 +534,7 @@ function mutationCheck(
   config: GauntletConfig,
   covered: Iterable<string>,
   tested: ReadonlySet<string>,
+  notify: Notify,
 ): CheckResult {
   const inScope = mutationTargets(covered, listSourceFiles(root, config.source));
   // テストが 1 つも触れないファイルは変異させない。全変異が NoCoverage（数えない —
@@ -526,6 +545,9 @@ function mutationCheck(
   return timed("mutation", () => {
     requireMutationTools(root);
     if (targets.length === 0) return { scope: mutationScopeText(0, 0, untested), violations: [] };
+    // 一番長い段。件数が分かれば時間の見積もりが立つ。書き換えの予告も兼ねる —
+    // `--inPlace` は実ファイルを書き換えるので、途中で止めると計装が残る（duct で実測）。
+    notify(`mutation 変異対象 ${targets.length} ファイル。作業ツリーを一時的に書き換えます`);
     const { survived, ignored, excluded } = runMutation(root, targets, declaredProjects(config));
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
@@ -566,9 +588,13 @@ export function duplicationViolations(root: string, actual: number): Violation[]
 
 function duplicationCheck(root: string, config: GauntletConfig): CheckResult {
   return timed("duplication", () => {
-    const { duplicatedTokens, sources } = runDuplication(root, listSourceFiles(root, config.source));
+    // **渡した数を出す。** jscpd の `sources` は「min-tokens 以上あってクローンに
+    // 参加しうるファイル数」で、渡した数ではない（duct で 794 → 760）。同じ実行の
+    // crap 行と食い違って「範囲が黙って狭いのでは」と誤診させた。
+    const files = listSourceFiles(root, config.source);
+    const { duplicatedTokens } = runDuplication(root, files);
     return {
-      scope: `重複 ${duplicatedTokens} トークン / 対象 ${sources} ファイル`,
+      scope: `重複 ${duplicatedTokens} トークン / 対象 ${files.length} ファイル`,
       violations: duplicationViolations(root, duplicatedTokens),
     };
   });
@@ -604,8 +630,8 @@ export function describeCrash(error: unknown): string {
 }
 
 /** tier はサブコマンド名から確定して渡される（`gauntlet quick` / `gauntlet full`）。 */
-export function run(tier: TierName, cwd: string): { output: string; result: TierResult } {
-  const result = runTier(cwd, tier);
+export function run(tier: TierName, cwd: string, notify?: Notify): { output: string; result: TierResult } {
+  const result = runTier(cwd, tier, notify);
   return { output: formatResult(result), result };
 }
 

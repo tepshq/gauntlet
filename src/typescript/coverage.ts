@@ -17,6 +17,12 @@ interface Position {
 export interface IstanbulFileCoverage {
   statementMap: Record<string, { start: Position }>;
   s: Record<string, number>;
+  /**
+   * 関数ごとの呼び出し回数。**網羅率には使わない**（回数は被覆率ではない）。
+   * 使うのは `coveredFiles` の「このテストはこのファイルの振る舞いを動かしたか」だけで、
+   * そこでは 0 か 1 以上かしか見ない。
+   */
+  f: Record<string, number>;
 }
 
 export type IstanbulCoverage = Record<string, IstanbulFileCoverage>;

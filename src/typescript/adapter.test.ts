@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { listSourceFiles, reviewIncludes, toPosix, unmeasuredFiles } from "./adapter.ts";
+import { isTestFile, listSourceFiles, reviewIncludes, toPosix, unmeasuredFiles } from "./adapter.ts";
 
 /**
  * git 管理下の小さなリポジトリ。`src/alpha.ts` / `src/utils/beta.ts` / `src/zeta.ts`。
@@ -104,7 +104,7 @@ describe("reviewIncludes", () => {
 // ゼロ行の項目として載る。それでも現れないのは、リポジトリ側の coverage.exclude が
 // 消しているときだけ（CLI からは上書きできない。h3 で実測）。
 describe("unmeasuredFiles", () => {
-  const entry = { statementMap: {}, s: {} };
+  const entry = { statementMap: {}, s: {}, f: {} };
 
   it("coverage に現れない対象を返す", () => {
     withRepo((root) => {
@@ -167,4 +167,22 @@ describe("listSourceFiles", () => {
       ]);
     });
   });
+});
+
+describe("isTestFile", () => {
+  it.each(["a.test.ts", "a.test.tsx", "a.spec.ts", "a.spec.tsx", "a.integration.test.ts"])(
+    "%s はテスト",
+    (file) => {
+      expect(isTestFile(file)).toBe(true);
+    },
+  );
+
+  // ここを取りこぼすとテストファイル自身を変異させ、それを守るテストは無いので必ず生き残る。
+  // 末尾で判定しないと、スナップショットや sourcemap の隣接ファイルまで拾う。
+  it.each(["a.ts", "a.tsx", "testing.ts", "spec.ts", "a.test.md", "a.test.ts.snap"])(
+    "%s はテストではない",
+    (file) => {
+      expect(isTestFile(file)).toBe(false);
+    },
+  );
 });

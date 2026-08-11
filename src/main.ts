@@ -47,7 +47,11 @@ function doctorCommand(): number {
 /** tier はサブコマンド名で確定する。フックも CI も手動も同じ形で呼ぶ。 */
 function tierCommand(tier: TierName): () => number {
   return () => {
-    const { output, result } = run(tier, process.cwd());
+    // 進捗を出すのは `full` だけ。`quick` は数秒で終わる上に、出力がフック経由で
+    // エージェントの文脈に入るので、行を増やす価値が無い。
+    const notify =
+      tier === "full" ? (line: string): void => void process.stderr.write(`gauntlet full: ${line}\n`) : undefined;
+    const { output, result } = run(tier, process.cwd(), notify);
     process.stderr.write(`${output}\n`);
     return exitCodeFor(result);
   };
