@@ -88,6 +88,9 @@ export function runsGitCommit(command: string): boolean {
 
 export function shouldBlock(input: HookInput): boolean {
   const { tool_name: tool, tool_input: args } = input;
+  // Stryker disable next-line ConditionalExpression: 左辺（tool 側）を false にしても
+  // 下流が undefined を安全に扱う（has(undefined) は false、"Bash" とも一致しない）ので
+  // 区別できる振る舞いが無い。早期 return は args 側の参照を守るためにある。
   if (tool === undefined || args === undefined) return false;
   // Stryker disable next-line StringLiteral: 既定値は記録の名前で終わらない文字列なら
   // 何でも同じ（endsWith が false を返す）。空文字は意図の表明。

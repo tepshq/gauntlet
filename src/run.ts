@@ -209,6 +209,8 @@ export function ratchetChanges(before: Baseline, after: Baseline): string[] {
   // 新しく記録したファイルは名指しする。初回観測がそのまま許容値になるので、コードを
   // 別ファイルに移すと生き残りが黙って消える — 見えていれば人がレビューで気づける。
   const seeded = files.filter(
+    // Stryker disable next-line OptionalChaining: `files` は両者のキーの和集合なので、
+    // before に無いファイルは必ず after にある。&& の短絡で ?. の左は常に定義済み。
     (file) => before.mutation[file] === undefined && (after.mutation[file]?.survived ?? 0) > 0,
   );
   for (const file of seeded) {

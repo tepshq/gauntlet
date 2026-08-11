@@ -833,10 +833,13 @@ describe("settleBaseline", () => {
     expect(loadBaseline(root)).toEqual(tightened);
   });
 
+  // 文言を丸ごと固定する。後半（次に何をすればよいか）だけが消えても toContain は通ってしまう。
   it("clean でなければ書き戻して、そう言う", () => {
     saveBaseline(root, tightened);
-    const notes = settleBaseline(root, before, false);
-    expect(notes[0]).toContain("clean でないため記録していません");
+    expect(settleBaseline(root, before, false)).toEqual([
+      "実測は記録より良くなっていましたが、作業ツリーが clean でないため記録していません" +
+        "（作業途中の値を基準にしないため）。コミットしてから full を回すと記録が締まります",
+    ]);
     expect(loadBaseline(root)).toEqual(before);
   });
 
