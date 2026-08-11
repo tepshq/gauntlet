@@ -7,9 +7,19 @@
  * 実ファイルを書き換えることになるが、mutation は CI でしか走らせないので作業ツリーは使い捨て。
  */
 
-import { chmodSync, existsSync, globSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  globSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { type Captured, capture } from "../exec.ts";
 import { detectPackageManager, installDevCommand } from "../package-manager.ts";
@@ -60,7 +70,9 @@ export function survivedFrom(report: MutationReport): SurvivedMutant[] {
 /** `--ignoreStatic` で測らなかった変異の数。黙って落とさず、件数として出す。 */
 export function ignoredCount(report: MutationReport): number {
   return Object.values(report.files).reduce(
-    (total, entry) => total + entry.mutants.filter((mutant) => mutant.status === "Ignored").length,
+    (total, entry) =>
+      total +
+      entry.mutants.filter((mutant) => mutant.status === "Ignored").length,
     0,
   );
 }
@@ -75,7 +87,9 @@ export function ignoredCount(report: MutationReport): number {
 function strykerBin(root: string): string {
   const bin = join(root, "node_modules", ".bin", "stryker");
   if (existsSync(bin)) return bin;
-  throw new RunnerError(`Stryker が入っていません。次で入れてください:\n  ${installMutationDeps(root)}`);
+  throw new RunnerError(
+    `Stryker が入っていません。次で入れてください:\n  ${installMutationDeps(root)}`,
+  );
 }
 
 /** mutation に要る 2 つ。どちらが欠けても同じコマンドで足りる。 */
@@ -100,7 +114,9 @@ function installMutationDeps(root: string): string {
  */
 export function vitestRunnerPlugin(root: string): string {
   try {
-    return createRequire(join(root, "package.json")).resolve("@stryker-mutator/vitest-runner");
+    return createRequire(join(root, "package.json")).resolve(
+      "@stryker-mutator/vitest-runner",
+    );
   } catch {
     throw new RunnerError(
       `Stryker の vitest-runner が見つかりません。次で入れてください:\n  ${installMutationDeps(root)}`,
@@ -147,8 +163,12 @@ export function strykerConfig(
     plugins: [runnerPlugin],
     mutate: [...files],
     // 上流が「置けない」と言った mutator だけを外す（`unplaceableMutators`）。
-    ...(excludedMutations.length === 0 ? {} : { mutator: { excludedMutations: [...excludedMutations] } }),
-    ...(vitestConfigFile === null ? {} : { vitest: { configFile: vitestConfigFile } }),
+    ...(excludedMutations.length === 0
+      ? {}
+      : { mutator: { excludedMutations: [...excludedMutations] } }),
+    ...(vitestConfigFile === null
+      ? {}
+      : { vitest: { configFile: vitestConfigFile } }),
   };
 }
 
@@ -178,7 +198,11 @@ export function findRepoVitestConfig(root: string): string | null {
  * `root` を明示するのは、設定ファイルがリポジトリの外（一時ディレクトリ）に
  * 置かれるため。vitest が設定の場所から root を推測すると探索が壊れる。
  */
-export function strykerVitestWrapper(repoConfigPath: string, root: string, projects: readonly string[]): string {
+export function strykerVitestWrapper(
+  repoConfigPath: string,
+  root: string,
+  projects: readonly string[],
+): string {
   return [
     "// gauntlet が生成した一時ファイル。リポジトリの vitest 設定から、宣言された project だけを残す。",
     `import base from ${JSON.stringify(repoConfigPath)};`,
@@ -220,7 +244,11 @@ function confFile(
 ): GeneratedFile {
   return {
     path: join(confDir, "stryker.conf.json"),
-    content: JSON.stringify(strykerConfig(files, tempDir, wrapper, runnerPlugin, excluded), null, 2),
+    content: JSON.stringify(
+      strykerConfig(files, tempDir, wrapper, runnerPlugin, excluded),
+      null,
+      2,
+    ),
   };
 }
 
@@ -234,11 +262,15 @@ export function strykerFiles(
   runnerPlugin: string,
   excluded: readonly string[] = [],
 ): GeneratedFile[] {
-  if (repoConfig === null) return [confFile(confDir, tempDir, files, null, runnerPlugin, excluded)];
+  if (repoConfig === null)
+    return [confFile(confDir, tempDir, files, null, runnerPlugin, excluded)];
   const wrapper = join(confDir, "vitest.config.mjs");
   return [
     confFile(confDir, tempDir, files, wrapper, runnerPlugin, excluded),
-    { path: wrapper, content: strykerVitestWrapper(repoConfig, root, projects) },
+    {
+      path: wrapper,
+      content: strykerVitestWrapper(repoConfig, root, projects),
+    },
   ];
 }
 
@@ -268,7 +300,10 @@ export function requireMutationTools(root: string): void {
  * `--inPlace` の書き戻しで実行ビットが落ちる（h3 で `bin/h3.mjs` が 755 → 644）。
  * gauntlet が対象リポジトリに残してよい変更は無いので、自分で戻す。
  */
-export function fileModes(root: string, files: readonly string[]): Map<string, number> {
+export function fileModes(
+  root: string,
+  files: readonly string[],
+): Map<string, number> {
   const modes = new Map<string, number>();
   for (const file of files) {
     const path = join(root, file);
@@ -292,10 +327,18 @@ export function restoreModes(modes: ReadonlyMap<string, number>): void {
  * **導入直後は差分にソースが無いので必ず 0 になる** — mutation だけが一度も
  * 走らないまま「導入完了」になっていた（h3 が指摘）。
  */
-export function dryRunMutation(root: string, files: readonly string[], projects: readonly string[]): string[] {
-  const { captured, excluded } = launchStryker(root, files, projects, ["--dryRunOnly"]);
+export function dryRunMutation(
+  root: string,
+  files: readonly string[],
+  projects: readonly string[],
+): string[] {
+  const { captured, excluded } = launchStryker(root, files, projects, [
+    "--dryRunOnly",
+  ]);
   if (captured.code !== 0) {
-    throw new RunnerError(`Stryker が vitest を起動できませんでした:\n${lastReasons(captured.combined, 15)}`);
+    throw new RunnerError(
+      `Stryker が vitest を起動できませんでした:\n${lastReasons(captured.combined, 15)}`,
+    );
   }
   return excluded;
 }
@@ -309,9 +352,64 @@ export function dryRunMutation(root: string, files: readonly string[], projects:
  * エラー文が外すべき mutator を自分で名乗るので、構文ごとの特例は持たない。
  */
 export function unplaceableMutators(output: string): string[] {
-  const match = /could not place mutants with type\(s\): ([^.]+)\./.exec(output);
+  const match = /could not place mutants with type\(s\): ([^.]+)\./.exec(
+    output,
+  );
   if (match === null) return [];
-  return [...new Set(match[1]!.match(/"([^"]+)"/g)?.map((quoted) => quoted.slice(1, -1)) ?? [])];
+  return [
+    ...new Set(
+      match[1]!.match(/"([^"]+)"/g)?.map((quoted) => quoted.slice(1, -1)) ?? [],
+    ),
+  ];
+}
+
+/** 二重起動の印。リポジトリの中には置かない（作業ツリーを汚さない）。 */
+export function lockPath(root: string): string {
+  return join(
+    tmpdir(),
+    `gauntlet-mutation-${createHash("sha1").update(root).digest("hex").slice(0, 12)}.lock`,
+  );
+}
+
+/**
+ * その印を今も握っているプロセス。**死んでいれば握っていない。**
+ *
+ * 印を消さずに死ぬ（kill -9、電源断）ことはあるので、残骸で永久に止まらないようにする。
+ */
+export function lockHolder(path: string): number | null {
+  if (!existsSync(path)) return null;
+  const pid = Number(readFileSync(path, "utf8").trim());
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 同じリポジトリで mutation を二重に走らせない。
+ *
+ * `--inPlace` は**プロジェクト全体**を退避し、終了時にそこから書き戻す。同じ作業ツリーで
+ * 2 つ走ると**後に書き戻した方が勝ち**、もう一方の未コミットの編集が消える
+ * （このリポジトリで実際に消えた）。規律で守れる形ではないので機構で止める。
+ */
+function withRepoLock<T>(root: string, body: () => T): T {
+  const path = lockPath(root);
+  const holder = lockHolder(path);
+  if (holder !== null) {
+    throw new RunnerError(
+      `同じリポジトリで gauntlet の mutation が走っています（pid ${holder}）。` +
+        "Stryker はプロジェクト全体を書き戻すので、同時に回すと未コミットの編集が消えます。" +
+        "終わってから、もう一度実行してください",
+    );
+  }
+  writeFileSync(path, String(process.pid));
+  try {
+    return body();
+  } finally {
+    rmSync(path, { force: true });
+  }
 }
 
 export interface StrykerRun {
@@ -336,41 +434,64 @@ function launchStryker(
   const runner = vitestRunnerPlugin(root);
   // Stryker の退避・復元はプロジェクト全体に及ぶので、変異対象だけでは戻し切れない。
   const modes = fileModes(root, [...files, ...executableFiles(root)]);
-  const once = (excluded: readonly string[]): Captured => {
-    const tempDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-"));
-    const confDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-conf-"));
+  return withRepoLock(root, () => {
+    const once = (excluded: readonly string[]): Captured => {
+      const tempDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-"));
+      const confDir = mkdtempSync(join(tmpdir(), "gauntlet-stryker-conf-"));
+      try {
+        const repoConfig = findRepoVitestConfig(root);
+        const launch = strykerFiles(
+          confDir,
+          tempDir,
+          root,
+          repoConfig,
+          projects,
+          files,
+          runner,
+          excluded,
+        );
+        launch.forEach((file) => writeFileSync(file.path, file.content));
+        const captured = capture(bin, ["run", launch[0]!.path, ...extra], root);
+        cleanLeftovers(root);
+        return captured;
+      } finally {
+        rmSync(tempDir, { recursive: true, force: true });
+        rmSync(confDir, { recursive: true, force: true });
+      }
+    };
     try {
-      const repoConfig = findRepoVitestConfig(root);
-      const launch = strykerFiles(confDir, tempDir, root, repoConfig, projects, files, runner, excluded);
-      launch.forEach((file) => writeFileSync(file.path, file.content));
-      const captured = capture(bin, ["run", launch[0]!.path, ...extra], root);
-      cleanLeftovers(root);
-      return captured;
+      const first = once([]);
+      // 全損（1 か所置けないだけで 0 件）にはしない。名指しされた 1 種類だけ外して測り直す。
+      const excluded = unplaceableMutators(first.combined);
+      return excluded.length === 0
+        ? { captured: first, excluded }
+        : { captured: once(excluded), excluded };
     } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-      rmSync(confDir, { recursive: true, force: true });
+      restoreModes(modes);
     }
-  };
-  try {
-    const first = once([]);
-    // 全損（1 か所置けないだけで 0 件）にはしない。名指しされた 1 種類だけ外して測り直す。
-    const excluded = unplaceableMutators(first.combined);
-    return excluded.length === 0 ? { captured: first, excluded } : { captured: once(excluded), excluded };
-  } finally {
-    restoreModes(modes);
-  }
+  });
 }
 
 /** 変異させる対象が 1 つ以上あることは呼び出し側が保証する。 */
-export function runMutation(root: string, files: readonly string[], projects: readonly string[]): MutationOutcome {
+export function runMutation(
+  root: string,
+  files: readonly string[],
+  projects: readonly string[],
+): MutationOutcome {
   const { captured, excluded } = launchStryker(root, files, projects, []);
   const path = join(root, REPORT_PATH);
   if (!existsSync(path)) {
-    throw new RunnerError(`Stryker がレポートを出しませんでした:\n${lastReasons(captured.combined, 15)}`);
+    throw new RunnerError(
+      `Stryker がレポートを出しませんでした:\n${lastReasons(captured.combined, 15)}`,
+    );
   }
   const report = JSON.parse(readFileSync(path, "utf8")) as MutationReport;
   rmSync(path, { force: true });
-  return { survived: survivedFrom(report), ignored: ignoredCount(report), excluded };
+  return {
+    survived: survivedFrom(report),
+    ignored: ignoredCount(report),
+    excluded,
+  };
 }
 
 /**
@@ -384,4 +505,3 @@ function cleanLeftovers(root: string): void {
     rmSync(join(root, name), { force: true });
   }
 }
-

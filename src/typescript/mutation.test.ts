@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } fr
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { REPORT_PATH, type MutationReport, fileModes, findRepoVitestConfig, ignoredCount, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
+import { REPORT_PATH, type MutationReport, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredCount, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
 import { RunnerError, lastLines } from "./runner.ts";
 
 // レポートが出ていないときは Stryker の出力が唯一の手がかりになる。
@@ -253,6 +253,42 @@ describe("strykerConfig", () => {
 
 // 上流は 2020 年から 1〜2 年おきに「置けない構文」で全損している（StringLiteral →
 // MethodExpression → BooleanLiteral）。構文ごとの特例を持たず、エラー文が名乗る名前を読む。
+// --inPlace はプロジェクト全体を退避して書き戻すので、同じ作業ツリーで 2 つ走ると
+// 後に書き戻した方が勝ち、もう一方の未コミットの編集が消える（このリポジトリで実際に消えた）。
+describe("lockPath / lockHolder", () => {
+  it("リポジトリごとに別の印になる", () => {
+    expect(lockPath("/a/repo")).not.toBe(lockPath("/b/repo"));
+  });
+
+  // 作業ツリーの中に置くと、印そのものが差分になる。
+  it("印はリポジトリの外に置く", () => {
+    expect(lockPath("/a/repo").startsWith("/a/repo")).toBe(false);
+  });
+
+  it("印が無ければ誰も握っていない", () => {
+    withRepo((root) => {
+      expect(lockHolder(join(root, "none.lock"))).toBe(null);
+    });
+  });
+
+  it("生きているプロセスの印は握られている", () => {
+    withRepo((root) => {
+      const path = join(root, "live.lock");
+      writeFileSync(path, String(process.pid));
+      expect(lockHolder(path)).toBe(process.pid);
+    });
+  });
+
+  // 印を消さずに死ぬことはある（kill -9、電源断）。残骸で永久に止まってはいけない。
+  it("死んだプロセスの印は握られていない", () => {
+    withRepo((root) => {
+      const path = join(root, "stale.lock");
+      writeFileSync(path, "2147483647");
+      expect(lockHolder(path)).toBe(null);
+    });
+  });
+});
+
 describe("unplaceableMutators", () => {
   const message =
     'ERROR Stryker SyntaxError: src/h3.ts:73:2 expressionMutantPlacer could not place mutants ' +
