@@ -7,6 +7,8 @@ import { type GauntletConfig, loadConfig } from "./config.ts";
 import { BASELINE_FILENAME, loadBaseline, ratchetByFile, ratchetNumber, saveBaseline } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
 import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, touchedFunctions } from "./gate.ts";
+import { crap } from "./crap.ts";
+import type { FunctionReport } from "./report.ts";
 import { changedLines, mergeBase } from "./git.ts";
 import {
   type CheckName,
@@ -21,7 +23,7 @@ import { analyze, listSourceFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
 import { type SurvivedMutant, requireMutationTools, runMutation } from "./typescript/mutation.ts";
-import { type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
+import { RunnerError, type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
 
 /** どのチェックも「何を見たか」と「違反」を返す。任意にすると出し忘れが緑に見える。 */
@@ -320,9 +322,22 @@ export function crapCheckViolations(
   return faults.length === 0 ? crapViolations(tier, report, changed) : faults;
 }
 
+/**
+ * 測った範囲を関数とファイルの両方で言う。
+ *
+ * 範囲を決めるとき人間が数えるのは**ファイル**なので、関数の数だけ出しても
+ * 突き合わせられない（h3 では 50 ファイルを数えたのに `測る対象 411` が出て、
+ * 検算のために glob を自分で回す羽目になった）。追加の走査は要らない —
+ * 関数を持つファイルと「関数が無くて外したファイル」で glob の結果を尽くしている。
+ */
+export function scopeText(report: ReturnType<typeof analyze>): string {
+  const files = new Set(report.functions.map((fn) => fn.location.file)).size + report.excluded.length;
+  return `${report.functions.length} 関数（${files} ファイル）`;
+}
+
 /** 何を見たかを一行で。緑のときに「対象 0 件で緑」と区別するために出す。 */
 export function crapScope(report: ReturnType<typeof analyze>, changed: Map<string, Set<number>>): string {
-  return `触った関数 ${touchedFunctions(report, changed).length} / 測る対象 ${report.functions.length}`;
+  return `触った関数 ${touchedFunctions(report, changed).length} / 測る対象 ${scopeText(report)}`;
 }
 
 function crapCheck(
@@ -498,4 +513,49 @@ export function describeCrash(error: unknown): string {
 export function run(tier: TierName, cwd: string): { output: string; result: TierResult } {
   const result = runTier(cwd, tier);
   return { output: formatResult(result), result };
+}
+
+/**
+ * 一覧の見た目。**悪い順**に並べ、baseline の数と突き合わせられる形にする。
+ *
+ * 件数を切らない（`withDetails` の 10 件上限を使わない）。**全部見るための出力**なので、
+ * ここで切ると baseline の数と合わなくなり、何のための一覧か分からなくなる。
+ */
+export function formatViolators(
+  violators: readonly FunctionReport[],
+  scope: string,
+  allowed: number | null,
+): string {
+  const worstFirst = [...violators].sort((a, b) => crap(b.cc, b.coverage) - crap(a.cc, a.coverage));
+  const record = allowed === null ? `${BASELINE_FILENAME} はまだありません` : `${BASELINE_FILENAME} の許容 ${allowed}`;
+  const head = `CRAP 違反 ${violators.length} 件 / 測る対象 ${scope}（${record}）`;
+  return [head, ...worstFirst.map((fn) => `  ${crapText(fn)}`)].join("\n");
+}
+
+/**
+ * baseline が今許容している CRAP 違反を全部並べる。**ゲートではない。**
+ *
+ * ratchet は数しか記録しないので、`{ "crap": 35 }` から「どの 35 件か」に辿れなかった
+ * （h3 の導入報告。手で coverage を取り直して未参照コードと網羅率 0 の公開 API を
+ * 見つけている）。赤を減らす作業に取りかかるには、この一覧が要る。
+ *
+ * mutation の生き残りは含めない — Stryker のフル実行（分単位）が要る別の道具になる。
+ */
+export function violatorReport(
+  report: ReturnType<typeof analyze>,
+  outcome: Pick<TestOutcome, "passed" | "total">,
+  allowed: number | null,
+): string {
+  // 測れていない状態で「違反 0 件」と言わない。`full` と同じ 2 つの検査を先に通す。
+  if (!outcome.passed) throw new RunnerError(CRAP_NEEDS_TESTS.message);
+  const faults = measurementFaults(report, outcome.total, true);
+  if (faults.length > 0) throw new RunnerError(faults[0]!.message);
+  return formatViolators(repositoryViolators(report), scopeText(report), allowed);
+}
+
+/** 判断は `violatorReport` にある。ここはプロセスとファイルを触るだけの殻。 */
+export function listViolators(root: string): string {
+  const config = loadConfig(root);
+  const outcome = runTests(root, null, declaredProjects(config));
+  return violatorReport(analyze(root, config, outcome.coverage), outcome, loadBaseline(root)?.crap ?? null);
 }

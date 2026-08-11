@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadBaseline, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, duplicationViolations, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, condenseFailure, countByFile, coveredFiles, duplicationViolations, isTestFile, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, formatViolators, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -129,7 +129,7 @@ describe("ratchetViolation", () => {
     expect(ratchetViolation(reportOf([bad(10)]), new Map(), outcome)).toEqual({
       message:
         "リポジトリ全体の違反が 1 → 2 に増えました。差分の外にある違反（増えた分と、以前から許容されている分）:\n" +
-        "  CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f",
+        "  CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f  → 網羅率 51% で通ります",
     });
   });
 
@@ -513,16 +513,120 @@ describe("crapScope", () => {
   }
 
   it("触った数と測る対象の数を出す", () => {
-    expect(crapScope(report(5), new Map([["a.ts", new Set([2, 3])]]))).toBe("触った関数 2 / 測る対象 5");
+    expect(crapScope(report(5), new Map([["a.ts", new Set([2, 3])]]))).toBe("触った関数 2 / 測る対象 5 関数（1 ファイル）");
   });
 
   // ここが 0 / 0 なら、緑は「良い」ではなく「何も測っていない」を意味する。
   it("触っていなければ 0 と出す", () => {
-    expect(crapScope(report(5), new Map())).toBe("触った関数 0 / 測る対象 5");
+    expect(crapScope(report(5), new Map())).toBe("触った関数 0 / 測る対象 5 関数（1 ファイル）");
   });
 
   it("測る対象が無ければ両方 0", () => {
-    expect(crapScope(report(0), new Map())).toBe("触った関数 0 / 測る対象 0");
+    expect(crapScope(report(0), new Map())).toBe("触った関数 0 / 測る対象 0 関数（0 ファイル）");
+  });
+});
+
+// 範囲を決めるとき人間が数えるのはファイル。関数の数だけでは突き合わせられない（h3 で実測）。
+describe("scopeText", () => {
+  function reportOfFiles(files: readonly string[], excluded: readonly string[]): AdapterReport {
+    const functions: FunctionReport[] = files.map((file) => ({
+      location: { file, name: "f", scope: [], startLine: 1, startColumn: 0, endLine: 1, endColumn: 0 },
+      cc: 1,
+      coverage: 1,
+    }));
+    return {
+      schemaVersion: REPORT_SCHEMA_VERSION,
+      adapter: { name: "typescript", version: "0" },
+      root: "/repo",
+      functions,
+      excluded: excluded.map((file) => ({ file, reason: "関数がありません" })),
+    };
+  }
+
+  it("同じファイルの関数は 1 ファイルと数える", () => {
+    expect(scopeText(reportOfFiles(["a.ts", "a.ts", "b.ts"], []))).toBe("3 関数（2 ファイル）");
+  });
+
+  // 関数が無くて外したファイルも glob は掴んでいる。落とすと数え上げと合わなくなる。
+  it("関数が無いファイルも数に入れる", () => {
+    expect(scopeText(reportOfFiles(["a.ts"], ["types.ts", "const.ts"]))).toBe("1 関数（3 ファイル）");
+  });
+});
+
+// ratchet は数しか記録しないので、`{ "crap": 35 }` から「どの 35 件か」に辿れなかった
+// （h3 の導入報告）。赤を減らす作業に取りかかるための出力。
+describe("formatViolators", () => {
+  const violator = (cc: number, line: number): FunctionReport => ({
+    location: { file: "a.ts", name: "f", scope: [], startLine: line, startColumn: 0, endLine: line, endColumn: 0 },
+    cc,
+    coverage: 0,
+  });
+
+  it("件数と範囲と許容値を見出しに置く", () => {
+    expect(formatViolators([violator(5, 1)], "411 関数（50 ファイル）", 35)).toBe(
+      "CRAP 違反 1 件 / 測る対象 411 関数（50 ファイル）（gauntlet.baseline.json の許容 35）\n" +
+        "  CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:1 f  → 網羅率 51% で通ります",
+    );
+  });
+
+  // 導入前でも走らせられる。数字が無いのに「許容 0」と出すと嘘になる。
+  it("baseline がまだ無ければそう言う", () => {
+    expect(formatViolators([], "1 関数（1 ファイル）", null)).toBe(
+      "CRAP 違反 0 件 / 測る対象 1 関数（1 ファイル）（gauntlet.baseline.json はまだありません）",
+    );
+  });
+
+  // 手を付ける順番がそのまま出る。
+  it("悪い順に並べる", () => {
+    const listed = formatViolators([violator(3, 1), violator(9, 2), violator(5, 3)], "x", 3);
+    expect(listed.split("\n").slice(1).map((line) => line.trim().split(" ")[1])).toEqual(["90.0", "30.0", "12.0"]);
+  });
+
+  // 10 件で切ると baseline の数と合わなくなり、何のための一覧か分からなくなる。
+  it("件数を切らない", () => {
+    const many = Array.from({ length: 12 }, (_, index) => violator(5, index + 1));
+    expect(formatViolators(many, "x", 12).split("\n")).toHaveLength(13);
+  });
+});
+
+describe("violatorReport", () => {
+  const reportOf = (functions: FunctionReport[]): AdapterReport => ({
+    schemaVersion: REPORT_SCHEMA_VERSION,
+    adapter: { name: "typescript", version: "0" },
+    root: "/repo",
+    functions,
+    excluded: [],
+  });
+  const violator: FunctionReport = {
+    location: { file: "a.ts", name: "f", scope: [], startLine: 1, startColumn: 0, endLine: 1, endColumn: 0 },
+    cc: 5,
+    coverage: 0,
+  };
+  // 覆われた関数を 1 つ混ぜる。全員 0% だと「測れていない」の方に当たる。
+  const covered: FunctionReport = { ...violator, cc: 1, coverage: 1 };
+  const green = { passed: true, total: 10 };
+
+  it("違反を数えて並べる", () => {
+    expect(violatorReport(reportOf([violator, covered]), green, 1)).toContain("CRAP 違反 1 件");
+  });
+
+  // テストが落ちていると coverage が無く、全関数が網羅率 0 に見える。
+  // その一覧を出すと、直す相手を丸ごと取り違える。
+  it("テストが落ちていれば一覧を出さない", () => {
+    expect(() => violatorReport(reportOf([violator, covered]), { passed: false, total: 10 }, 1)).toThrow(RunnerError);
+    expect(() => violatorReport(reportOf([violator, covered]), { passed: false, total: 10 }, 1)).toThrow(
+      CRAP_NEEDS_TESTS.message,
+    );
+  });
+
+  it("測れていなければ一覧を出さない", () => {
+    expect(() => violatorReport(reportOf([]), green, 1)).toThrow(/source.include/);
+  });
+
+  // list は必ずフル実行なので、全関数 0% は配線が壊れている合図。
+  // ここを部分実行扱いにすると、全員 0% の一覧を「これが違反です」と出してしまう。
+  it("全関数が 0% なら一覧を出さない", () => {
+    expect(() => violatorReport(reportOf([violator]), green, 1)).toThrow(/coverage.include/);
   });
 });
 
@@ -595,7 +699,7 @@ describe("crapViolations", () => {
       const messages = crapViolations("full", scoped, new Map()).map((v) => v.message);
       expect(messages).toEqual([
         "リポジトリ全体の違反が 0 → 1 に増えました。差分の外にある違反（増えた分と、以前から許容されている分）:\n" +
-          "  CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f",
+          "  CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f  → 網羅率 51% で通ります",
       ]);
     } finally {
       rmSync(root, { recursive: true, force: true });

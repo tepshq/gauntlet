@@ -63,11 +63,40 @@ export function measurementFaults(report: AdapterReport, testsRan: number, fullR
   return [];
 }
 
+/**
+ * その複雑度が閾値を通るのに要る網羅率（%）。**通せないなら null。**
+ *
+ * 網羅率 100% では `CRAP = 複雑度` なので、閾値 8 は高複雑度側では複雑度の上限として
+ * 働く。複雑度 9 以上はどれだけテストを足しても通らない。
+ * 式を解くと `c = 1 − ∛((閾値 − 複雑度) / 複雑度²)`。
+ */
+export function requiredCoverage(cc: number): number | null {
+  const room = (CRAP_THRESHOLD - cc) / (cc * cc);
+  if (room < 0) return null;
+  // 複雑度が小さいと解が負になる（そもそもどの網羅率でも閾値を超えない）。
+  return Math.max(0, Math.ceil((1 - Math.cbrt(room)) * 100));
+}
+
+/**
+ * 違反 1 件に次の一手を添える。
+ *
+ * 数字だけ出すと「テストを足す」に読まれるが、複雑度が閾値を超えていると
+ * それでは永遠に通らない（h3 では違反 35 件のうち 25 件が網羅率 90〜100% だった）。
+ * どちらなのかは複雑度から一意に決まるので、読み手に逆算させない。
+ */
+export function crapAdvice(cc: number): string {
+  const required = requiredCoverage(cc);
+  return required === null
+    ? `複雑度 ${CRAP_THRESHOLD + 1} 以上はテストでは通りません。関数を割ってください`
+    : `網羅率 ${required}% で通ります`;
+}
+
 /** 違反の説明。gateTouched の違反にも、pr のラチェット報告の一覧にも同じ形で載る。 */
 export function crapText(fn: FunctionReport): string {
   const score = crap(fn.cc, fn.coverage).toFixed(1);
   const coverage = (fn.coverage * 100).toFixed(0);
-  return `CRAP ${score} (> ${CRAP_THRESHOLD})  複雑度 ${fn.cc} / 網羅率 ${coverage}%  ${describeLocation(fn.location)}`;
+  const where = describeLocation(fn.location);
+  return `CRAP ${score} (> ${CRAP_THRESHOLD})  複雑度 ${fn.cc} / 網羅率 ${coverage}%  ${where}  → ${crapAdvice(fn.cc)}`;
 }
 
 function toViolation(fn: FunctionReport): Violation {

@@ -24,6 +24,7 @@ description: gauntlet をこのリポジトリに導入する、または測る�
 >
 > 入れるものは devDependencies が 3 つと、設定ファイルが 3 つ（`gauntlet.config.json` /
 > `.claude/settings.json` / `.gitignore` への追記）。CI に 1 行足すのも後で相談します。
+> （pnpm のリポジトリでは `pnpm-workspace.yaml` にも 1 行入ります。理由は入れるときに説明します）
 
 **完了条件** — ユーザーが「コミットが止まること」と「対象に入れると何が起きるか」を
 理解した上で、進めてよいと言っていること。
@@ -35,25 +36,44 @@ description: gauntlet をこのリポジトリに導入する、または測る�
 `node_modules` が無ければ、先にリポジトリ自体を install する — 後の手順でテストを走らせる。
 
 **版は `npm view` で調べて明示する。** pnpm は既定で**公開から 24 時間**経った版しか
-選ばない（`minimumReleaseAge`。供給網対策）。だから `latest` を任せると古い版が入り、
-それは黙って起きる（実測: latest が 0.18.0 のとき `pnpm add` も `@latest` も 0.13.0。
-公開日の差は 31 時間）。古い gauntlet は挙動が違い、skill を上書きしたり `.githooks/` を
-作ったりする。
+選ばない（`minimumReleaseAge`。供給網対策）。だから `latest` を任せると古い版が黙って入る
+（実測: latest が 0.18.0 のとき `pnpm add` も `@latest` も 0.13.0。公開日の差は 31 時間）。
+古い gauntlet は挙動が違い、skill を上書きしたり `.githooks/` を作ったりする。
 
 ```
 V=$(npm view @teps/gauntlet version)
-pnpm add -D "@teps/gauntlet@$V" @stryker-mutator/core @stryker-mutator/vitest-runner \
-  --config.minimumReleaseAge=0
+pnpm add -D "@teps/gauntlet@$V" @stryker-mutator/core @stryker-mutator/vitest-runner
 ```
 
-- `--config.minimumReleaseAge=0` — この 1 回だけ 24 時間の待ちを外す。付けないと pnpm は
-  代わりに `pnpm-workspace.yaml` に除外行を書き足す（**無ければ新規に作る**）ので、
-  上で宣言した 3 ファイルの外に変更が出る。書き足されたらユーザーに伝える
-- `-w` — pnpm の workspace root に入れるときに要る（無いと `ERR_PNPM_ADDING_TO_ROOT`）
+- `-w` — pnpm の workspace root では要る（無いと `ERR_PNPM_ADDING_TO_ROOT`）
 - `@teps/gauntlet` — フックが `npx gauntlet` で呼ぶ本体
 - `@stryker-mutator/*` — `full` の mutation 用
 
 npm / yarn / bun に 24 時間の待ちは無い。版の明示だけで足りる。
+
+### pnpm が `pnpm-workspace.yaml` を書き換えたら、それでよい
+
+24 時間経っていない版を名指しすると、pnpm は `minimumReleaseAgeExclude` に除外行を書く
+（**そのファイルが無ければ新規に作る**）。宣言した 3 ファイルの外なので**ユーザーに伝える**が、
+**元に戻さない** — これが唯一の正しい経路。
+
+`--config.minimumReleaseAge=0` で書き換えを避けるのは**間違い**（実測）。解決時にしか効かず、
+書き上がった lockfile が以降**すべての pnpm コマンド**で弾かれる:
+
+```
+✗ Lockfile failed supply-chain policy check
+[ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION] @teps/gauntlet@0.18.1 was published at ...
+```
+
+決めてもらうことが 1 つある。pnpm が書くのは版ピン（`@teps/gauntlet@0.18.1`）なので
+上げるたびに増える。`@teps/gauntlet*` のワイルドカードにすると 1 行で済むが、
+**この依存を供給網の待ちから恒久的に外す**判断になる。どちらにするか訊く。
+
+**間接依存が同じ理由で弾かれることがある**（h3 では stryker 経由の
+`update-browserslist-db`）。自動では除外されないので、名指しされたものを
+`minimumReleaseAgeExclude` に足すか、24 時間経った版に落とす。
+**pnpm 11 の overrides は `pnpm-workspace.yaml`** — `package.json` の
+`resolutions` も `pnpm.overrides` も読まれない。
 
 **coverage provider（`@vitest/coverage-v8`）は gauntlet に任せる。** vitest の**完全一致**の版を
 peer に要求するので、版を選び損ねると install ごと失敗する。足りなければ `gauntlet quick` が
@@ -231,18 +251,23 @@ export function probe(a: number, b: number): number {
 }
 ```
 
-`git add -A && git commit -m "probe"` を**エージェント自身の Bash 呼び出しで**行う
+`git add <probe パス> && git commit -m "probe"` を**エージェント自身の Bash 呼び出しで**行う
 （スクリプトに包むとフックの `if` が `git commit` を見つけられず、素通りして確認にならない）。
-結果は 3 通り:
 
-- **拒否され、出力に `CRAP` と `gauntlet-probe.ts` が出た** → 期待どおり。
-  `git restore --staged <path> && rm <path>` で片付けて次へ
-- **コミットが通った** → ゲートが発火していない。`git reset --hard HEAD~1` で取り消し、
+**`git add -A` にしない。** init が書いた 3 ファイルはまだコミットされていないので、
+`-A` だと probe commit に巻き込まれ、取り消しで一緒に消える。結果は 3 通り:
+
+- **拒否され、出力に `CRAP` と `gauntlet-probe.ts` が出た** → 期待どおり。`rm <path>` だけで
+  片付く。フックは**呼び出し全体を実行前に止める**ので `git add` も走っておらず、
+  ステージは空のまま（`git restore --staged` は「そんなファイルは知らない」で落ちる）
+- **コミットが通った** → ゲートが発火していない。`git reset HEAD~1 && rm <path>` で取り消し、
   **Claude Code を再起動**してやり直す（フックはセッション開始時に読まれる可能性があり、
-  `init` と同じセッションでは効かないことがある）
+  `init` と同じセッションでは効かないことがある）。**`--hard` は使わない** —
+  コミットの中身に関わらず未コミットの変更を全部捨てるので、init の設定ごと消える
 - **`CRAP` 以外で落ちた**（テストや型） → ゲートの確認になっていない。そちらを直してから戻る
 
-**完了条件** — `npx gauntlet quick` が通り、`測る対象 N` が 2 で数えた想定と一致すること。
+**完了条件** — `npx gauntlet quick` が通り、`測る対象 N 関数（M ファイル）` の **M** が
+2 で数えたファイル数と一致すること（関数の数は数えていないので突き合わせない）。
 **上の probe でコミットが拒否され、`git log` の HEAD が動かず、片付け後に `git status` が
 probe を作る前と同じに戻っていること。** 外部サービスが無い状態でも `quick` と `full` が
 通ること（宣言が効いている証拠）。`full` を回す job が 1 つあり、上の 2 条件を満たすこと。
@@ -261,6 +286,16 @@ npx gauntlet full
 
 **種を置くのは手元の仕事。** CI が置いた種はコンテナの中に書かれて捨てられ、毎 PR が
 その PR の状態を許容値として置き直すので、ラチェットが一度も噛まない。
+
+置いた種は数字だけ（`{ "crap": 35, ... }`）。**中身はユーザーに見せる**:
+
+```
+npx gauntlet list
+```
+
+許容している違反を悪い順に、次の一手（要る網羅率 / 割るしかない）つきで全部並べる。
+ここで未参照コードや網羅率 0 の公開 API が見つかることがある（h3 では 3 件）。
+直すかどうかは導入とは別の判断なので、一覧を見せて終わりでよい。
 
 **完了条件** — `gauntlet.baseline.json` が履歴にあり、`npx gauntlet full` が通ること。
 

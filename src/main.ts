@@ -8,7 +8,7 @@
 import { readFileSync } from "node:fs";
 import { GUARD_MESSAGE, shouldBlock } from "./guard.ts";
 import { INIT_USAGE, formatInit, helpRequested, init, parseInitOptions } from "./init.ts";
-import { describeCrash, run } from "./run.ts";
+import { describeCrash, listViolators, run } from "./run.ts";
 import { EXIT_BLOCKED, EXIT_PASS, type TierName, exitCodeFor } from "./tier.ts";
 
 function guard(): number {
@@ -29,6 +29,12 @@ function initCommand(argv: readonly string[]): number {
   return EXIT_PASS;
 }
 
+/** 一覧はゲートではないので、違反があっても exit 0。落ちるのは走れなかったときだけ。 */
+function listCommand(): number {
+  process.stderr.write(`${listViolators(process.cwd())}\n`);
+  return EXIT_PASS;
+}
+
 /** tier はサブコマンド名で確定する。フックも CI も手動も同じ形で呼ぶ。 */
 function tierCommand(tier: TierName): () => number {
   return () => {
@@ -42,8 +48,9 @@ const USAGE = `gauntlet <command>
 
   quick   差分に閉じた検査。型チェック + 関連テスト + 触った関数の CRAP
           （PreToolUse フックが git commit の直前に呼ぶ。手動でもそのまま叩ける）
-  full    全量検査。上に加えて全テスト・lint・重複・ラチェット・mutation（CI から）
-  init    設定・フック・skill を置く（CI は skill が案内する）
+  full    全量検査。上に加えて全テスト・重複・ラチェット・mutation（CI から）
+  list    baseline が許容している CRAP 違反を全部並べる（ゲートではない）
+  init    設定とフックを置く（範囲の決め方と CI は skill が案内する）
   guard   PreToolUse フックから。baseline の書き換えを止める
 
 通れば exit 0、違反または gauntlet 自身が走れなければ exit 2。
@@ -70,6 +77,7 @@ function usageError(argv: readonly string[]): number {
 const COMMANDS: Record<string, (argv: readonly string[]) => number> = {
   guard,
   init: initCommand,
+  list: listCommand,
   quick: tierCommand("quick"),
   full: tierCommand("full"),
   run: renamed,

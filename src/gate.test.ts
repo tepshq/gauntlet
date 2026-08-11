@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators } from "./gate.ts";
+import { crapAdvice, crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, requiredCoverage } from "./gate.ts";
+import { withinThreshold } from "./crap.ts";
 
 function fn(file: string, startLine: number, endLine: number, cc: number, coverage: number): FunctionReport {
   return {
@@ -53,7 +54,7 @@ describe("gateTouched", () => {
 
   it("違反の理由が読める", () => {
     const [violation] = gateTouched(reportOf([BAD]), new Map([["a.ts", new Set([15])]]));
-    expect(violation!.message).toBe("CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f");
+    expect(violation!.message).toBe("CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f  → 網羅率 51% で通ります");
   });
 
   // 網羅率を百分率にし損ねると、0% 以外が全部おかしくなる。
@@ -83,8 +84,52 @@ describe("gateTouched", () => {
 
 describe("crapText", () => {
   // gateTouched の違反にも pr のラチェット報告にも同じ形で載る。ずれると同じ違反が別物に見える。
-  it("スコア・閾値・両方のレバー・場所を一行に収める", () => {
-    expect(crapText(BAD)).toBe("CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f");
+  it("スコア・閾値・両方のレバー・場所・次の一手を一行に収める", () => {
+    expect(crapText(BAD)).toBe("CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f  → 網羅率 51% で通ります");
+  });
+});
+
+// 網羅率 100% では CRAP = 複雑度 なので、閾値 8 は高複雑度側では複雑度の上限として働く。
+// h3 では違反 35 件のうち 25 件が網羅率 90〜100% で、テストを足しても 1 件も減らない。
+describe("requiredCoverage", () => {
+  it.each([
+    [3, 18],
+    [4, 38],
+    [5, 51],
+    [6, 62],
+    [7, 73],
+    [8, 100],
+  ])("複雑度 %i は網羅率 %i%%", (cc, percent) => {
+    expect(requiredCoverage(cc)).toBe(percent);
+  });
+
+  // 言った数字で本当に通り、その 1% 下では通らないこと。丸め方を 1 段間違えると
+  // 「言われたとおりにしたのに赤のまま」になる（複雑度 4 は 37% では通らない）。
+  it.each([3, 4, 5, 6, 7, 8])("複雑度 %i: 言った網羅率が最小", (cc) => {
+    const percent = requiredCoverage(cc)!;
+    expect(withinThreshold(cc, percent / 100)).toBe(true);
+    expect(withinThreshold(cc, (percent - 1) / 100)).toBe(false);
+  });
+
+  // 複雑度 1〜2 はどんな網羅率でも閾値を超えない。違反として現れない。
+  it("閾値以下の複雑度は 0% でよい", () => {
+    expect(requiredCoverage(2)).toBe(0);
+  });
+
+  it("複雑度 9 以上は通せない", () => {
+    expect(requiredCoverage(9)).toBe(null);
+    expect(requiredCoverage(31)).toBe(null);
+  });
+});
+
+describe("crapAdvice", () => {
+  it("通せるなら要る網羅率を言う", () => {
+    expect(crapAdvice(5)).toBe("網羅率 51% で通ります");
+  });
+
+  // ここを「網羅率を上げてください」で済ませると、永遠に通らない作業に向かわせる。
+  it("通せないなら割るように言う", () => {
+    expect(crapAdvice(31)).toBe("複雑度 9 以上はテストでは通りません。関数を割ってください");
   });
 });
 
