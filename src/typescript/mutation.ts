@@ -378,7 +378,10 @@ export function lockPath(root: string): string {
  */
 export function lockHolder(path: string): number | null {
   if (!existsSync(path)) return null;
-  const pid = Number(readFileSync(path, "utf8").trim());
+  // Number は前後の空白を無視するので、書き手が改行を付けても読める。
+  // Stryker disable next-line StringLiteral: 符号化を落とすと Buffer が返るが、
+  // Number は文字列化してから数にするので区別できる振る舞いが無い。
+  const pid = Number(readFileSync(path, "utf8"));
   try {
     process.kill(pid, 0);
     return pid;

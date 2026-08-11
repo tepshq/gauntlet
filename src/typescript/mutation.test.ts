@@ -1,6 +1,6 @@
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { basename, isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { REPORT_PATH, type MutationReport, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredCount, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
 import { RunnerError, lastLines } from "./runner.ts";
@@ -265,6 +265,12 @@ describe("lockPath / lockHolder", () => {
     expect(lockPath("/a/repo").startsWith("/a/repo")).toBe(false);
   });
 
+  // 名前の形を固定する。長さや素材が変わると、同じリポジトリを別物と見て
+  // 二重起動を素通しする（印は当たらなければ意味が無い）。
+  it("印の名前の形を固定する", () => {
+    expect(basename(lockPath("/a/repo"))).toMatch(/^gauntlet-mutation-[0-9a-f]{12}\.lock$/);
+  });
+
   it("印が無ければ誰も握っていない", () => {
     withRepo((root) => {
       expect(lockHolder(join(root, "none.lock"))).toBe(null);
@@ -275,6 +281,15 @@ describe("lockPath / lockHolder", () => {
     withRepo((root) => {
       const path = join(root, "live.lock");
       writeFileSync(path, String(process.pid));
+      expect(lockHolder(path)).toBe(process.pid);
+    });
+  });
+
+  // 改行つきで書かれても読めないと、印を残骸と誤認して素通しする。
+  it("前後の空白があっても読む", () => {
+    withRepo((root) => {
+      const path = join(root, "padded.lock");
+      writeFileSync(path, `${process.pid}\n`);
       expect(lockHolder(path)).toBe(process.pid);
     });
   });
