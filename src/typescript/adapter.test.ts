@@ -34,7 +34,17 @@ describe("deadIncludes", () => {
 
   it("ディレクトリ名だけの include を返す", () => {
     withRepo((root) => {
-      expect(deadIncludes(root, { include: ["src"] })).toEqual(["src"]);
+      expect(deadIncludes(root, { include: ["src"] })).toEqual([{ pattern: "src", fix: "src/**/*.ts" }]);
+    });
+  });
+
+  // 末尾の `/` と途中の `/` を取り違えると、直し方が `srcutils/` のような形になって
+  // 「言われたとおりに直したのに直らない」になる。
+  it("末尾の / だけを落として直し方を作る", () => {
+    withRepo((root) => {
+      expect(deadIncludes(root, { include: ["src/utils/"] })).toEqual([
+        { pattern: "src/utils/", fix: "src/utils/**/*.ts" },
+      ]);
     });
   });
 
@@ -54,7 +64,7 @@ describe("deadIncludes", () => {
   // 全体としては測れているので、ここを見逃すと範囲が黙って狭いまま緑になる。
   it("生きている include に混ざっていても見つける", () => {
     withRepo((root) => {
-      expect(deadIncludes(root, { include: ["src/**/*.ts", "src"] })).toEqual(["src"]);
+      expect(deadIncludes(root, { include: ["src/**/*.ts", "src"] })).toEqual([{ pattern: "src", fix: "src/**/*.ts" }]);
     });
   });
 
@@ -64,7 +74,7 @@ describe("deadIncludes", () => {
       writeFileSync(join(root, ".gitignore"), "dist/\n");
       mkdirSync(join(root, "dist"), { recursive: true });
       writeFileSync(join(root, "dist", "generated.ts"), "export const c = 3;\n");
-      expect(deadIncludes(root, { include: ["dist/**/*.ts"] })).toEqual(["dist/**/*.ts"]);
+      expect(deadIncludes(root, { include: ["dist/**/*.ts"] })).toEqual([{ pattern: "dist/**/*.ts", fix: null }]);
     });
   });
 });

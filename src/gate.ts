@@ -10,6 +10,7 @@ import { type RatchetOutcome, ratchet } from "./baseline.ts";
 import type { Baseline } from "./baseline.ts";
 import { CRAP_THRESHOLD, crap } from "./crap.ts";
 import { type AdapterReport, type FunctionLocation, type FunctionReport, describeLocation } from "./report.ts";
+import type { DeadInclude } from "./typescript/adapter.ts";
 import type { Violation } from "./tier.ts";
 
 function isTouched(location: FunctionLocation, changed: Map<string, Set<number>>): boolean {
@@ -23,6 +24,19 @@ function isTouched(location: FunctionLocation, changed: Map<string, Set<number>>
 
 function violatesThreshold(fn: FunctionReport): boolean {
   return crap(fn.cc, fn.coverage) > CRAP_THRESHOLD;
+}
+
+/**
+ * 死んだ include 1 つ分の説明。**直し方はその場で当てて確かめたものだけ言う。**
+ *
+ * 作れないのは、ディレクトリではなく gitignore された生成物などに当たっている場合。
+ * そこで「こう書けば直る」と言うと、当たらない助言になる。
+ */
+export function deadIncludeText(dead: DeadInclude): string {
+  const head = `gauntlet.config.json の source.include の \`${dead.pattern}\` は、測れるファイルを 1 つも掴んでいません`;
+  return dead.fix === null
+    ? `${head}（gitignore された生成物などにだけ当たっています）`
+    : `${head}。\`${dead.fix}\` に直してください`;
 }
 
 /**
@@ -43,19 +57,11 @@ export function measurementFaults(
   report: AdapterReport,
   testsRan: number,
   fullRun: boolean,
-  deadIncludes: readonly string[] = [],
+  deadIncludes: readonly DeadInclude[] = [],
 ): Violation[] {
   // 他の include が生きていても落とす。そこだけ抜けた範囲で緑になるのが一番危ない。
   if (deadIncludes.length > 0) {
-    const named = deadIncludes.map((pattern) => `\`${pattern}\``).join("、");
-    return [
-      {
-        message:
-          `gauntlet.config.json の source.include の ${named} は、` +
-          "ディレクトリなど計測できないものにだけマッチしています。" +
-          "`src/**/*.ts` のようにファイルを名指しする形で書いてください",
-      },
-    ];
+    return deadIncludes.map((dead) => ({ message: deadIncludeText(dead) }));
   }
   if (report.functions.length === 0) {
     return [

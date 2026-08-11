@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { crapAdvice, crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, requiredCoverage } from "./gate.ts";
+import { crapAdvice, crapText, deadIncludeText, gateRepository, gateTouched, measurementFaults, repositoryViolators, requiredCoverage } from "./gate.ts";
 import { withinThreshold } from "./crap.ts";
 
 function fn(file: string, startLine: number, endLine: number, cc: number, coverage: number): FunctionReport {
@@ -173,22 +173,27 @@ describe("measurementFaults", () => {
 
   // `src` は実在するので「実在しないパスを指している」は原因を取り違える。
   // h3 ではその案内どおり綴りとパスを疑って探すことになった。
-  it("ディレクトリ名の include は名指しして直し方を言う", () => {
-    expect(measurementFaults(reportOf([]), 10, true, ["src"])).toEqual([
+  it("死んだ include は名指しして直し方を言う", () => {
+    expect(measurementFaults(reportOf([]), 10, true, [{ pattern: "lib", fix: "lib/**/*.ts" }])).toEqual([
       {
         message:
-          "gauntlet.config.json の source.include の `src` は、" +
-          "ディレクトリなど計測できないものにだけマッチしています。" +
-          "`src/**/*.ts` のようにファイルを名指しする形で書いてください",
+          "gauntlet.config.json の source.include の `lib` は、測れるファイルを 1 つも掴んでいません。" +
+          "`lib/**/*.ts` に直してください",
       },
     ]);
   });
 
   // 全体としては測れているので、ここを通すと範囲が黙って狭いまま緑になる。
-  it("測れていても、死んだ include があれば落とす", () => {
-    expect(measurementFaults(reportOf([covered]), 10, true, ["src", "lib"])[0]!.message).toContain("`src`、`lib`");
+  it("測れていても、死んだ include があれば 1 件ずつ落とす", () => {
+    const dead = [
+      { pattern: "src", fix: "src/**/*.ts" },
+      { pattern: "lib", fix: null },
+    ];
+    expect(measurementFaults(reportOf([covered]), 10, true, dead).map((v) => v.message)).toEqual([
+      deadIncludeText(dead[0]!),
+      deadIncludeText(dead[1]!),
+    ]);
   });
-
   // メッセージだけ読んで直せる必要がある。原因の場所を名指しする。
   it("対象が 1 つも無ければ、どこを見るべきか言う", () => {
     expect(measurementFaults(reportOf([]), 10, true)).toEqual([
@@ -229,5 +234,23 @@ describe("measurementFaults", () => {
 
   it("部分実行でも、対象が空なのは設定の誤りとして言う", () => {
     expect(measurementFaults(reportOf([]), 10, false)).toHaveLength(1);
+  });
+});
+
+describe("deadIncludeText", () => {
+  // 直し方を決め打ちにすると（`src/**/*.ts` と言い切ると）、lib/ のリポジトリに
+  // 当たらない助言になる。当てて確かめたものだけを言う。
+  it("直し方が作れたら、そのまま置き換えられる形で言う", () => {
+    expect(deadIncludeText({ pattern: "lib/", fix: "lib/**/*.ts" })).toBe(
+      "gauntlet.config.json の source.include の `lib/` は、測れるファイルを 1 つも掴んでいません。" +
+        "`lib/**/*.ts` に直してください",
+    );
+  });
+
+  it("作れなければ、当たっている先を言う", () => {
+    expect(deadIncludeText({ pattern: "dist/**/*.ts", fix: null })).toBe(
+      "gauntlet.config.json の source.include の `dist/**/*.ts` は、測れるファイルを 1 つも掴んでいません" +
+        "（gitignore された生成物などにだけ当たっています）",
+    );
   });
 });

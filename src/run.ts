@@ -19,7 +19,7 @@ import {
   type Violation,
   tierStatus,
 } from "./tier.ts";
-import { analyze, deadIncludes, listSourceFiles } from "./typescript/adapter.ts";
+import { type DeadInclude, analyze, deadIncludes, listSourceFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
 import { type SurvivedMutant, requireMutationTools, runMutation } from "./typescript/mutation.ts";
@@ -316,7 +316,7 @@ export function crapCheckViolations(
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
   outcome: Pick<TestOutcome, "passed" | "total">,
-  dead: readonly string[] = [],
+  dead: readonly DeadInclude[] = [],
 ): Violation[] {
   if (!outcome.passed) return [CRAP_NEEDS_TESTS];
   const faults = measurementFaults(report, outcome.total, tier === "full", dead);
@@ -346,7 +346,7 @@ function crapCheck(
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
   outcome: Pick<TestOutcome, "passed" | "total">,
-  dead: readonly string[],
+  dead: readonly DeadInclude[],
 ): CheckResult {
   return timed("crap", () => ({
     violations: crapCheckViolations(tier, report, changed, outcome, dead),
@@ -547,7 +547,7 @@ export function violatorReport(
   report: ReturnType<typeof analyze>,
   outcome: Pick<TestOutcome, "passed" | "total">,
   allowed: number | null,
-  dead: readonly string[] = [],
+  dead: readonly DeadInclude[] = [],
 ): string {
   // 測れていない状態で「違反 0 件」と言わない。`full` と同じ検査を先に通す。
   if (!outcome.passed) throw new RunnerError(CRAP_NEEDS_TESTS.message);

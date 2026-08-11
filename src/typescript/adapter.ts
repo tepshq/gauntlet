@@ -39,6 +39,12 @@ export function listSourceFiles(root: string, source: GauntletConfig["source"]):
     .sort();
 }
 
+export interface DeadInclude {
+  pattern: string;
+  /** そのまま置き換えれば測れるようになる書き方。作れなければ null。 */
+  fix: string | null;
+}
+
 /**
  * **何かにはマッチしているのに、ソースを 1 つも連れてこない** include。
  *
@@ -50,12 +56,20 @@ export function listSourceFiles(root: string, source: GauntletConfig["source"]):
  * **1 つもマッチしないものは咎めない。** `src/**\/*.tsx` のような
  * 「今は無いが将来 増える」書き方は害が無く、これを落とすと config が窮屈になる。
  */
-export function deadIncludes(root: string, source: GauntletConfig["source"]): string[] {
+export function deadIncludes(root: string, source: GauntletConfig["source"]): DeadInclude[] {
   const owned = repoSourceSet(root);
-  return source.include.filter((pattern) => {
-    const found = globSync(pattern, { cwd: root }).map(toPosix);
-    return found.length > 0 && !found.some((file) => owned.has(file));
-  });
+  const reaches = (pattern: string): boolean =>
+    globSync(pattern, { cwd: root })
+      .map(toPosix)
+      .some((file) => owned.has(file));
+  return source.include
+    .filter((pattern) => globSync(pattern, { cwd: root }).length > 0 && !reaches(pattern))
+    .map((pattern) => {
+      // ディレクトリを指していただけなら、その下を辿る形が答え。**当てて確かめてから言う** —
+      // `src/**/*.ts` を決め打ちで案内すると、`lib/` のリポジトリに当たらない助言になる。
+      const descended = `${pattern.replace(/\/$/, "")}/**/*.ts`;
+      return { pattern, fix: reaches(descended) ? descended : null };
+    });
 }
 
 /** coverage-final.json は絶対パスをキーに持つので、リポジトリ相対に直して引けるようにする。 */
