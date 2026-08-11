@@ -326,7 +326,7 @@ rm -rf .claude/skills/gauntlet      # 0.9.x の旧名 skill
   **`add` で置き換える。追随も同じコマンドで行う**:
 
   ```
-  npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y --copy
+  npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
   ```
 
   `npx skills update` は使わない — 実体を `.agents/skills/`（多数の agent が共有する

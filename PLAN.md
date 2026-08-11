@@ -496,7 +496,10 @@ CLI に LLM を入れる案は flaky そのもの（走るたびに違う提案�
 するので、**追跡済みの `SKILL.md` が「削除」扱い**になる（h3 で 6 行の変更が 324 行削除に
 化けた）。`update` は `-a` も `--copy` も受けないため、置き場所を保てるのは `add` だけ。
 SKILL.md と README の追随手順を
-`npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y --copy` に差し替えた。
+`npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y` に差し替えた。
+`--copy` は書かない — 使い捨てリポジトリで 3 手順とも実測した結果、**`-a` があれば
+`--copy` は何も変えない**（`add` は実ディレクトリ、`update` が symlink、`add` で実ディレクトリに戻る）。
+振る舞いを変えない指定を手順に残すと、読む側に「これが要る理由がある」と誤解させる。
 
 ### 0.18.3: `--include=src` が対象 0 の設定を書いていた（2026-08-11、tepshq/gauntlet#3）
 

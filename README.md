@@ -122,7 +122,7 @@ npx skills add tepshq/gauntlet -a claude-code
 skill が更新されたら、**同じ `add` をもう一度**打って追随します。
 
 ```bash
-npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y --copy
+npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
 ```
 
 `npx skills update` は使わないでください。実体を `.agents/skills/`（多数の agent が
