@@ -221,3 +221,22 @@ describe("runsGitCommit と空白", () => {
     expect(runsGitCommit(command)).toBe(true);
   });
 });
+
+// ツール種別の分岐の両翼。片翼が固定に変異すると、Edit の素通りか他ツールの誤爆に倒れる。
+describe("shouldBlock のツール分岐", () => {
+  it("Edit で記録を名指しすれば止まる", () => {
+    expect(shouldBlock({ tool_name: "Edit", tool_input: { file_path: "/repo/gauntlet.baseline.json" } })).toBe(true);
+  });
+
+  // command を持たない未知ツールが Bash の判定に流れると、file_path の書き換えを見逃す。
+  it("未知のツールは file_path が記録でも止めない（編集経路はツール名で判定する）", () => {
+    expect(shouldBlock({ tool_name: "Grep", tool_input: { file_path: "gauntlet.baseline.json" } })).toBe(false);
+  });
+
+  // Bash 判定が常に真に変異すると、Edit の file_path 判定が command 判定に化ける。
+  it("Edit は command ではなく file_path を見る", () => {
+    expect(
+      shouldBlock({ tool_name: "Edit", tool_input: { command: "rm gauntlet.baseline.json" } }),
+    ).toBe(false);
+  });
+});

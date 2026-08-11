@@ -725,11 +725,31 @@ describe("ratchetNote", () => {
   });
 
   // 初回観測がそのまま許容値になるので、コードを別ファイルに移すと生き残りが黙って
-  // 消える。新しい記録は名指しして、人がレビューで気づける形にする。
+  // 消える。新しい記録は名指しして、人がレビューで気づける形にする。文言を丸ごと
+  // 固定する — 名指しの行が空文字に化けても件数の行が残ると、緑のまま気づけない。
   it("新しく記録したファイルは名指しする", () => {
     const before = { crap: 0, mutation: {}, duplication: 0 };
     const after = { crap: 0, mutation: { "src/refs.ts": { survived: 4, measured: 18 } }, duplication: 0 };
-    expect(ratchetNote(before, after)[0]).toContain("mutation を新しく記録: src/refs.ts（生き残り 4 件）");
+    expect(ratchetNote(before, after)).toEqual([
+      "許容値を締めました（mutation を新しく記録: src/refs.ts（生き残り 4 件））。git add -A などでコミットしてください",
+    ]);
+  });
+
+  // 既存ファイルの記録が動いた（undefined でない）場合は「新しく記録」ではない。
+  // ここが常に偽に変異すると、移動で消える借金の可視化が丸ごと消える。
+  it("既存ファイルの変化は名指しではなく件数で言う", () => {
+    const before = { crap: 0, mutation: { "a.ts": { survived: 9, measured: 20 } }, duplication: 0 };
+    const after = { crap: 0, mutation: { "a.ts": { survived: 4, measured: 20 } }, duplication: 0 };
+    expect(ratchetNote(before, after)).toEqual([
+      "許容値を締めました（mutation 1 ファイル）。git add -A などでコミットしてください",
+    ]);
+  });
+
+  // after 側に無いファイル（before だけにある）が seeded の判定に入っても落ちないこと。
+  it("before だけにあるファイルが混ざっても落ちない", () => {
+    const before = { crap: 0, mutation: { "gone.ts": { survived: 2, measured: 5 } }, duplication: 0 };
+    const after = { crap: 0, mutation: {}, duplication: 0 };
+    expect(() => ratchetNote(before, after)).not.toThrow();
   });
 
   it("読めなくなった記録では黙る", () => {
