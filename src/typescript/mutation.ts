@@ -335,13 +335,36 @@ export function dryRunMutation(
   const { captured, excluded } = launchStryker(root, files, projects, [
     "--dryRunOnly",
   ]);
-  if (captured.code !== 0) {
-    throw new RunnerError(
-      `Stryker が vitest を起動できませんでした:\n${lastReasons(captured.combined, 15)}`,
-    );
-  }
+  const failure = dryRunFailure(captured);
+  if (failure !== null) throw new RunnerError(failure);
   return excluded;
 }
+
+/**
+ * dry run が失敗していれば、その理由。**通っていれば null。**
+ *
+ * 判断はここに集め、プロセスを起動する殻には残さない。
+ *
+ * **テストが 0 件は設定の誤りとは対処が正反対。** Stryker はこれを `ConfigError`
+ * （"Please check your configuration"）として投げ、vitest runner は
+ * 「`vitest.related` を切れ / ソースを直接 import しろ」と警告する。どちらも設定を
+ * 疑わせるが、テストが 0 件のリポジトリでは**設定は正しい**（新規導入直後は珍しくない。
+ * 実際に切り分けを誤らせた）。
+ */
+export function dryRunFailure(captured: Captured): string | null {
+  if (captured.combined.includes("No tests were executed")) return NO_TESTS_TO_MUTATE;
+  if (captured.code === 0) return null;
+  return `Stryker が vitest を起動できませんでした:\n${lastReasons(captured.combined, 15)}`;
+}
+
+/**
+ * 文言を丸ごと固定する。ここは「何を直せばよいか」がすべてで、
+ * 「設定を見直せ」に読めた瞬間に読み手は間違った方向へ行く。
+ */
+export const NO_TESTS_TO_MUTATE =
+  "テストが 1 件も走らなかったので、mutation が回るかは確かめられません。" +
+  "設定の誤りではありません — 最初のテストを 1 件書いてから、もう一度 doctor を叩いてください" +
+  "（quick / full はテストが 0 件でも通ります）";
 
 /**
  * 上流が「そこには置けない」と言った mutator の名前。

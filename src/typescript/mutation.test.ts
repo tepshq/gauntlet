@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } fr
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { REPORT_PATH, type MutationReport, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredCount, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
+import { REPORT_PATH, type MutationReport, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredCount, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, NO_TESTS_TO_MUTATE, dryRunFailure, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
 import { RunnerError, lastLines } from "./runner.ts";
 
 // レポートが出ていないときは Stryker の出力が唯一の手がかりになる。
@@ -333,6 +333,42 @@ describe("unplaceableMutators", () => {
   // 別の理由で落ちた回まで外すと、測る範囲が黙って狭くなる。
   it("別の失敗では何も外さない", () => {
     expect(unplaceableMutators("ERROR Stryker Something went wrong in the initial test run")).toEqual([]);
+  });
+});
+
+// テストが 0 件のリポジトリは新規導入では珍しくない。Stryker はこれを ConfigError
+// （"Please check your configuration"）として投げるので、設定を疑う方向へ誘導される。
+describe("dryRunFailure", () => {
+  const captured = (combined: string, code: number) => ({ stdout: combined, combined, code });
+
+  it("通っていれば null", () => {
+    expect(dryRunFailure(captured("INFO The dry-run has been completed successfully.", 0))).toBe(null);
+  });
+
+  it("テストが 0 件なら、設定ではなくテストの話だと言う", () => {
+    expect(dryRunFailure(captured("ERROR Stryker No tests were executed. Stryker will exit prematurely.", 1))).toBe(
+      NO_TESTS_TO_MUTATE,
+    );
+  });
+
+  // Stryker は非ゼロで終わらないこともある（0 件はその形で踏んだ）。
+  // 終了コードだけを見ると、生スタックのまま素通りする。
+  it("終了コードが 0 でも、テスト 0 件は見逃さない", () => {
+    expect(dryRunFailure(captured("INFO DryRunExecutor No tests were executed.", 0))).toBe(NO_TESTS_TO_MUTATE);
+  });
+
+  it("別の失敗では Stryker の出力を添える", () => {
+    const message = dryRunFailure(captured("ERROR Stryker Something went wrong\n    at x (y.js:1:1)", 1));
+    expect(message).toBe("Stryker が vitest を起動できませんでした:\nERROR Stryker Something went wrong");
+  });
+
+  // 「設定を見直せ」に読めた瞬間に、読み手は間違った方向へ行く。
+  it("次にやることだけを言う", () => {
+    expect(NO_TESTS_TO_MUTATE).toBe(
+      "テストが 1 件も走らなかったので、mutation が回るかは確かめられません。" +
+        "設定の誤りではありません — 最初のテストを 1 件書いてから、もう一度 doctor を叩いてください" +
+        "（quick / full はテストが 0 件でも通ります）",
+    );
   });
 });
 
