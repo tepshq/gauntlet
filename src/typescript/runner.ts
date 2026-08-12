@@ -139,13 +139,15 @@ export function lastLines(text: string, count: number): string {
  * **窓に入るのがスタックだけ**になる（h3 で Stryker の失敗が 13 行すべて `at` になった）。
  */
 export function lastReasons(text: string, count: number): string {
-  return lastLines(
-    text
-      .split("\n")
-      .filter((line) => !/^\s+at\s/.test(line))
-      .join("\n"),
-    count,
-  );
+  const lines = text.split("\n").filter((line) => !/^\s+at\s/.test(line));
+  // WARN が大量に出る実行では、末尾 N 行が警告とその添付で埋まり、**致命傷が窓の外に
+  // 押し出される**（#27 では 920 ファイル分の前処理警告が本当のエラーを隠した）。
+  // ERROR 行があれば、最後の ERROR から先を優先して見せる。
+  const lastError = lines.map((line, index) => (line.includes("ERROR ") ? index : -1)).reduce((a, b) => Math.max(a, b), -1);
+  // ERROR が見つかったら**そこから先頭 count 行**。末尾を取ると、ERROR の後ろに続く
+  // 警告の洪水でまた埋まる。見つからなければ従来どおり末尾。
+  if (lastError === -1) return lastLines(lines.join("\n"), count);
+  return lines.slice(lastError, lastError + count).join("\n").trim();
 }
 
 /** vitest は絶対パスで報告する。差分や baseline と同じリポジトリ相対に揃える。 */

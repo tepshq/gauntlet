@@ -204,6 +204,15 @@ export function strykerConfig(
   return {
     testRunner: "vitest",
     inPlace: true,
+    // **型チェック無効化の前処理を丸ごと切る。** 既定（true）だと Stryker は
+    // `@ts-nocheck` を差し込むために**プロジェクトの全ファイルを Babel で解析する** —
+    // .gitignore は見ないので、生成物やキャッシュ（クロールした生 HTML 920 ファイル等）
+    // まで読みに行き、解析できないファイルで警告が溢れ、実行が壊れる（#27 / #20 追記）。
+    // gauntlet は mutation の内側で型を見ない（vitest の typecheck はラッパーで切り、
+    // tsc は別ゲート）ので、この前処理はそもそも何の役にも立っていない。
+    // なお `inPlace` はサンドボックスへのコピーを省くだけで、この前処理は走る —
+    // 「inPlace なら前処理が走らない」という当初の前提は 9.6.1 では誤りだった。
+    disableTypeChecks: false,
     // **初回実行の打ち切りを、誰も選んでいない 5 分（Stryker の既定）に任せない。**
     // dry run は全スイートを perTest coverage 付きで走らせるので、CI が遅いリポジトリでは
     // 原理的に収まらない（duct は手元 51 秒に対し CI 9 分 35 秒。5 分 02 秒で打ち切られた）。

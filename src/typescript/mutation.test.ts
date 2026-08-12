@@ -263,6 +263,7 @@ describe("strykerConfig", () => {
     expect(strykerConfig(["a.ts", "b.ts"], "/tmp/out", "/conf/vitest.config.mjs", "/p/vitest-runner/index.js")).toEqual({
       testRunner: "vitest",
       inPlace: true,
+      disableTypeChecks: false,
       dryRunTimeoutMinutes: 60,
       tempDirName: "/tmp/out",
       ignoreStatic: true,

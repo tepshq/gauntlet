@@ -110,6 +110,21 @@ describe("lastReasons", () => {
   it("スタックが無ければ末尾をそのまま返す", () => {
     expect(lastReasons("a\nb\nc", 2)).toBe("b\nc");
   });
+
+  // WARN が大量の実行では末尾が警告で埋まり、致命傷が窓の外に出る（#27 で 920 件の
+  // 前処理警告が本当のエラーを隠した）。最後の ERROR から先を優先する。
+  it("ERROR 行があれば、そこから先を見せる", () => {
+    const flood = Array.from({ length: 20 }, (_, i) => `WARN Preprocessor file${i}.html`).join("\n");
+    const output = `ERROR Stryker Unexpected error occurred\n本当の理由\n${flood}`;
+    const shown = lastReasons(output, 5);
+    expect(shown.startsWith("ERROR Stryker Unexpected error occurred")).toBe(true);
+    expect(shown).toContain("本当の理由");
+  });
+
+  it("ERROR が複数なら最後のものから見せる", () => {
+    const output = "ERROR 一つ目\n途中\nERROR 二つ目\n結末";
+    expect(lastReasons(output, 5)).toBe("ERROR 二つ目\n結末");
+  });
 });
 
 describe("vitestArgs", () => {
