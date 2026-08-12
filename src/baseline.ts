@@ -62,19 +62,32 @@ export interface MutationRecord {
    * 副作用も正しい向きで、「時計で殺した」変異は借金の返済に数えられなくなる。
    */
   timeout: number | null;
+  /**
+   * どのテストも通っていない変異の数。0.24 より前の記録には無い。
+   *
+   * **`survived + timeout` とは別の軸**として突き合わせる（足し込むと既存リポジトリが
+   * 導入初日に赤で埋まる。gauntlet 自身にも 222 件あった）。直し方も違う —
+   * 生き残りは assert を強める話、これは**テストから呼べる形にする**話。
+   *
+   * **「無い」と 0 は違う。** 旧記録を 0 と読むと、初めて測れた回が「0 → 19 に増えました」で
+   * 落ちて、全リポジトリが上げた瞬間に赤になる（#28 と同じ形の逆向き）。null は
+   * 「まだ測っていない」で、最初に測れた回が種を置く。
+   */
+  noCoverage: number | null;
+}
+
+/** 数でなければ「その欄は無い」。**0 に丸めない** — 無いのと 0 は別物（#28 / #31）。 */
+function toCount(value: unknown): number | null {
+  return typeof value === "number" ? value : null;
 }
 
 /** 0.22 より前は生き残りの数だけを記録していた。読める形は全部受ける。 */
 function toRecord(value: unknown): MutationRecord | null {
-  if (typeof value === "number") return { survived: value, measured: null, timeout: null };
+  if (typeof value === "number") return { survived: value, measured: null, timeout: null, noCoverage: null };
   if (typeof value === "object" && value !== null && "survived" in value) {
-    const { survived, measured, timeout } = value as { survived: unknown; measured?: unknown; timeout?: unknown };
+    const { survived, measured, timeout, noCoverage } = value as Record<string, unknown>;
     if (typeof survived !== "number") return null;
-    return {
-      survived,
-      measured: typeof measured === "number" ? measured : null,
-      timeout: typeof timeout === "number" ? timeout : null,
-    };
+    return { survived, measured: toCount(measured), timeout: toCount(timeout), noCoverage: toCount(noCoverage) };
   }
   return null;
 }
@@ -190,18 +203,29 @@ export function ratchetNumber(allowed: number, actual: number): RatchetOutcome {
   return { kind: "ok" };
 }
 
+/**
+ * 後退 1 件。**軸を持つ。**
+ *
+ * mutation は 1 ファイルに 2 つの借金を記録する（殺せなかった変異と、テストが届いて
+ * いない変異）。どちらが増えたのかは直し方が違うので、混ぜて 1 種類の文にできない。
+ */
+export type MutationRegression =
+  | {
+      kind: "undetected";
+      file: string;
+      allowed: number;
+      actual: number;
+      /** 旧記録（0.22 より前）は null。突き合わせの条件が読み手に見えるように残す。 */
+      measuredBefore: number | null;
+      measuredNow: number | null;
+      /** 旧記録（0.23 より前）は null。 */
+      timeoutBefore: number | null;
+      timeoutNow: number | null;
+    }
+  | { kind: "noCoverage"; file: string; allowed: number; actual: number };
+
 export interface FileRatchet {
-  regressed: {
-    file: string;
-    allowed: number;
-    actual: number;
-    /** 旧記録（0.22 より前）は null。突き合わせの条件が読み手に見えるように残す。 */
-    measuredBefore: number | null;
-    measuredNow: number | null;
-    /** 旧記録（0.23 より前）は null。 */
-    timeoutBefore: number | null;
-    timeoutNow: number | null;
-  }[];
+  regressed: MutationRegression[];
   updated: Record<string, MutationRecord>;
 }
 
@@ -220,12 +244,11 @@ export interface FileRatchet {
  * 比例して動くので、Survived と Timeout の境目は環境で揺れる — 和は揺れない。
  * 旧記録（timeout 無し）は survived だけで比べる（和に混ぜると片側だけ膨らむ）。
  */
-function fileRegression(
+function undetectedRegression(
   file: string,
-  limit: MutationRecord | undefined,
+  limit: MutationRecord,
   actual: MutationRecord,
-): FileRatchet["regressed"][number] | null {
-  if (limit === undefined) return null;
+): MutationRegression | null {
   // 二重の歯止め: measured が 0 の記録にも余裕を作らない。0/0/0 の記録に measured の
   // 余裕を与えると ceiling = actual.measured になり、survived + timeout は measured の
   // 部分集合なので**必ず通る** — そのファイルのゲートが恒久的に無効になる（#27 で実測）。
@@ -234,6 +257,7 @@ function fileRegression(
   const ceiling = limit.survived + (limit.timeout ?? 0) + slack;
   if (undetected <= ceiling) return null;
   return {
+    kind: "undetected",
     file,
     allowed: limit.survived,
     actual: actual.survived,
@@ -242,6 +266,39 @@ function fileRegression(
     timeoutBefore: limit.timeout,
     timeoutNow: actual.timeout,
   };
+}
+
+/**
+ * テストが届いていない変異が増えたか。**測定集合の余裕は作らない。**
+ *
+ * `undetected` 側の slack（measured が増えた分は許す）は「テストを足したら測定に入った」
+ * ための緩和だが、こちらにその形は無い — テストを足せば NoCoverage は**減る**方向にしか
+ * 動かない。増えるのは未テストのコードが増えたときだけなので、厳密に比べる。
+ *
+ * 旧記録（欄なし = null）は突き合わせず種を置く。0 と読むと、上げた瞬間に
+ * 全リポジトリが「0 → N に増えました」で赤になる（#28 と同じ形の逆向き）。
+ */
+function noCoverageRegression(
+  file: string,
+  limit: MutationRecord,
+  actual: MutationRecord,
+): MutationRegression | null {
+  if (limit.noCoverage === null) return null;
+  const now = actual.noCoverage ?? 0;
+  if (now <= limit.noCoverage) return null;
+  return { kind: "noCoverage", file, allowed: limit.noCoverage, actual: now };
+}
+
+/** ファイル 1 つ分を全部の軸で突き合わせる。**両方増えたら両方言う** — 直し方が違う。 */
+function fileRegressions(
+  file: string,
+  limit: MutationRecord | undefined,
+  actual: MutationRecord,
+): MutationRegression[] {
+  if (limit === undefined) return [];
+  return [undetectedRegression(file, limit, actual), noCoverageRegression(file, limit, actual)].filter(
+    (entry): entry is MutationRegression => entry !== null,
+  );
 }
 
 /**
@@ -384,8 +441,10 @@ export function ratchetByFile(
     // measured の余裕と組み合わさってゲートが外れた）。候補に入っても測られない経路は
     // 普通にある — 型定義だけのファイル、変異の作れないファイル。
     if (actual === undefined) continue;
-    const entry = fileRegression(file, allowed[file], actual);
-    if (entry !== null) regressed.push(entry);
+    // どれか 1 つの軸でも後退していれば記録は動かさない（片方だけ締めると、
+    // 後退した軸の許容値が「直った後の実測」で置き直せなくなる）。
+    const entries = fileRegressions(file, allowed[file], actual);
+    if (entries.length > 0) regressed.push(...entries);
     else updated[file] = actual;
   }
   return { regressed, updated };

@@ -20,7 +20,7 @@ const read = (): string => readFileSync(join(root, BASELINE_FILENAME), "utf8");
 describe("loadBaseline", () => {
   it("記録を読む", () => {
     put('{"crap": 7, "mutation": {"a.ts": 3}}');
-    expect(loadBaseline(root)).toEqual({ crap: 7, mutation: { "a.ts": { survived: 3, measured: null, timeout: null } } });
+    expect(loadBaseline(root)).toEqual({ crap: 7, mutation: { "a.ts": { survived: 3, measured: null, timeout: null, noCoverage: null } } });
   });
 
   it("mutation が無ければ空とみなす", () => {
@@ -54,8 +54,8 @@ describe("loadBaseline", () => {
   });
 
   it("書いたものを読み戻せる", () => {
-    saveBaseline(root, { crap: 3, mutation: { "a.ts": { survived: 1, measured: 12, timeout: 2 } } });
-    expect(loadBaseline(root)).toEqual({ crap: 3, mutation: { "a.ts": { survived: 1, measured: 12, timeout: 2 } } });
+    saveBaseline(root, { crap: 3, mutation: { "a.ts": { survived: 1, measured: 12, timeout: 2, noCoverage: null } } });
+    expect(loadBaseline(root)).toEqual({ crap: 3, mutation: { "a.ts": { survived: 1, measured: 12, timeout: 2, noCoverage: null } } });
   });
 
   // 読めない値を黙って数に変えると、壊れた記録が「生き残り 0」に化ける。欄ごと落とす。
@@ -72,20 +72,20 @@ describe("loadBaseline", () => {
   // measured が数でなければ「無い」として読む（null と書かれた旧試行を許す）。
   it("measured が数でなければ null として読む", () => {
     put('{"crap": 3, "mutation": {"a.ts": {"survived": 2, "measured": "x"}}}');
-    expect(loadBaseline(root)?.mutation).toEqual({ "a.ts": { survived: 2, measured: null, timeout: null } });
+    expect(loadBaseline(root)?.mutation).toEqual({ "a.ts": { survived: 2, measured: null, timeout: null, noCoverage: null } });
   });
 
   // 0.22 より前は生き残りの数だけを記録していた。読めなくなると全リポジトリの記録が消える。
   it("旧形式（数だけ）を読める", () => {
     put('{"crap": 3, "mutation": {"a.ts": 7}}');
-    expect(loadBaseline(root)?.mutation).toEqual({ "a.ts": { survived: 7, measured: null, timeout: null } });
+    expect(loadBaseline(root)?.mutation).toEqual({ "a.ts": { survived: 7, measured: null, timeout: null, noCoverage: null } });
   });
 
   // null を書くと「測って 0 だった」と区別できない。measured が無いまま保存するときは欄ごと省く。
   it("measured の無い記録は survived だけで書く", () => {
-    saveBaseline(root, { crap: 3, mutation: { "a.ts": { survived: 7, measured: null, timeout: null } } });
+    saveBaseline(root, { crap: 3, mutation: { "a.ts": { survived: 7, measured: null, timeout: null, noCoverage: null } } });
     expect(read()).not.toContain("null");
-    expect(loadBaseline(root)?.mutation).toEqual({ "a.ts": { survived: 7, measured: null, timeout: null } });
+    expect(loadBaseline(root)?.mutation).toEqual({ "a.ts": { survived: 7, measured: null, timeout: null, noCoverage: null } });
   });
 
   // 「無い」と 0 は違う — 無ければ種を置く判定（duplicationViolations）に使う。
@@ -110,6 +110,7 @@ describe("ratchetByFile", () => {
     survived,
     measured,
     timeout,
+    noCoverage: null,
   });
   const allowed = { "a.ts": record(2, 10), "b.ts": record(5, 20) };
 
@@ -122,7 +123,7 @@ describe("ratchetByFile", () => {
 
   it("増えていたら落とし、記録は上げない", () => {
     expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(4, 10) })).toEqual({
-      regressed: [{ file: "a.ts", allowed: 2, actual: 4, measuredBefore: 10, measuredNow: 10, timeoutBefore: null, timeoutNow: null }],
+      regressed: [{ kind: "undetected", file: "a.ts", allowed: 2, actual: 4, measuredBefore: 10, measuredNow: 10, timeoutBefore: null, timeoutNow: null }],
       updated: { "a.ts": record(2, 10), "b.ts": record(5, 20) },
     });
   });
@@ -138,7 +139,7 @@ describe("ratchetByFile", () => {
 
   it("測った数の増加を超える分は落とす", () => {
     expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(5, 12) }).regressed).toEqual([
-      { file: "a.ts", allowed: 2, actual: 5, measuredBefore: 10, measuredNow: 12, timeoutBefore: null, timeoutNow: null },
+      { kind: "undetected", file: "a.ts", allowed: 2, actual: 5, measuredBefore: 10, measuredNow: 12, timeoutBefore: null, timeoutNow: null },
     ]);
   });
 
@@ -151,7 +152,7 @@ describe("ratchetByFile", () => {
   it("旧記録（measured 無し）は厳格に比べる", () => {
     const legacy = { "a.ts": record(2) };
     expect(ratchetByFile(legacy, ["a.ts"], { "a.ts": record(3, 12) }).regressed).toEqual([
-      { file: "a.ts", allowed: 2, actual: 3, measuredBefore: null, measuredNow: 12, timeoutBefore: null, timeoutNow: null },
+      { kind: "undetected", file: "a.ts", allowed: 2, actual: 3, measuredBefore: null, measuredNow: 12, timeoutBefore: null, timeoutNow: null },
     ]);
   });
 
@@ -200,6 +201,7 @@ describe("ratchetByFile", () => {
     const limits = { "a.ts": record(66, 414, 4) };
     expect(ratchetByFile(limits, ["a.ts"], { "a.ts": record(70, 414, 1) }).regressed).toEqual([
       {
+        kind: "undetected",
         file: "a.ts",
         allowed: 66,
         actual: 70,
@@ -213,7 +215,7 @@ describe("ratchetByFile", () => {
 
   // timeout を持たない 0.22 の記録に打ち切りを混ぜると、片側だけ膨らんで必ず落ちる。
   it("timeout の無い記録には survived だけで比べる", () => {
-    const legacy = { "a.ts": { survived: 5, measured: 10, timeout: null } };
+    const legacy = { "a.ts": { survived: 5, measured: 10, timeout: null, noCoverage: null } };
     expect(ratchetByFile(legacy, ["a.ts"], { "a.ts": record(5, 10, 3) }).regressed).toEqual([]);
   });
 
@@ -222,6 +224,68 @@ describe("ratchetByFile", () => {
     expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(0, 10), "b.ts": record(99, 20) }).updated["b.ts"]).toEqual(
       record(5, 20),
     );
+  });
+
+  // #31: どのテストも通っていない変異は生き残りに足さず（既存リポジトリが赤で埋まる）、
+  // 別の軸として「増やさない」だけを課す。直し方が違うので文も分ける。
+  describe("どのテストも通っていない変異（noCoverage）", () => {
+    const uncovered = (survived: number, noCoverage: number | null) => ({
+      survived,
+      measured: 100,
+      timeout: 0,
+      noCoverage,
+    });
+
+    it("増えていたら落とす", () => {
+      const limits = { "a.ts": uncovered(0, 19) };
+      expect(ratchetByFile(limits, ["a.ts"], { "a.ts": uncovered(0, 25) }).regressed).toEqual([
+        { kind: "noCoverage", file: "a.ts", allowed: 19, actual: 25 },
+      ]);
+    });
+
+    it("同じなら通す", () => {
+      expect(ratchetByFile({ "a.ts": uncovered(0, 19) }, ["a.ts"], { "a.ts": uncovered(0, 19) }).regressed).toEqual([]);
+    });
+
+    // テストから呼べる形にした回に自動で締まらないと、次に緩めても通ってしまう。
+    it("減っていたら記録を下げる", () => {
+      const limits = { "a.ts": uncovered(0, 19) };
+      expect(ratchetByFile(limits, ["a.ts"], { "a.ts": uncovered(0, 2) }).updated["a.ts"]).toEqual(uncovered(0, 2));
+    });
+
+    // **旧記録（0.24 より前）は欄を持たない。** 0 と読むと、上げた瞬間に全リポジトリが
+    // 「0 → N に増えました」で赤くなる（#28 と同じ形の逆向き）。最初に測れた回が種を置く。
+    it("欄の無い記録は突き合わせず種を置く", () => {
+      const legacy = { "a.ts": uncovered(0, null) };
+      const outcome = ratchetByFile(legacy, ["a.ts"], { "a.ts": uncovered(0, 222) });
+      expect(outcome.regressed).toEqual([]);
+      expect(outcome.updated["a.ts"]!.noCoverage).toBe(222);
+    });
+
+    // 生き残りの側に作った余裕（measured が増えた分）をこちらに流用しない。
+    // テストを足せば未計測は減る方向にしか動かないので、緩める理由が無い。
+    it("測った数が増えても増加は許さない", () => {
+      const limits = { "a.ts": { survived: 0, measured: 100, timeout: 0, noCoverage: 19 } };
+      const actual = { "a.ts": { survived: 0, measured: 200, timeout: 0, noCoverage: 20 } };
+      expect(ratchetByFile(limits, ["a.ts"], actual).regressed).toHaveLength(1);
+    });
+
+    // 直し方が違う 2 つを 1 件に丸めると、読み手はどちらを直すのか分からない。
+    it("両方の軸が増えたら両方言う", () => {
+      const limits = { "a.ts": { survived: 1, measured: 100, timeout: 0, noCoverage: 5 } };
+      const actual = { "a.ts": { survived: 3, measured: 100, timeout: 0, noCoverage: 9 } };
+      const kinds = ratchetByFile(limits, ["a.ts"], actual).regressed.map((entry) => entry.kind);
+      expect(kinds).toEqual(["undetected", "noCoverage"]);
+    });
+
+    // 片方だけ締めると、後退した軸の許容値をあとから置き直せなくなる。
+    it("片方が後退していれば記録は動かさない", () => {
+      const limits = { "a.ts": { survived: 1, measured: 100, timeout: 0, noCoverage: 5 } };
+      const actual = { "a.ts": { survived: 0, measured: 100, timeout: 0, noCoverage: 9 } };
+      const outcome = ratchetByFile(limits, ["a.ts"], actual);
+      expect(outcome.regressed).toHaveLength(1);
+      expect(outcome.updated["a.ts"]).toEqual(limits["a.ts"]);
+    });
   });
 });
 
@@ -299,6 +363,7 @@ describe("tighterRecord", () => {
     survived,
     measured,
     timeout,
+    noCoverage: null,
   });
 
   // 突き合わせが見るのは「殺せなかった数」= survived + timeout。
@@ -341,7 +406,7 @@ describe("tighterRecord", () => {
 });
 
 describe("mergeBaselines", () => {
-  const record = (survived: number) => ({ survived, measured: null, timeout: null });
+  const record = (survived: number) => ({ survived, measured: null, timeout: null, noCoverage: null });
 
   it("crap は小さい方", () => {
     expect(mergeBaselines({ crap: 5, mutation: {} }, { crap: 3, mutation: {} }).crap).toBe(3);
@@ -407,7 +472,7 @@ describe("resolveConflictedBaseline", () => {
   it("両側を読んで厳しい側でマージする", () => {
     expect(resolveConflictedBaseline(conflicted)).toEqual({
       crap: 1,
-      mutation: { "a.ts": { survived: 3, measured: null, timeout: null } },
+      mutation: { "a.ts": { survived: 3, measured: null, timeout: null, noCoverage: null } },
     });
   });
 

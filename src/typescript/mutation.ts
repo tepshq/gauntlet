@@ -42,7 +42,8 @@ export interface MutationReport {
   files: Record<string, { mutants: Mutant[] }>;
 }
 
-export interface SurvivedMutant {
+/** 出力で名指しする変異 1 件。生き残り（Survived）と測れていない変異（NoCoverage）が共有する。 */
+export interface ReportedMutant {
   file: string;
   line: number;
   mutator: string;
@@ -50,16 +51,11 @@ export interface SurvivedMutant {
   replacement: string | null;
 }
 
-/**
- * 生き残った変異だけを取り出す。
- *
- * `NoCoverage`（どのテストも通っていない）は数えない。それは網羅率の話で、
- * CRAP が既に見ている。mutation が独自に捕まえるのは「テストは通るが assert が弱い」ケース。
- */
-export function survivedFrom(report: MutationReport): SurvivedMutant[] {
+/** その status の変異だけを、名指しできる形で取り出す。 */
+function mutantsWithStatus(report: MutationReport, status: string): ReportedMutant[] {
   return Object.entries(report.files).flatMap(([file, entry]) =>
     entry.mutants
-      .filter((mutant) => mutant.status === "Survived")
+      .filter((mutant) => mutant.status === status)
       .map((mutant) => ({
         file,
         line: mutant.location.start.line,
@@ -67,6 +63,29 @@ export function survivedFrom(report: MutationReport): SurvivedMutant[] {
         replacement: mutant.replacement ?? null,
       })),
   );
+}
+
+/**
+ * 生き残った変異。**テストは通っているのに殺せなかったもの。**
+ *
+ * `NoCoverage`（どのテストも通っていない）はここには数えない — 直し方が違う
+ * （assert を強めるのか、そもそもテストから呼べる形にするのか）。別の欄で記録する。
+ */
+export function survivedFrom(report: MutationReport): ReportedMutant[] {
+  return mutantsWithStatus(report, "Survived");
+}
+
+/**
+ * どのテストも通っていない変異。**mutation の 2 つ目の借金。**
+ *
+ * 「網羅率の話は CRAP が見る」として数えていなかったが、**CRAP は複雑度 × 未網羅の積**
+ * なので、複雑度の低い未テストコードはどちらのゲートにも掛からない — `main` や
+ * ファイル書き出し・進捗ログのような I/O 層が丸ごと素通りする（#31。報告では 3 ファイルに
+ * 25 / 19 / 11 件あって CRAP 違反は 0 件、gauntlet 自身にも 222 件あった）。
+ * 違反にはしない（既存リポジトリが導入初日に赤で埋まる）が、件数を記録して増加を止める。
+ */
+export function noCoverageFrom(report: MutationReport): ReportedMutant[] {
+  return mutantsWithStatus(report, "NoCoverage");
 }
 
 /**
@@ -343,7 +362,9 @@ export function strykerFiles(
 }
 
 export interface MutationOutcome {
-  survived: SurvivedMutant[];
+  survived: ReportedMutant[];
+  /** どのテストも通っていない変異。件数を記録して増加を止める（#31）。 */
+  noCoverage: ReportedMutant[];
   /** `--ignoreStatic` で測らなかった数。 */
   ignored: IgnoredBreakdown;
   /** 上流が置けなくて外した mutator。これも測っていない分。 */
@@ -593,6 +614,7 @@ export function runMutation(
   const report = JSON.parse(readFileSync(path, "utf8")) as MutationReport;
   return {
     survived: survivedFrom(report),
+    noCoverage: noCoverageFrom(report),
     ignored: ignoredBreakdown(report),
     excluded,
     measured: measuredByFile(report),

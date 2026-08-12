@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } fr
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { REPORT_PATH, type MutationReport, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredBreakdown, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, NO_TESTS_TO_MUTATE, dryRunFailure, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
+import { REPORT_PATH, type MutationReport, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredBreakdown, noCoverageFrom, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, NO_TESTS_TO_MUTATE, dryRunFailure, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
 import { RunnerError, lastLines } from "./runner.ts";
 
 // レポートが出ていないときは Stryker の出力が唯一の手がかりになる。
@@ -78,8 +78,8 @@ describe("survivedFrom", () => {
     expect(survivedFrom(report({ "a.ts": [["Killed", 1], ["Timeout", 2]] }))).toEqual([]);
   });
 
-  // 網羅率の話は CRAP が見ている。ここで二重に数えると同じ欠陥が 2 回報告される。
-  it("NoCoverage は数えない", () => {
+  // 直し方が違う（assert を強めるのか、呼べる形にするのか）。別の欄で記録する（#31）。
+  it("NoCoverage は生き残りに数えない", () => {
     expect(survivedFrom(report({ "a.ts": [["NoCoverage", 1]] }))).toEqual([]);
   });
 
@@ -90,6 +90,27 @@ describe("survivedFrom", () => {
 
   it("変異が無ければ空", () => {
     expect(survivedFrom(report({}))).toEqual([]);
+  });
+});
+
+// #31: mutation は NoCoverage を違反に数えず、CRAP は複雑度 × 未網羅の積なので、
+// 複雑度の低い未テストコードはどちらのゲートにも掛からない。件数を別軸で記録する。
+describe("noCoverageFrom", () => {
+  it("どのテストも通っていない変異を場所つきで返す", () => {
+    expect(noCoverageFrom(report({ "a.ts": [["NoCoverage", 138]] }))).toEqual([
+      { file: "a.ts", line: 138, mutator: "ConditionalExpression", replacement: null },
+    ]);
+  });
+
+  // 生き残り・倒された・打ち切りは「テストが通っている」側。混ぜると二重に数える。
+  it("それ以外の status は返さない", () => {
+    const mixed = report({ "a.ts": [["Survived", 1], ["Killed", 2], ["Timeout", 3], ["Ignored", 4]] });
+    expect(noCoverageFrom(mixed)).toEqual([]);
+  });
+
+  it("複数ファイルをまとめる", () => {
+    const uncovered = noCoverageFrom(report({ "a.ts": [["NoCoverage", 1]], "b.ts": [["NoCoverage", 2]] }));
+    expect(uncovered.map((mutant) => mutant.file)).toEqual(["a.ts", "b.ts"]);
   });
 });
 

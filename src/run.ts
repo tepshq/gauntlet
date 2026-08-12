@@ -5,7 +5,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { type GauntletConfig, loadConfig } from "./config.ts";
-import { BASELINE_FILENAME, type Baseline, type BaselineStore, type FileRatchet, type MutationRecord, diskStore, loadBaseline, memoryStore, ratchetByFile, ratchetNumber, resolveConflictedBaseline, saveBaseline } from "./baseline.ts";
+import { BASELINE_FILENAME, type Baseline, type BaselineStore, type MutationRecord, type MutationRegression, diskStore, loadBaseline, memoryStore, ratchetByFile, ratchetNumber, resolveConflictedBaseline, saveBaseline } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
 import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, touchedFunctions } from "./gate.ts";
 import { crap } from "./crap.ts";
@@ -23,7 +23,7 @@ import {
 import { type DeadInclude, type IncludeReview, analyze, isTestFile, listSourceFiles, reviewIncludes, unmeasuredFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
-import { REPORT_PATH, type IgnoredBreakdown, type SurvivedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
+import { REPORT_PATH, type IgnoredBreakdown, type ReportedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
 import { RunnerError, type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
 
@@ -666,19 +666,30 @@ const EMPTY_BASELINE = { mutation: {} };
  */
 export function mutationRecords(
   targets: readonly string[],
-  survived: Record<string, number>,
-  measured: Record<string, number>,
-  timeout: Record<string, number>,
+  // **1 つのオブジェクトで受ける。** Record<string, number> が 4 つ並ぶと、呼び出し側で
+  // 順番を 1 つ違えても型は通り、**打ち切りと未計測が入れ替わった記録が黙って書かれる**。
+  counts: {
+    survived: Record<string, number>;
+    measured: Record<string, number>;
+    timeout: Record<string, number>;
+    noCoverage: Record<string, number>;
+  },
 ): Record<string, MutationRecord> {
   return Object.fromEntries(
     targets
       // **測った実体のあるファイルだけ。** 候補に入っても Stryker の報告に現れない・
       // 全部が NoCoverage/Ignored で measured 0、というファイルに 0/0/0 を作ると、
       // それが「実測」として記録され、負債が消える（#27）。報告に無い = 知らない、で通す。
-      .filter((file) => (measured[file] ?? 0) > 0)
+      .filter((file) => (counts.measured[file] ?? 0) > 0)
       .map((file) => [
         file,
-        { survived: survived[file] ?? 0, measured: measured[file] ?? 0, timeout: timeout[file] ?? 0 },
+        {
+          survived: counts.survived[file] ?? 0,
+          measured: counts.measured[file] ?? 0,
+          timeout: counts.timeout[file] ?? 0,
+          // 報告にあって測れた回なので、0 は「未計測の変異は無かった」という実測。
+          noCoverage: counts.noCoverage[file] ?? 0,
+        },
       ]),
   );
 }
@@ -690,7 +701,7 @@ export function mutationRecords(
  * 読み手が増加の理由を区別できる（テストを足しただけで落ちた h3/duct の切り分けに、
  * この情報が無くて Stryker の単体実行までやらせてしまった）。
  */
-export function regressionText(entry: FileRatchet["regressed"][number]): string {
+export function regressionText(entry: Extract<MutationRegression, { kind: "undetected" }>): string {
   const measured = `測った変異 ${entry.measuredBefore ?? "記録なし"} → ${entry.measuredNow ?? 0}`;
   // 打ち切りも言う。閾値は実行速度に比例するので、「遅くなるだけの変異」は速い機械で
   // Timeout・遅い CI で Survived になる — 生き残りだけ見ると「テストが弱くなった」と
@@ -699,12 +710,44 @@ export function regressionText(entry: FileRatchet["regressed"][number]): string 
   return `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました（${timeout}、${measured}）  ${entry.file}`;
 }
 
+/**
+ * テストが届いていない変異が増えたことの説明。**直し方まで言う。**
+ *
+ * 生き残りと同じ文にはできない — こちらは assert を強める話ではなく、そのコードを
+ * **テストから呼べる形にする**話。報告者が実際に当てて確かめた直し方（`main` を export し、
+ * 引数と出力先を注入可能にする）だけを言う: 実測で測定対象が 73 → 91 に増え、
+ * 未計測 19 → 2、生き残り 19 → 0 になった。
+ */
+export function noCoverageText(entry: Extract<MutationRegression, { kind: "noCoverage" }>): string {
+  return (
+    `どのテストも通っていない変異が ${entry.allowed} → ${entry.actual} に増えました  ${entry.file}\n` +
+    "  テストから呼べる形にすると測れます（export して引数と出力先を注入する）"
+  );
+}
+
+/**
+ * 後退 1 件の説明に、その軸の変異を名指しで添える。
+ *
+ * どちらの軸かで添える一覧が変わる — 生き残りには生き残った変異、未計測には
+ * 測れていない変異。記録は数しか持たないので**増えた分だけを特定はできない**
+ * （以前から許容されている分も混ざる。CRAP のラチェットと同じ限界）。
+ */
+export function mutationRegressionText(
+  entry: MutationRegression,
+  survived: readonly ReportedMutant[],
+  noCoverage: readonly ReportedMutant[],
+): string {
+  const [head, mutants] =
+    entry.kind === "undetected" ? [regressionText(entry), survived] : [noCoverageText(entry), noCoverage];
+  return withDetails(head, mutants.filter((mutant) => mutant.file === entry.file).map(describeMutant));
+}
+
 function gateByFile(
   store: BaselineStore,
   key: "mutation",
   targets: readonly string[],
   counts: Record<string, MutationRecord>,
-  describe: (entry: FileRatchet["regressed"][number]) => string,
+  describe: (entry: MutationRegression) => string,
 ): Violation[] {
   const baseline = store.load() ?? EMPTY_BASELINE;
   const { regressed, updated } = ratchetByFile(baseline[key], targets, counts);
@@ -712,52 +755,128 @@ function gateByFile(
   return regressed.map((entry) => ({ message: describe(entry), file: entry.file }));
 }
 
+/** 括弧書き 1 つ分。件数が 0 なら黙る（「0 件」を並べると本題が埋もれる）。 */
+function unless(zero: boolean, text: string): string {
+  return zero ? "" : `（${text}）`;
+}
+
+/** 変異させなかったファイル。網羅率 0 は CRAP の担当なので、そう言って渡す。 */
+function untestedText(untested: number): string {
+  return unless(untested === 0, `テストが触れない ${untested} ファイルは対象外 — 網羅率 0 は CRAP が見る`);
+}
+
+/**
+ * 打ち切り。**「測っていない」側ではない。**
+ *
+ * 測定には入り、突き合わせでは生き残りと同じ「殺せなかった数」に数えられる（DESIGN §2）。
+ * なのに件数だけがどこにも出ず、**判定を得られないまま払っている実行時間**が見えなかった
+ * （#34。実測で 24 件）。テストでは減らない（無限ループになる変異なので、コードの形を
+ * 変えるしかない）ので、何が見えているのかを 1 行で言い切る。
+ */
+function stoppedText(records: Record<string, MutationRecord>): string {
+  const timeout = timeoutTotal(records);
+  return unless(timeout === 0, `打ち切り ${timeout} 件は殺せなかった数に入ります — テストでは減りません`);
+}
+
+/**
+ * どのテストも通っていない変異。**件数を出さないと存在に気づけない。**
+ *
+ * mutation の違反にはならず（直し方が違う）、CRAP も複雑度が低ければ通すので、
+ * どちらのゲートにも現れない（#31。報告では mutation.json を自分で読んで偶然見つかった。
+ * gauntlet 自身にも 222 件あった）。
+ */
+function uncoveredText(records: Record<string, MutationRecord>): string {
+  const uncovered = noCoverageTotal(records);
+  return unless(uncovered === 0, `どのテストも通っていない変異 ${uncovered} 件 — 記録して増やさないよう見ます`);
+}
+
+/**
+ * 測らないと決めた分の内訳。
+ *
+ * 静的な除外と意図的な除外を分けて数える。混ぜると、意図的に外した総数を誰も知れない
+ * （「見えていれば人が気づける」を軸に disable 方式を選んだのに、そこだけ見えなくなる）。
+ */
+function skippedText(ignored: IgnoredBreakdown): string {
+  const parts = [
+    ...(ignored.static > 0 ? [`静的な変異 ${ignored.static} 件`] : []),
+    ...(ignored.declared > 0 ? [`宣言して外した変異 ${ignored.declared} 件`] : []),
+  ];
+  return unless(parts.length === 0, `${parts.join("・")}は測っていません`);
+}
+
+/** 理由必須は原則。落としはしないが、破れは件数で言う。 */
+function unexplainedText(ignored: IgnoredBreakdown): string {
+  return unless(
+    ignored.unexplained === 0,
+    `理由の無い Stryker disable が ${ignored.unexplained} 件あります — 理由を書いてください`,
+  );
+}
+
+/** 上流が置けなかった mutator。これも測っていない分なので黙って落とさない。 */
+function droppedText(excluded: readonly string[]): string {
+  return unless(excluded.length === 0, `${excluded.join("、")} の変異は Stryker が置けないので測っていません`);
+}
+
 /**
  * 何を変異させ、何を測らなかったか。
  *
  * `--ignoreStatic` で外した分を黙って落とすと、緑が「弱いテストが無い」ではなく
  * 「そこは見ていない」を意味していることが読み手に伝わらない。
+ * **並び順は「範囲 → 測ったが判定が無い → 測っていない」。** 種類の違うものが
+ * 1 つの括弧に吸収されると、その総数を誰も知れなくなる（#25 / #34 / #31）。
  */
 export function mutationScopeText(
   targets: number,
   ignored: IgnoredBreakdown,
   untested = 0,
   excluded: readonly string[] = [],
-  timeout = 0,
+  // **記録そのものを受ける。** 件数を数値で 2 つ渡す形にすると、打ち切りと未計測を
+  // 入れ替えても型が通る。記録から数えれば画面と記録が構造的に一致する（#34 / #31）。
+  records: Record<string, MutationRecord> = {},
 ): string {
-  const bare = untested === 0 ? "" : `（テストが触れない ${untested} ファイルは対象外 — 網羅率 0 は CRAP が見る）`;
-  // **打ち切りは「測っていない」側ではない。** 測定には入り、突き合わせでは生き残りと
-  // 同じ「殺せなかった数」に数えられる（DESIGN §2）。なのに件数だけがどこにも出ず、
-  // **判定を得られないまま払っている実行時間**が見えなかった（#34。実測で 24 件）。
-  // テストでは減らない（無限ループになる変異なので、コードの形を変えるしかない）ので、
-  // 何が見えているのかを 1 行で言い切る。
-  const stopped = timeout === 0 ? "" : `（打ち切り ${timeout} 件は殺せなかった数に入ります — テストでは減りません）`;
-  // 静的な除外と意図的な除外を分けて数える。混ぜると、意図的に外した総数を誰も知れない
-  // （「見えていれば人が気づける」を軸に disable 方式を選んだのに、そこだけ見えなくなる）。
-  const parts = [
-    ...(ignored.static > 0 ? [`静的な変異 ${ignored.static} 件`] : []),
-    ...(ignored.declared > 0 ? [`宣言して外した変異 ${ignored.declared} 件`] : []),
+  const notes = [
+    untestedText(untested),
+    stoppedText(records),
+    uncoveredText(records),
+    skippedText(ignored),
+    unexplainedText(ignored),
+    droppedText(excluded),
   ];
-  const skipped = parts.length === 0 ? "" : `（${parts.join("・")}は測っていません）`;
-  // 理由必須は原則。落としはしないが、破れは件数で言う。
-  const bare2 =
-    ignored.unexplained === 0 ? "" : `（理由の無い Stryker disable が ${ignored.unexplained} 件あります — 理由を書いてください）`;
-  const dropped = excluded.length === 0 ? "" : `（${excluded.join("、")} の変異は Stryker が置けないので測っていません）`;
-  return `変異対象 ${targets} ファイル${bare}${stopped}${skipped}${bare2}${dropped}`;
+  return `変異対象 ${targets} ファイル${notes.join("")}`;
 }
 
 /**
- * 記録に書く打ち切りの総数。**表示と記録を同じ集合から出す。**
+ * 記録の欄を合計する。**表示は記録と同じ集合から出す。**
  *
  * レポート全体を数えると、記録に入らないファイル（測った実体が無いもの — #27）の分まで
  * 混ざり、画面の数と記録の合計が食い違う。食い違うと、増えたときにどちらが正しいのか
  * 分からなくなって切り分けの起点が消える（jscpd の `sources` で同じ形を踏んでいる）。
+ */
+function sumRecords(records: Record<string, MutationRecord>, pick: (record: MutationRecord) => number | null): number {
+  return Object.values(records).reduce((sum, record) => sum + (pick(record) ?? 0), 0);
+}
+
+/**
+ * 記録に書く打ち切りの総数。
  *
  * 記録側の絞り込み（`measured > 0`）で打ち切りが落ちることは無い — Timeout は
  * `measured` に数えられているので、`timeout > 0` なら必ず `measured > 0`。
  */
 export function timeoutTotal(records: Record<string, MutationRecord>): number {
-  return Object.values(records).reduce((sum, record) => sum + (record.timeout ?? 0), 0);
+  return sumRecords(records, (record) => record.timeout);
+}
+
+/**
+ * 記録に書く「どのテストも通っていない変異」の総数。
+ *
+ * こちらは絞り込みに掛かる形が理屈上ある — 変異対象なのに Stryker が 1 件も測れず
+ * （`measured` 0）、全部が NoCoverage というファイル。**記録は触らない**（#27 の
+ * 「報告に無い = 知らない」を破ると、既存の負債を 0 で上書きする経路が復活する）ので、
+ * その分は画面にも出ない。gauntlet 自身の実測ではそういうファイルは 1 つも無かった
+ * （NoCoverage を持つ 5 ファイルはいずれも measured > 0）。
+ */
+export function noCoverageTotal(records: Record<string, MutationRecord>): number {
+  return sumRecords(records, (record) => record.noCoverage);
 }
 
 /** 一覧の 1 行に収める。変異後のコードは複数行のことがある。 */
@@ -769,8 +888,8 @@ export function oneLine(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max)}…` : flat;
 }
 
-/** どの行のどんな変異が通り抜けたか。Stryker の再実行（分単位）なしで正体が分かる形に。 */
-export function describeSurvivor(mutant: SurvivedMutant): string {
+/** どの行のどんな変異だったか。Stryker の再実行（分単位）なしで正体が分かる形に。 */
+export function describeMutant(mutant: ReportedMutant): string {
   const replacement = mutant.replacement === null ? "" : `  → ${oneLine(mutant.replacement, 60)}`;
   return `L${mutant.line} ${mutant.mutator}${replacement}`;
 }
@@ -797,18 +916,24 @@ function mutationCheck(
     // 一番長い段。件数が分かれば時間の見積もりが立つ。書き換えの予告も兼ねる —
     // `--inPlace` は実ファイルを書き換えるので、途中で止めると計装が残る（duct で実測）。
     notify(`mutation 変異対象 ${targets.length} ファイル。作業ツリーを一時的に書き換えます`);
-    const { survived, ignored, excluded, measured, timeout } = runMutation(root, targets, declaredProjects(config));
-    // **記録と表示は同じ値から出す。** 画面の打ち切り件数が記録の合計と食い違うと、
+    const { survived, noCoverage, ignored, excluded, measured, timeout } = runMutation(
+      root,
+      targets,
+      declaredProjects(config),
+    );
+    // **記録と表示は同じ値から出す。** 画面の件数が記録の合計と食い違うと、
     // 増えたときにどちらを信じるかから始めることになる。
-    const records = mutationRecords(targets, countByFile(survived), measured, timeout);
+    const records = mutationRecords(targets, {
+      survived: countByFile(survived),
+      measured,
+      timeout,
+      noCoverage: countByFile(noCoverage),
+    });
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
-      scope: mutationScopeText(targets.length, ignored, untested, excluded, timeoutTotal(records)),
+      scope: mutationScopeText(targets.length, ignored, untested, excluded, records),
       violations: gateByFile(store, "mutation", targets, records, (entry) =>
-        withDetails(
-          regressionText(entry),
-          survived.filter((mutant) => mutant.file === entry.file).map(describeSurvivor),
-        ),
+        mutationRegressionText(entry, survived, noCoverage),
       ),
     };
   });
