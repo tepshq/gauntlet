@@ -125,6 +125,11 @@ describe("lastReasons", () => {
     const output = "ERROR 一つ目\n途中\nERROR 二つ目\n結末";
     expect(lastReasons(output, 5)).toBe("ERROR 二つ目\n結末");
   });
+
+  // 末尾の空行やスタック除去の残りを落とす。落とさないと報告の下に空行がぶら下がる。
+  it("ERROR から先の末尾の空白を落とす", () => {
+    expect(lastReasons("WARN x\nERROR 本体\n続き\n  \n", 10)).toBe("ERROR 本体\n続き");
+  });
 });
 
 describe("vitestArgs", () => {
