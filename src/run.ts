@@ -127,6 +127,8 @@ export function runTier(root: string, tier: TierName, notify: Notify = () => {})
         ),
         // フル実行の coverage に現れたファイル = 何かのテストが触れるファイル。
         new Set(coveredFiles(root, outcome.coverage)),
+        // 差分にあるファイル。打ち切りの記録を締めてよいのはここだけ（#39）。
+        new Set(changed.keys()),
         notify,
       ),
     duplication: () => duplicationCheck(store, root, config),
@@ -742,10 +744,18 @@ export function mutationRegressionText(
   entry: MutationRegression,
   survived: readonly ReportedMutant[],
   noCoverage: readonly ReportedMutant[],
+  touched: ReadonlySet<string> = new Set(),
 ): string {
   const [head, mutants] =
     entry.kind === "undetected" ? [regressionText(entry), survived] : [noCoverageText(entry), noCoverage];
-  return withDetails(head, mutants.filter((mutant) => mutant.file === entry.file).map(describeMutant));
+  // **触っていないファイルなら、そう言う。** 変更されたテストが覆っているという理由で
+  // 対象に入ったファイルは、読み手の差分と無関係に動きうる（打ち切りは実行ごとに、
+  // 生き残りも時計に依存するテストがあれば揺れる — #37 / #39）。
+  // 「自分の差分のせいではない」に到達できないと、直しようのない赤を追いかけることになる。
+  const outside = touched.has(entry.file)
+    ? head
+    : `${head}\n  このファイルは差分にありません（変更したテストが覆っているので対象に入りました）。実行ごとに揺れることがあります`;
+  return withDetails(outside, mutants.filter((mutant) => mutant.file === entry.file).map(describeMutant));
 }
 
 function gateByFile(
@@ -753,10 +763,11 @@ function gateByFile(
   key: "mutation",
   targets: readonly string[],
   counts: Record<string, MutationRecord>,
+  touched: ReadonlySet<string>,
   describe: (entry: MutationRegression) => string,
 ): Violation[] {
   const baseline = store.load() ?? EMPTY_BASELINE;
-  const { regressed, updated } = ratchetByFile(baseline[key], targets, counts);
+  const { regressed, updated } = ratchetByFile(baseline[key], targets, counts, touched);
   store.save({ ...baseline, [key]: updated });
   return regressed.map((entry) => ({ message: describe(entry), file: entry.file }));
 }
@@ -928,6 +939,8 @@ function mutationCheck(
   config: GauntletConfig,
   covered: Iterable<string>,
   tested: ReadonlySet<string>,
+  /** ソースが差分にあるファイル。打ち切りを締めてよいのはここだけ（#39）。 */
+  touched: ReadonlySet<string>,
   notify: Notify,
 ): CheckResult {
   const inScope = mutationTargets(covered, listSourceFiles(root, config.source));
@@ -959,8 +972,8 @@ function mutationCheck(
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
       scope: mutationScopeText(targets.length, ignored, untested, excluded, records, disables),
-      violations: gateByFile(store, "mutation", targets, records, (entry) =>
-        mutationRegressionText(entry, survived, noCoverage),
+      violations: gateByFile(store, "mutation", targets, records, touched, (entry) =>
+        mutationRegressionText(entry, survived, noCoverage, touched),
       ),
     };
   });

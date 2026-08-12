@@ -58,8 +58,20 @@ export interface MutationRecord {
    * （`timeoutFactor × 通常実行時間`）ので、「遅くなるだけの変異」は速い機械では
    * Timeout、遅い CI では Survived になる — 同じコミットで手元と CI の生き残りが
    * 食い違い、**何度締めても CI が通らない**（+3 が常に残る実測がある）。
-   * Killed は環境で動かないので、その補集合 `survived + timeout` は環境不変。
    * 副作用も正しい向きで、「時計で殺した」変異は借金の返済に数えられなくなる。
+   *
+   * **ただし和が環境不変なのは 3 通りの入れ替わりのうち 1 つだけ**（#37 / #39 で実測）:
+   *
+   * | 入れ替わり | `survived + timeout` |
+   * | --- | --- |
+   * | Survived ↔ Timeout | 不変（#26 が想定したもの） |
+   * | Timeout ↔ Killed | 変わる（速いほど小さい） |
+   * | Survived ↔ Killed | 変わる（時計に依存するテストがあると起きる） |
+   *
+   * だから**この数は締める側でも守る** — 打ち切りを下げてよいのは、そのファイルの
+   * ソースが差分にある回だけ（`ratchetByFile` の `touched`）。打ち切りはテストでは
+   * 減らせないので、下がったのは「コードの形が変わったか、機械が速かったか」の
+   * どちらかしかない。
    */
   timeout: number | null;
   /**
@@ -443,10 +455,35 @@ export function resolveConflictedBaseline(text: string): Baseline | null {
   return parsed.length === 1 ? parsed[0]! : mergeBaselines(parsed[0]!, parsed[1]!);
 }
 
+/**
+ * 記録に書く値。**打ち切りは、そのファイルのソースを触った回だけ締める。**
+ *
+ * 打ち切りは実行ごとに揺れる（同じコード・同じマシンで 5 → 4 → 3 の実測がある）。
+ * ラチェットは締まる方向にしか動かないので、揺らぐ量に当てると**記録が揺らぎの
+ * 最小値へ収束し、その後は上振れするたびに落ちる**（#39）。しかもテストでは減らせない
+ * ので、落ちても打つ手が無い。
+ *
+ * **軸を分けられるのは、打ち切りだけが「テストで動かせない」から。** 打ち切りが下がるのは
+ * 「コードの形が変わったか、機械が速かったか」のどちらかしかないので、**ソースが差分に
+ * ある回だけ締めれば揺らぎは記録に入らない**。生き残りにこの制限を当ててはいけない —
+ * 生き残りを減らす標準的なやり方はテストを足すことで、**ソースを触らない改善が普通に
+ * ある**（そこを締めないと、いちばん歓迎すべき改善が記録されなくなる。#39 の指摘）。
+ *
+ * 旧記録（欄なし）への初回の書き込みは「締め」ではないので、触っていなくても入れる。
+ */
+function recordFor(limit: MutationRecord | undefined, actual: MutationRecord, touched: boolean): MutationRecord {
+  const keep = limit?.timeout;
+  // 触っていないファイルの打ち切りは**動かさない**（下げない・上げない）。上振れを
+  // そのまま書くと記録が緩むので、「締めない」ではなく「凍らせる」が正しい。
+  return touched || keep == null ? actual : { ...actual, timeout: keep };
+}
+
 export function ratchetByFile(
   allowed: Record<string, MutationRecord>,
   scanned: readonly string[],
   counts: Record<string, MutationRecord>,
+  /** ソースが差分にあるファイル。打ち切りを締めてよいのはここだけ（#39）。 */
+  touched: ReadonlySet<string> = new Set(scanned),
 ): FileRatchet {
   const regressed: FileRatchet["regressed"] = [];
   const updated = { ...allowed };
@@ -461,7 +498,7 @@ export function ratchetByFile(
     // 後退した軸の許容値が「直った後の実測」で置き直せなくなる）。
     const entries = fileRegressions(file, allowed[file], actual);
     if (entries.length > 0) regressed.push(...entries);
-    else updated[file] = actual;
+    else updated[file] = recordFor(allowed[file], actual, touched.has(file));
   }
   return { regressed, updated };
 }

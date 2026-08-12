@@ -197,6 +197,48 @@ describe("ratchetByFile", () => {
     expect(outcome.updated["a.ts"]).toEqual(record(69, 414, 1));
   });
 
+  // #39 の核心。打ち切りは実行ごとに揺れる（同じコード・同じマシンで 5 → 4 → 3 の実測）。
+  // 締まる方向にしか動かないラチェットを当てると記録が最小値へ収束し、その後は上振れの
+  // たびに落ちる — しかもテストでは減らせないので打つ手が無い。
+  describe("打ち切りは触ったファイルだけ締める（#39）", () => {
+    const limits = { "a.ts": record(0, 91, 5) };
+
+    it("触っていないファイルの打ち切りは下げない", () => {
+      const outcome = ratchetByFile(limits, ["a.ts"], { "a.ts": record(0, 91, 3) }, new Set());
+      expect(outcome.regressed).toEqual([]);
+      expect(outcome.updated["a.ts"]).toEqual(record(0, 91, 5));
+    });
+
+    // コードの形が変わったなら、下がったのは実測の成果。締める。
+    it("ソースが差分にあれば下げる", () => {
+      const outcome = ratchetByFile(limits, ["a.ts"], { "a.ts": record(0, 91, 3) }, new Set(["a.ts"]));
+      expect(outcome.updated["a.ts"]).toEqual(record(0, 91, 3));
+    });
+
+    // **生き残りには当てない。** 生き残りを減らす標準的なやり方はテストを足すことで、
+    // ソースを触らない改善が普通にある。ここを締めないと、いちばん歓迎すべき改善が
+    // 記録されなくなる（#39 の指摘）。
+    it("触っていなくても生き残りは締める", () => {
+      const outcome = ratchetByFile({ "a.ts": record(9, 91, 5) }, ["a.ts"], { "a.ts": record(2, 91, 5) }, new Set());
+      expect(outcome.updated["a.ts"]).toEqual(record(2, 91, 5));
+    });
+
+    // 旧記録に打ち切りの欄が無い回の初回書き込みは「締め」ではない。
+    it("欄が無ければ触っていなくても入れる", () => {
+      const legacy = { "a.ts": { survived: 0, measured: 91, timeout: null, noCoverage: null } };
+      expect(ratchetByFile(legacy, ["a.ts"], { "a.ts": record(0, 91, 3) }, new Set()).updated["a.ts"]).toEqual(
+        record(0, 91, 3),
+      );
+    });
+
+    // 上振れをそのまま書くと記録が緩む。締めないのではなく、凍らせる。
+    it("触っていないファイルの打ち切りが上振れしても記録は緩めない", () => {
+      const outcome = ratchetByFile({ "a.ts": record(0, 200, 5) }, ["a.ts"], { "a.ts": record(0, 400, 7) }, new Set());
+      expect(outcome.regressed).toEqual([]); // measured が増えた分の余裕で通る
+      expect(outcome.updated["a.ts"]!.timeout).toBe(5);
+    });
+  });
+
   // #39 の形。生き残りは 0 のまま打ち切りだけが動くと落ちる（測った数が同じなので
   // 余裕も無い）。**このとき見出しに出すのは和** — 生き残りを出すと「0 → 0 に増えました」
   // になる。文は regressionText の仕事だが、渡す数はここで決まる。
