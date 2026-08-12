@@ -18,5 +18,6 @@ if (nodeTooOld(process.versions.node)) {
   );
   process.exitCode = EXIT_BLOCKED;
 } else {
-  await import("./main.ts");
+  const { runCli } = await import("./main.ts");
+  process.exitCode = runCli(process.argv.slice(2));
 }

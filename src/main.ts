@@ -162,10 +162,20 @@ function main(argv: readonly string[]): number {
   return (COMMANDS[String(argv[0])] ?? usageError)(argv);
 }
 
-try {
-  process.exitCode = main(process.argv.slice(2));
-} catch (error) {
-  // gauntlet 自身が走れなかった場合も阻止側に倒す。素通しすると flaky になる。
-  process.stderr.write(`gauntlet: ${describeCrash(error)}\n`);
-  process.exitCode = EXIT_BLOCKED;
+/**
+ * 入口が呼ぶ本体。**例外も exit code に畳む。**
+ *
+ * gauntlet 自身が走れなかった場合も阻止側に倒す。素通しすると flaky になる。
+ *
+ * `process.exitCode` への代入は `cli.ts` に置く。ここでトップレベルで実行すると
+ * **import しただけで CLI が走る**ので、この振り分けと exit code の割り当てを
+ * テストから触れなくなる（実際 main.ts は網羅率 0% のまま残っていた）。
+ */
+export function runCli(argv: readonly string[]): number {
+  try {
+    return main(argv);
+  } catch (error) {
+    process.stderr.write(`gauntlet: ${describeCrash(error)}\n`);
+    return EXIT_BLOCKED;
+  }
 }
