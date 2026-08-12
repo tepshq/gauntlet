@@ -412,7 +412,8 @@ npx gauntlet quick
 
 **完了条件** — `npx gauntlet --version` が npm の latest と一致すること（1 の完了条件と
 同じ理由）。`npx gauntlet quick` が通り、`package.json` / lockfile /
-`.claude/settings.json` / `.claude/skills/gauntlet-setup/` がコミットされていること。
+`.claude/settings.json` / `.claude/skills/gauntlet-setup/` / `skills-lock.json` が
+コミットされていること（後ろの 2 つは `skills add` が書く）。
 
 ### 版ごとの後始末
 
