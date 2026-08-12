@@ -12,10 +12,10 @@
       "survived": 0
     },
     "src/config.ts": {
-      "survived": 1,
-      "measured": 43,
+      "survived": 2,
+      "measured": 48,
       "timeout": 0,
-      "noCoverage": 7
+      "noCoverage": 2
     },
     "src/crap.ts": {
       "survived": 0,
@@ -31,9 +31,9 @@
     },
     "src/git.ts": {
       "survived": 0,
-      "measured": 103,
+      "measured": 126,
       "timeout": 0,
-      "noCoverage": 24
+      "noCoverage": 1
     },
     "src/guard.ts": {
       "survived": 0,
@@ -53,10 +53,10 @@
       "noCoverage": 0
     },
     "src/run.ts": {
-      "survived": 0,
-      "measured": 592,
+      "survived": 2,
+      "measured": 617,
       "timeout": 0,
-      "noCoverage": 81
+      "noCoverage": 77
     },
     "src/tier.ts": {
       "survived": 0
@@ -83,10 +83,10 @@
       "timeout": 0
     },
     "src/typescript/mutation.ts": {
-      "survived": 0,
-      "measured": 154,
+      "survived": 5,
+      "measured": 221,
       "timeout": 0,
-      "noCoverage": 82
+      "noCoverage": 59
     },
     "src/typescript/runner.ts": {
       "survived": 0,
