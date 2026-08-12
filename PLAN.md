@@ -570,6 +570,38 @@ CRAP 違反の `analyze` を覆った途端に NoCoverage だった変異が測�
 
 `full` の所要は変異対象 6 ファイルで 20.0 秒（うち mutation 16.3 秒）。
 
+### exec.ts と duplication.ts（2026-08-12）
+
+exec.ts 3 → 2、duplication.ts 1 → 0。
+
+**「片側だけのテスト」がこれで 3 件目。** duplication の
+`typeof duplicatedTokens !== "number" || typeof sources !== "number"` は、
+`sources` を欠いた形でしか試していなかったので、**`duplicatedTokens` 側の検査を
+外しても緑**だった（jscpd が文字列を返す形のレポートを、そのまま有効な結果として
+読む）。complexity の `case` / `default`、coverage の端と同じ構図。
+
+> **一般則。** OR / AND や「数を足す」検査は、**間違いが答えを変える組み合わせ**で
+> 書く。片側だけ・1 件ずつの入力は、条件の半分が消えても通る。
+
+**exec.ts に残る 2 件は等価変異ではない。** `stdio: "pipe"` の `""` への変異は、
+Node の既定にフォールバックして**返り値は完全に同じ**だが、`execFileSync` の既定は
+子の stderr を親の stderr に流すので、**道具の標準エラーが gauntlet 自身の出力に
+漏れる**（実測）:
+
+```
+pipe → 親の stderr: []
+""   → 親の stderr: [LEAKED]
+```
+
+差は fd 越しにしか出ないので、自分が子プロセスにならない限り単体テストからは
+踏めない。Node の版に依存する仕掛け（型剥がし・dist 依存）でテストを書くと
+**環境で答えが変わる**ので入れない。`disable` も付けない — 等価ではなく、
+「実害はあるが測れない」ものを等価と宣言すると記録が嘘になる。記録に残す。
+
+baseline.ts と package-manager.ts の生き残りは等価だった（早期 return を外しても
+`catch` が同じ null を返す。`fromPackageManagerField(undefined)` は `split` で
+落ちて同じ経路に入る）。
+
 ### complexity.ts — 生き残りが報告の穴を 1 つ指していた（2026-08-12）
 
 10 → 3。テストを 7 本足し、production を 1 か所直した。

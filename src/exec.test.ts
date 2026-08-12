@@ -59,6 +59,20 @@ describe("capture", () => {
     expect(result.stdout).toBe("out");
   });
 
+  // combined は失敗の原因を人に見せるためのもの。道具は前後に空行を吐くので、
+  // そのまま載せると報告の頭とお尻が空白で始まる（違反 1 行ごとの出力に混ざる）。
+  it("combined の前後の空白を落とす", () => {
+    const result = capture(
+      NODE,
+      ["-e", "process.stdout.write('  out\\n'); process.stderr.write('  err  '); process.exit(1)"],
+      process.cwd(),
+    );
+    // 落とすのは前後だけ。間の空白は原因の一部なので残す。
+    expect(result.combined).toBe("out\n  err");
+    // stdout の方は機械可読なので触らない。
+    expect(result.stdout).toBe("  out\n");
+  });
+
   it("標準エラーが空でも stdout を落とさない", () => {
     const result = capture(NODE, ["-e", "process.stdout.write('only'); process.exit(1)"], process.cwd());
     expect(result.combined).toBe("only");

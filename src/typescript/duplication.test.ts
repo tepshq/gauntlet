@@ -48,10 +48,14 @@ describe("parseDuplication", () => {
     expect(() => parseDuplication(text, "jscpd stderr")).toThrow(/jscpd のレポートを読めません/);
   });
 
-  it("total の数値が欠けていれば落とす", () => {
-    expect(() => parseDuplication(report({ duplicatedTokens: 3 }), "detail")).toThrow(
-      /statistics\.total がありません/,
-    );
+  // 片方だけ欠けた形で試すと、もう片方の検査が無くても通ってしまう
+  // （実測: duplicatedTokens 側の検査を外しても緑のままだった）。両方向から試す。
+  it.each([
+    ["sources が無い", { duplicatedTokens: 3 }],
+    ["duplicatedTokens が無い", { sources: 837 }],
+    ["duplicatedTokens が数値でない", { duplicatedTokens: "3", sources: 837 }],
+  ])("%s なら落とす", (_label, total) => {
+    expect(() => parseDuplication(report(total), "detail")).toThrow(/statistics\.total がありません/);
   });
 
   it("落ちるときに jscpd の出力を添える", () => {
