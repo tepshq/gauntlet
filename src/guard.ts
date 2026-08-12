@@ -58,9 +58,10 @@ const WRITE_FORMS = [
  * 区間ごとに見る — `git diff <file> && sed -i ... <file>` の後半を見逃さないため。
  */
 export function writesBaseline(command: string): boolean {
-  return command
+  // **剥がしてから区切る。** 逆にすると、引用の中の `&&` で区切られて引用が千切れ、
+  // 中の散文が裸のファイル名として現れる（自分のテストデータを書くコマンドで実測）。
+  return stripQuoted(command)
     .split(/&&|\|\||;|\||\n/)
-    .map(stripQuoted)
     .filter((segment) => segment.includes(BASELINE_FILENAME))
     .some((segment) => WRITE_FORMS.some((form) => form.test(segment)));
 }
@@ -74,6 +75,18 @@ export function writesBaseline(command: string): boolean {
  * 「ゲートを一時的に無効化する」しか無くなる（実際に踏まれた）。
  * 発火条件を gauntlet 自身が持てば、どの版でも同じ意味になる。
  */
+/**
+ * フック入力 → とるべき行動。判断はここ、プロセスの入出力は main。
+ *
+ * guard と precommit を 1 つのフックに束ねる（Bash 1 回につき node の起動を 1 回に
+ * 抑えるため）。順序は block が先 — 記録を書き換えるコミットは、検問より先に止める。
+ */
+export function hookAction(input: HookInput): "block" | "quick" | "pass" {
+  if (shouldBlock(input)) return "block";
+  if (gatesCommit(input)) return "quick";
+  return "pass";
+}
+
 /** precommit フックが quick を回すべき入力か。判断はここ、プロセスの入出力は main。 */
 export function gatesCommit(input: HookInput): boolean {
   // Stryker disable next-line StringLiteral: 既定値はコマンドを含まない文字列なら

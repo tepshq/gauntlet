@@ -10,17 +10,17 @@ import { INIT_DEFAULTS, INIT_USAGE, formatInit, helpRequested, init, mergeGitign
 // 0.21 以前が置いた quick 直呼びのフックを残すと、`if` を知らない版の Claude Code で
 // 全 Bash に quick が走り続ける（precommit への差し替えが効かない）。
 describe("mergeSettings の移行", () => {
-  it("旧 quick 直呼びのフックを撤去して precommit に置き換える", () => {
-    const legacy = JSON.stringify({
-      hooks: {
-        PreToolUse: [
-          { matcher: "Bash", hooks: [{ type: "command", if: "Bash(git commit *)", command: "npx gauntlet quick" }] },
-        ],
-      },
-    });
+  // 0.14〜0.22.0 が置いた 3 世代の配線をすべて 1 本に置き換える。残すと二重に走るか、
+  // `if` の解釈が揺れる環境で全 Bash に quick が走り続ける。
+  it.each([
+    ["quick 直呼び（〜0.21）", { type: "command", if: "Bash(git commit *)", command: "npx gauntlet quick" }],
+    ["precommit + if（0.22.0）", { type: "command", if: "Bash(git commit *)", command: "npx gauntlet precommit" }],
+    ["guard 単独", { type: "command", command: "npx gauntlet guard" }],
+  ])("旧配線を撤去して hook 1 本に置き換える: %s", (_name, entry) => {
+    const legacy = JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [entry] }] } });
     const merged = mergeSettings(legacy);
-    expect(merged).not.toContain('"npx gauntlet quick"');
-    expect(merged).toContain('"npx gauntlet precommit"');
+    expect(merged).not.toContain(JSON.stringify(entry.command));
+    expect(merged).toContain('"npx gauntlet hook"');
   });
 
   it("他人のフックは撤去しない", () => {
@@ -296,18 +296,14 @@ describe("init", () => {
     expect(settings().hooks.Stop).toBeUndefined();
   });
 
-  // 丸ごと固定する。`if` が消えれば全 Bash で quick が走り、matcher が壊れれば
-  // コミットが素通りする — どちらも「気づけない失敗」なので部分一致では見ない。
+  // 丸ごと固定する。matcher が壊れればコミットが素通りする — 「気づけない失敗」なので
+  // 部分一致では見ない。`if` は**書かない**（同一マシンで解釈が揺れた実測がある。#22）。
   it("PreToolUse フックの中身を丸ごと固定する", () => {
     init(root);
     expect(settings().hooks.PreToolUse).toEqual([
       {
         matcher: "Edit|Write|NotebookEdit|Bash",
-        hooks: [{ type: "command", command: "npx gauntlet guard" }],
-      },
-      {
-        matcher: "Bash",
-        hooks: [{ type: "command", if: "Bash(git commit *)", command: "npx gauntlet precommit" }],
+        hooks: [{ type: "command", command: "npx gauntlet hook" }],
       },
     ]);
   });
@@ -320,12 +316,12 @@ describe("init", () => {
     expect(read(".claude/settings.json")).toBe(once);
   });
 
-  // guard と quick の 2 つ。積み上がると 1 回のコミットで何度も検査が走る。
-  it("何度実行してもフックは 2 つのまま", () => {
+  // 統合された 1 本だけ。積み上がると 1 回のコミットで何度も検査が走る。
+  it("何度実行してもフックは 1 つのまま", () => {
     init(root);
     init(root);
     init(root);
-    expect(settings().hooks.PreToolUse).toHaveLength(2);
+    expect(settings().hooks.PreToolUse).toHaveLength(1);
   });
 
   // 他の用途で使っている設定を壊すと、導入そのものが敬遠される。

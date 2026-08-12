@@ -7,7 +7,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { GUARD_MESSAGE, gatesCommit, shouldBlock } from "./guard.ts";
+import { GUARD_MESSAGE, gatesCommit, hookAction, shouldBlock } from "./guard.ts";
 import { INIT_USAGE, formatInit, helpRequested, init, parseInitOptions } from "./init.ts";
 import { describeCrash, doctor, listViolators, run } from "./run.ts";
 import { EXIT_BLOCKED, EXIT_PASS, type TierName, exitCodeFor } from "./tier.ts";
@@ -52,6 +52,28 @@ function doctorCommand(): number {
  * 黙って無視し、**全 Bash コマンドで quick が走る**。作業ツリーが赤い間は復旧の
  * git コマンドまで止まり、抜け道が「ゲートの一時無効化」しか無くなる（実害あり）。
  */
+/**
+ * PreToolUse フックの入口。guard（記録の書き換えを止める）と precommit（コミットの
+ * 検問）を 1 回の起動で行う。
+ *
+ * 発火条件に Claude Code の `if` は**使わない** — 同一マシン・同一設定で「効く」
+ * 「断続的に無視される」の両方が実測されており（tepshq/gauntlet#22）、預けられない。
+ * さらにパターンが厳密に解釈される経路に乗った場合の失敗は**検問が黙って消える**側で、
+ * うるさい側（全 Bash で走る）より危険。全 Bash で走って自分で判定する方を選ぶ。
+ */
+function hook(): number {
+  const input: unknown = JSON.parse(readFileSync(0, "utf8"));
+  const actions: Record<ReturnType<typeof hookAction>, () => number> = {
+    block: () => {
+      process.stderr.write(`${GUARD_MESSAGE}\n`);
+      return EXIT_BLOCKED;
+    },
+    quick: tierCommand("quick"),
+    pass: () => EXIT_PASS,
+  };
+  return actions[hookAction(input as Parameters<typeof hookAction>[0])]();
+}
+
 function precommit(): number {
   const input: unknown = JSON.parse(readFileSync(0, "utf8"));
   if (!gatesCommit(input as Parameters<typeof gatesCommit>[0])) return EXIT_PASS;
@@ -79,8 +101,8 @@ const USAGE = `gauntlet <command>
   list    baseline が許容している CRAP 違反を全部並べる（ゲートではない）
   doctor  Stryker が vitest を起動できるか確かめる（導入時に mutation は走らないため）
   init    設定とフックを置く（範囲の決め方と CI は skill が案内する）
-  guard      PreToolUse フックから。baseline の書き換えを止める
-  precommit  PreToolUse フックから。git commit のときだけ quick を回す
+  hook       PreToolUse フックから。baseline の書き換えを止め、git commit なら quick を回す
+             （guard / precommit は旧配線のための別名として残る）
 
   --version  入っている版を出す
 
@@ -122,6 +144,7 @@ function usageError(argv: readonly string[]): number {
 const COMMANDS: Record<string, (argv: readonly string[]) => number> = {
   guard,
   precommit,
+  hook,
   init: initCommand,
   doctor: doctorCommand,
   list: listCommand,

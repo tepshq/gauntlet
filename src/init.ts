@@ -84,17 +84,12 @@ function existingConfig(root: string): GauntletConfig | null {
 const HOOKS = {
   PreToolUse: [
     {
+      // guard（記録の書き換えを止める）と precommit（コミットの検問）を 1 回の起動で。
+      // 発火条件に Claude Code の `if` は使わない — 同一マシン・同一設定で「効く」と
+      // 「断続的に無視される」の両方が実測された（#22）。厳密に解釈される経路での失敗は
+      // 「検問が黙って消える」側に倒れるので、全 Bash で走って自分で判定する。
       matcher: "Edit|Write|NotebookEdit|Bash",
-      hooks: [{ type: "command", command: "npx gauntlet guard" }],
-    },
-    {
-      // 発火条件は precommit 自身が stdin の JSON から判定する。`if`（permission rule
-      // 構文）にも同じ条件を書くが、これは対応する版で node の起動を省く最適化 —
-      // **`if` を知らない版の Claude Code は未知フィールドを黙って無視して全 Bash で
-      // 走らせる**ので、正しさを `if` に預けられない（作業ツリーが赤い間、復旧の
-      // git コマンドまで全部止まった実害がある）。
-      matcher: "Bash",
-      hooks: [{ type: "command", if: "Bash(git commit *)", command: "npx gauntlet precommit" }],
+      hooks: [{ type: "command", command: "npx gauntlet hook" }],
     },
   ],
 };
@@ -167,10 +162,11 @@ export function mergeSettings(existing: string | null): string {
   const settings: Settings = existing === null ? {} : parseSettings(existing);
   const hooks = settings.hooks ?? {};
   for (const [event, entries] of Object.entries(HOOKS)) {
-    // 0.21 以前が置いた quick 直呼びのフックは撤去する。残すと、`if` を知らない版の
-    // Claude Code で全 Bash に quick が走り続ける（precommit への差し替えが効かない）。
+    // 旧配線（guard / quick / precommit の個別フック）は撤去して 1 本に置き換える。
+    // 残すと二重に走るか、`if` の解釈が揺れる環境で全 Bash に quick が走り続ける。
+    const obsolete = ['"npx gauntlet quick"', '"npx gauntlet precommit"', '"npx gauntlet guard"'];
     const current = (hooks[event] ?? []).filter(
-      (entry) => !JSON.stringify(entry).includes('"npx gauntlet quick"'),
+      (entry) => !obsolete.some((command) => JSON.stringify(entry).includes(command)),
     );
     const known = new Set(current.map((entry) => JSON.stringify(entry)));
     hooks[event] = [...current, ...entries.filter((entry) => !known.has(JSON.stringify(entry)))];

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GUARD_MESSAGE, gatesCommit, runsGitCommit, shouldBlock } from "./guard.ts";
+import { GUARD_MESSAGE, gatesCommit, hookAction, runsGitCommit, shouldBlock } from "./guard.ts";
 
 describe("shouldBlock", () => {
   // 塞がなければ「赤 → baseline を緩める → 緑」が最短経路になる。
@@ -256,5 +256,37 @@ describe("shouldBlock と欠けた入力", () => {
     expect(
       shouldBlock({ tool_name: "Grep", tool_input: { command: "sed -i s/x/y/ gauntlet.baseline.json" } }),
     ).toBe(false);
+  });
+});
+
+// 剥がしてから区切る。逆だと、引用の中の && で引用が千切れて散文が裸になる。
+describe("引用の中の区切り文字", () => {
+  it("引用の中に && とファイル名と書き換え構文が並んでいても通す", () => {
+    const command =
+      'echo \'const c = "git checkout -- gauntlet.baseline.json && git commit" を試す\' >> notes.md';
+    expect(shouldBlock({ tool_name: "Bash", tool_input: { command } })).toBe(false);
+  });
+});
+
+// フックの入口の 3 分岐。block が quick より先 — 記録を書き換えるコミット
+// （書き換えと commit を繋いだ形）は、検問にかける前に止める。
+describe("hookAction", () => {
+  it("記録の書き換えは block", () => {
+    expect(hookAction({ tool_name: "Edit", tool_input: { file_path: "/r/gauntlet.baseline.json" } })).toBe("block");
+  });
+
+  it("コミットは quick", () => {
+    expect(hookAction({ tool_name: "Bash", tool_input: { command: 'git commit -m "x"' } })).toBe("quick");
+  });
+
+  it("それ以外は pass", () => {
+    expect(hookAction({ tool_name: "Bash", tool_input: { command: "npx tsx x.ts" } })).toBe("pass");
+  });
+
+  // 両方に当たる入力では block が勝つ。quick が先だと、緑のコミットに紛れて
+  // 記録の書き換えが通る。
+  it("書き換えを含むコミットは block", () => {
+    const command = "git checkout -- gauntlet.baseline.json && git commit -m x";
+    expect(hookAction({ tool_name: "Bash", tool_input: { command } })).toBe("block");
   });
 });
