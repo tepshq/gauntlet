@@ -129,7 +129,7 @@
       "noCoverage": 0
     },
     "src/seed.ts": {
-      "survived": 1,
+      "survived": 0,
       "measured": 61,
       "timeout": 0,
       "noCoverage": 7,
