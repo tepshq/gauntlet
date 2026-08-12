@@ -123,7 +123,7 @@ describe("ratchetByFile", () => {
 
   it("増えていたら落とし、記録は上げない", () => {
     expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(4, 10) })).toEqual({
-      regressed: [{ kind: "undetected", file: "a.ts", allowed: 2, actual: 4, measuredBefore: 10, measuredNow: 10, timeoutBefore: null, timeoutNow: null }],
+      regressed: [{ kind: "undetected", file: "a.ts", allowed: 2, actual: 4, survivedBefore: 2, survivedNow: 4, measuredBefore: 10, measuredNow: 10, timeoutBefore: null, timeoutNow: null }],
       updated: { "a.ts": record(2, 10), "b.ts": record(5, 20) },
     });
   });
@@ -139,7 +139,7 @@ describe("ratchetByFile", () => {
 
   it("測った数の増加を超える分は落とす", () => {
     expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(5, 12) }).regressed).toEqual([
-      { kind: "undetected", file: "a.ts", allowed: 2, actual: 5, measuredBefore: 10, measuredNow: 12, timeoutBefore: null, timeoutNow: null },
+      { kind: "undetected", file: "a.ts", allowed: 2, actual: 5, survivedBefore: 2, survivedNow: 5, measuredBefore: 10, measuredNow: 12, timeoutBefore: null, timeoutNow: null },
     ]);
   });
 
@@ -152,7 +152,7 @@ describe("ratchetByFile", () => {
   it("旧記録（measured 無し）は厳格に比べる", () => {
     const legacy = { "a.ts": record(2) };
     expect(ratchetByFile(legacy, ["a.ts"], { "a.ts": record(3, 12) }).regressed).toEqual([
-      { kind: "undetected", file: "a.ts", allowed: 2, actual: 3, measuredBefore: null, measuredNow: 12, timeoutBefore: null, timeoutNow: null },
+      { kind: "undetected", file: "a.ts", allowed: 2, actual: 3, survivedBefore: 2, survivedNow: 3, measuredBefore: null, measuredNow: 12, timeoutBefore: null, timeoutNow: null },
     ]);
   });
 
@@ -197,14 +197,38 @@ describe("ratchetByFile", () => {
     expect(outcome.updated["a.ts"]).toEqual(record(69, 414, 1));
   });
 
+  // #39 の形。生き残りは 0 のまま打ち切りだけが動くと落ちる（測った数が同じなので
+  // 余裕も無い）。**このとき見出しに出すのは和** — 生き残りを出すと「0 → 0 に増えました」
+  // になる。文は regressionText の仕事だが、渡す数はここで決まる。
+  it("生き残りが動かず打ち切りだけ増えた回は、和で報告する", () => {
+    const limits = { "a.ts": record(0, 91, 4) };
+    expect(ratchetByFile(limits, ["a.ts"], { "a.ts": record(0, 91, 5) }).regressed).toEqual([
+      {
+        kind: "undetected",
+        file: "a.ts",
+        allowed: 4,
+        actual: 5,
+        survivedBefore: 0,
+        survivedNow: 0,
+        measuredBefore: 91,
+        measuredNow: 91,
+        timeoutBefore: 4,
+        timeoutNow: 5,
+      },
+    ]);
+  });
+
   it("和が増えたら落とす", () => {
     const limits = { "a.ts": record(66, 414, 4) };
     expect(ratchetByFile(limits, ["a.ts"], { "a.ts": record(70, 414, 1) }).regressed).toEqual([
       {
         kind: "undetected",
         file: "a.ts",
-        allowed: 66,
-        actual: 70,
+        // 突き合わせるのは「殺せなかった数」= 生き残り + 打ち切り（66+4=70 → 70+1=71）。
+        allowed: 70,
+        actual: 71,
+        survivedBefore: 66,
+        survivedNow: 70,
         measuredBefore: 414,
         measuredNow: 414,
         timeoutBefore: 4,

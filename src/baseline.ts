@@ -213,14 +213,25 @@ export type MutationRegression =
   | {
       kind: "undetected";
       file: string;
+      /**
+       * **突き合わせた数そのもの**（殺せなかった変異 = 生き残り + 打ち切り。
+       * 旧記録で打ち切りを持たない回は生き残りだけ）。
+       *
+       * ここに生き残りの数を入れていたせいで、打ち切りだけが増えた回に
+       * **`0 → 0 に増えました`** という自己矛盾した文が出ていた（#39）。
+       * 判定に使った数と読み手に見せる数は同じでなければならない。
+       */
       allowed: number;
       actual: number;
-      /** 旧記録（0.22 より前）は null。突き合わせの条件が読み手に見えるように残す。 */
-      measuredBefore: number | null;
-      measuredNow: number | null;
+      /** 内訳。どれが動いたかで直し方が変わる（打ち切りはテストでは減らせない）。 */
+      survivedBefore: number;
+      survivedNow: number;
       /** 旧記録（0.23 より前）は null。 */
       timeoutBefore: number | null;
       timeoutNow: number | null;
+      /** 旧記録（0.22 より前）は null。突き合わせの条件が読み手に見えるように残す。 */
+      measuredBefore: number | null;
+      measuredNow: number | null;
     }
   | { kind: "noCoverage"; file: string; allowed: number; actual: number };
 
@@ -254,17 +265,22 @@ function undetectedRegression(
   // 部分集合なので**必ず通る** — そのファイルのゲートが恒久的に無効になる（#27 で実測）。
   const slack = !limit.measured ? 0 : Math.max(0, (actual.measured ?? 0) - limit.measured);
   const undetected = limit.timeout == null ? actual.survived : actual.survived + (actual.timeout ?? 0);
-  const ceiling = limit.survived + (limit.timeout ?? 0) + slack;
-  if (undetected <= ceiling) return null;
+  const allowed = limit.survived + (limit.timeout ?? 0);
+  if (undetected <= allowed + slack) return null;
   return {
     kind: "undetected",
     file,
-    allowed: limit.survived,
-    actual: actual.survived,
-    measuredBefore: limit.measured,
-    measuredNow: actual.measured,
+    // **判定に使った数をそのまま渡す。** 見出しに生き残りを出すと、打ち切りだけが
+    // 増えた回に「0 → 0 に増えました」になる（#39）。余裕（slack）は足さない —
+    // 許容値は記録された数で、slack は測定集合が広がった回だけの一時的な緩和。
+    allowed,
+    actual: undetected,
+    survivedBefore: limit.survived,
+    survivedNow: actual.survived,
     timeoutBefore: limit.timeout,
     timeoutNow: actual.timeout,
+    measuredBefore: limit.measured,
+    measuredNow: actual.measured,
   };
 }
 

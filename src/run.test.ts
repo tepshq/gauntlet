@@ -1146,17 +1146,37 @@ describe("mutationRecords", () => {
 });
 
 describe("regressionText", () => {
-  it("測った数を添えて言う", () => {
+  // **見出しの数は突き合わせた数（殺せなかった変異 = 生き残り + 打ち切り）。**
+  // ここに生き残りを出していたせいで「0 → 0 に増えました」が出ていた（#39）。
+  it("突き合わせた数を見出しにし、内訳を添える", () => {
     expect(
-      regressionText({ kind: "undetected", file: "a.ts", allowed: 39, actual: 41, measuredBefore: 210, measuredNow: 210, timeoutBefore: 4, timeoutNow: 1 }),
-    ).toBe("テストを通り抜ける変異が 39 → 41 に増えました（打ち切り 4 → 1、測った変異 210 → 210）  a.ts");
+      regressionText({ kind: "undetected", file: "a.ts", allowed: 39, actual: 43, survivedBefore: 39, survivedNow: 42, measuredBefore: 210, measuredNow: 210, timeoutBefore: 0, timeoutNow: 1 }),
+    ).toBe("殺せなかった変異が 39 → 43 に増えました（生き残り 39 → 42、打ち切り 0 → 1、測った変異 210 → 210）  a.ts");
+  });
+
+  // 報告された症状そのもの。生き残り 0 のファイルで打ち切りだけが動くと、
+  // 従来は「テストを通り抜ける変異が 0 → 0 に増えました」になっていた。
+  it("打ち切りだけが増えた回は、そう言って直せないことまで言う", () => {
+    expect(
+      regressionText({ kind: "undetected", file: "src/crawl.ts", allowed: 4, actual: 5, survivedBefore: 0, survivedNow: 0, measuredBefore: 91, measuredNow: 91, timeoutBefore: 4, timeoutNow: 5 }),
+    ).toBe(
+      "殺せなかった変異が 4 → 5 に増えました（生き残り 0 → 0、打ち切り 4 → 5、測った変異 91 → 91）  src/crawl.ts\n" +
+        "  増えたのは打ち切りだけです。テストでは減りません（打ち切りは実行速度に左右され、同じコードでも揺れます）",
+    );
+  });
+
+  // 生き残りが減っていても和が増えていれば落ちる。その回も「テストでは減らせない」側。
+  it("生き残りが減って和が増えた回も打ち切りの話として言う", () => {
+    const text = regressionText({ kind: "undetected", file: "a.ts", allowed: 5, actual: 6, survivedBefore: 3, survivedNow: 2, measuredBefore: 50, measuredNow: 50, timeoutBefore: 2, timeoutNow: 4 });
+    expect(text).toContain("殺せなかった変異が 5 → 6 に増えました（生き残り 3 → 2、打ち切り 2 → 4");
+    expect(text).toContain("テストでは減りません");
   });
 
   // 旧記録には測った数が無い。「記録なし」と言えば、厳格比較が原因だと読み手が分かる。
   it("旧記録なら記録が無いことを言う", () => {
     expect(
-      regressionText({ kind: "undetected", file: "a.ts", allowed: 2, actual: 3, measuredBefore: null, measuredNow: 12, timeoutBefore: null, timeoutNow: 0 }),
-    ).toBe("テストを通り抜ける変異が 2 → 3 に増えました（打ち切り 記録なし → 0、測った変異 記録なし → 12）  a.ts");
+      regressionText({ kind: "undetected", file: "a.ts", allowed: 2, actual: 3, survivedBefore: 2, survivedNow: 3, measuredBefore: null, measuredNow: 12, timeoutBefore: null, timeoutNow: 0 }),
+    ).toBe("殺せなかった変異が 2 → 3 に増えました（生き残り 2 → 3、打ち切り 記録なし → 0、測った変異 記録なし → 12）  a.ts");
   });
 });
 
@@ -1180,7 +1200,7 @@ describe("mutationRegressionText", () => {
   // 軸ごとに添える一覧が変わる。生き残りの一覧を未計測の後退に付けると、
   // 「この行を殺せ」と読めてしまう（実際に直すのは呼べる形にすること）。
   it("生き残りの後退には生き残った変異を添える", () => {
-    const entry = { kind: "undetected", file: "a.ts", allowed: 1, actual: 2, measuredBefore: 10, measuredNow: 10, timeoutBefore: 0, timeoutNow: 0 } as const;
+    const entry = { kind: "undetected", file: "a.ts", allowed: 1, actual: 2, survivedBefore: 1, survivedNow: 2, measuredBefore: 10, measuredNow: 10, timeoutBefore: 0, timeoutNow: 0 } as const;
     const text = mutationRegressionText(entry, survived, uncovered);
     expect(text).toContain("L10 BooleanLiteral");
     expect(text).not.toContain("L150");

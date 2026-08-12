@@ -707,7 +707,13 @@ export function regressionText(entry: Extract<MutationRegression, { kind: "undet
   // Timeout・遅い CI で Survived になる — 生き残りだけ見ると「テストが弱くなった」と
   // 誤読する（実際に誤読され、原因に辿るには CI から mutation.json を持ち帰るしかなかった）。
   const timeout = `打ち切り ${entry.timeoutBefore ?? "記録なし"} → ${entry.timeoutNow ?? 0}`;
-  return `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました（${timeout}、${measured}）  ${entry.file}`;
+  const survived = `生き残り ${entry.survivedBefore} → ${entry.survivedNow}`;
+  const head = `殺せなかった変異が ${entry.allowed} → ${entry.actual} に増えました（${survived}、${timeout}、${measured}）  ${entry.file}`;
+  // **生き残りが増えていないなら、テストでは直せない。** そう言わないと、読み手は
+  // 打ち切りの増加に対して assert を足そうとする（打ち切りは実行速度の関数なので減らない）。
+  return entry.survivedNow <= entry.survivedBefore
+    ? `${head}\n  増えたのは打ち切りだけです。テストでは減りません（打ち切りは実行速度に左右され、同じコードでも揺れます）`
+    : head;
 }
 
 /**
