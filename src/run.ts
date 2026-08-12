@@ -876,6 +876,11 @@ export function disableLocation(comment: DisableComment): string {
  * 「何も抑制していない宣言」は #32 で足した。`next-line` がずれて 1 件も外れていない
  * 状態は、生き残りの数が動かないので**正常と区別が付かない** — 名指ししない限り
  * 気づく手掛かりがゼロになる。
+ *
+ * **助言は「変異のある行に付いていますか」では誤誘導になる。** Stryker はディレクティブを
+ * **node の先頭コメント**としてしか読まない（`instrumenter` の `directive-bookkeeper`）。
+ * `} catch {` の行には変異があるのに、そこに置いたコメントは読まれない（実測）。
+ * 効くかどうかを決めるのは「変異があるか」ではなく「次に来る式や文の先頭か」。
  */
 function disableReviewText(disables: DisableReview): string {
   const notes = [
@@ -884,7 +889,7 @@ function disableReviewText(disables: DisableReview): string {
       : [withDetails(`理由の無い Stryker disable が ${disables.unexplained.length} 件あります — 理由を書いてください:`, disables.unexplained.map(disableLocation))]),
     ...(disables.ineffective.length === 0
       ? []
-      : [withDetails(`何も抑制していない Stryker disable が ${disables.ineffective.length} 件あります — 変異のある行に付いていますか:`, disables.ineffective.map(disableLocation))]),
+      : [withDetails(`何も抑制していない Stryker disable が ${disables.ineffective.length} 件あります — 宣言が式や文の先頭に付いていますか（\`}\` の手前や連鎖呼び出しの途中は Stryker が読みません）:`, disables.ineffective.map(disableLocation))]),
   ];
   // scope は複数行になりうる（formatResult が段に入れる）。件数の行と一覧を分ける。
   return notes.length === 0 ? "" : `\n${notes.join("\n")}`;
