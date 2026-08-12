@@ -85,7 +85,9 @@
       "timeout": 0
     },
     "src/exec.ts": {
-      "survived": 3
+      "survived": 2,
+      "measured": 30,
+      "timeout": 0
     },
     "src/main.ts": {
       "survived": 0
@@ -94,7 +96,9 @@
       "survived": 0
     },
     "src/typescript/duplication.ts": {
-      "survived": 1
+      "survived": 0,
+      "measured": 23,
+      "timeout": 0
     },
     "src/package-manager.ts": {
       "survived": 1,
