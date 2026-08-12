@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { diskStore, loadBaseline, memoryStore, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, settleConflictedBaseline, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, settleConflictedBaseline, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, timeoutTotal, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -1608,5 +1608,37 @@ describe("mutationScopeText", () => {
 
   it("対象が無くても形は同じ", () => {
     expect(mutationScopeText(0, { static: 0, declared: 0, unexplained: 0 })).toBe("変異対象 0 ファイル");
+  });
+
+  // #34: 打ち切りは測定に入り、突き合わせでは生き残りと同じ「殺せなかった数」になるのに、
+  // 件数がどこにも出ていなかった（判定を得られないまま払っている実行時間が見えない）。
+  // **「測っていません」の側に混ぜない** — 測ってはいる。
+  it("打ち切りがあれば件数と扱いを言う", () => {
+    expect(mutationScopeText(13, { static: 317, declared: 11, unexplained: 0 }, 1, [], 24)).toBe(
+      "変異対象 13 ファイル（テストが触れない 1 ファイルは対象外 — 網羅率 0 は CRAP が見る）" +
+        "（打ち切り 24 件は殺せなかった数に入ります — テストでは減りません）" +
+        "（静的な変異 317 件・宣言して外した変異 11 件は測っていません）",
+    );
+  });
+
+  it("打ち切りが無ければ黙る", () => {
+    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 0 }, 0, [], 0)).toBe("変異対象 3 ファイル");
+  });
+});
+
+describe("timeoutTotal", () => {
+  const record = (survived: number, measured: number | null, timeout: number | null) => ({ survived, measured, timeout });
+
+  it("記録の打ち切りを合計する", () => {
+    expect(timeoutTotal({ "a.ts": record(0, 30, 11), "b.ts": record(2, 20, 8) })).toBe(19);
+  });
+
+  // 旧形式（0.23 より前）の記録は打ち切りを持たない。0 として数える以外に手が無い。
+  it("打ち切りを持たない記録は 0 として数える", () => {
+    expect(timeoutTotal({ "a.ts": record(3, 10, null) })).toBe(0);
+  });
+
+  it("記録が無ければ 0", () => {
+    expect(timeoutTotal({})).toBe(0);
   });
 });

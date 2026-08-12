@@ -723,8 +723,15 @@ export function mutationScopeText(
   ignored: IgnoredBreakdown,
   untested = 0,
   excluded: readonly string[] = [],
+  timeout = 0,
 ): string {
   const bare = untested === 0 ? "" : `（テストが触れない ${untested} ファイルは対象外 — 網羅率 0 は CRAP が見る）`;
+  // **打ち切りは「測っていない」側ではない。** 測定には入り、突き合わせでは生き残りと
+  // 同じ「殺せなかった数」に数えられる（DESIGN §2）。なのに件数だけがどこにも出ず、
+  // **判定を得られないまま払っている実行時間**が見えなかった（#34。実測で 24 件）。
+  // テストでは減らない（無限ループになる変異なので、コードの形を変えるしかない）ので、
+  // 何が見えているのかを 1 行で言い切る。
+  const stopped = timeout === 0 ? "" : `（打ち切り ${timeout} 件は殺せなかった数に入ります — テストでは減りません）`;
   // 静的な除外と意図的な除外を分けて数える。混ぜると、意図的に外した総数を誰も知れない
   // （「見えていれば人が気づける」を軸に disable 方式を選んだのに、そこだけ見えなくなる）。
   const parts = [
@@ -736,7 +743,21 @@ export function mutationScopeText(
   const bare2 =
     ignored.unexplained === 0 ? "" : `（理由の無い Stryker disable が ${ignored.unexplained} 件あります — 理由を書いてください）`;
   const dropped = excluded.length === 0 ? "" : `（${excluded.join("、")} の変異は Stryker が置けないので測っていません）`;
-  return `変異対象 ${targets} ファイル${bare}${skipped}${bare2}${dropped}`;
+  return `変異対象 ${targets} ファイル${bare}${stopped}${skipped}${bare2}${dropped}`;
+}
+
+/**
+ * 記録に書く打ち切りの総数。**表示と記録を同じ集合から出す。**
+ *
+ * レポート全体を数えると、記録に入らないファイル（測った実体が無いもの — #27）の分まで
+ * 混ざり、画面の数と記録の合計が食い違う。食い違うと、増えたときにどちらが正しいのか
+ * 分からなくなって切り分けの起点が消える（jscpd の `sources` で同じ形を踏んでいる）。
+ *
+ * 記録側の絞り込み（`measured > 0`）で打ち切りが落ちることは無い — Timeout は
+ * `measured` に数えられているので、`timeout > 0` なら必ず `measured > 0`。
+ */
+export function timeoutTotal(records: Record<string, MutationRecord>): number {
+  return Object.values(records).reduce((sum, record) => sum + (record.timeout ?? 0), 0);
 }
 
 /** 一覧の 1 行に収める。変異後のコードは複数行のことがある。 */
@@ -777,10 +798,13 @@ function mutationCheck(
     // `--inPlace` は実ファイルを書き換えるので、途中で止めると計装が残る（duct で実測）。
     notify(`mutation 変異対象 ${targets.length} ファイル。作業ツリーを一時的に書き換えます`);
     const { survived, ignored, excluded, measured, timeout } = runMutation(root, targets, declaredProjects(config));
+    // **記録と表示は同じ値から出す。** 画面の打ち切り件数が記録の合計と食い違うと、
+    // 増えたときにどちらを信じるかから始めることになる。
+    const records = mutationRecords(targets, countByFile(survived), measured, timeout);
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
-      scope: mutationScopeText(targets.length, ignored, untested, excluded),
-      violations: gateByFile(store, "mutation", targets, mutationRecords(targets, countByFile(survived), measured, timeout), (entry) =>
+      scope: mutationScopeText(targets.length, ignored, untested, excluded, timeoutTotal(records)),
+      violations: gateByFile(store, "mutation", targets, records, (entry) =>
         withDetails(
           regressionText(entry),
           survived.filter((mutant) => mutant.file === entry.file).map(describeSurvivor),
