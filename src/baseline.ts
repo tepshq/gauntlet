@@ -86,6 +86,22 @@ export interface MutationRecord {
    * 「まだ測っていない」で、最初に測れた回が種を置く。
    */
   noCoverage: number | null;
+  /**
+   * 許容値に入っていない生き残りの数。0.25 より前の記録には無い。
+   *
+   * **ゲートはこの欄を読まない。** 突き合わせは `survived + timeout` と `noCoverage` だけで、
+   * ここは「余裕で通したので記録を凍らせた」ことの覚え書き。許容値として読むと、
+   * 塞いだはずの #40 がそのまま戻る。
+   *
+   * 記録する理由は、凍らせると**存在がどこにも残らない**こと。名指しは `full` の
+   * 出力にしか出ないので、緑のログを読み飛ばすと次の `full` まで消える — #40 の核心
+   * （気づけたのは人が中身を見たからだった）に対して、人の作業が減っていない。
+   * 欄にしておけば `list` が読めて、「毎回出るが誰も直さない」かどうかも実データで分かる。
+   *
+   * 突き合わせに使わないので、衝突解決（`tighterRecord`）もこの欄を見ない。
+   * 選ばれた側の値がそのまま残り、次に測った回に実測で置き直される。
+   */
+  unallowed: number | null;
 }
 
 /** 数でなければ「その欄は無い」。**0 に丸めない** — 無いのと 0 は別物（#28 / #31）。 */
@@ -95,11 +111,18 @@ function toCount(value: unknown): number | null {
 
 /** 0.22 より前は生き残りの数だけを記録していた。読める形は全部受ける。 */
 function toRecord(value: unknown): MutationRecord | null {
-  if (typeof value === "number") return { survived: value, measured: null, timeout: null, noCoverage: null };
+  if (typeof value === "number")
+    return { survived: value, measured: null, timeout: null, noCoverage: null, unallowed: null };
   if (typeof value === "object" && value !== null && "survived" in value) {
-    const { survived, measured, timeout, noCoverage } = value as Record<string, unknown>;
+    const { survived, measured, timeout, noCoverage, unallowed } = value as Record<string, unknown>;
     if (typeof survived !== "number") return null;
-    return { survived, measured: toCount(measured), timeout: toCount(timeout), noCoverage: toCount(noCoverage) };
+    return {
+      survived,
+      measured: toCount(measured),
+      timeout: toCount(timeout),
+      noCoverage: toCount(noCoverage),
+      unallowed: toCount(unallowed),
+    };
   }
   return null;
 }
@@ -265,6 +288,13 @@ export interface SlackPass {
   allowed: number;
   /** 今回の実測（同じ数え方）。`allowed` を超えている。 */
   actual: number;
+  /**
+   * 許容値をどれだけ超えているか。**差はここで 1 回だけ出す。**
+   *
+   * 記録に書く数（`unallowed`）と読み手に見せる数が同じでなければならない。
+   * 引き算を 2 箇所に置くと、片方だけ間違っても型は通る。
+   */
+  over: number;
   /** 通した余裕。測った変異が増えた分（#24）。 */
   slack: number;
 }
@@ -382,7 +412,7 @@ function fileRegressions(
 function slackPass(file: string, limit: MutationRecord, actual: MutationRecord, slack: number): SlackPass | null {
   const undetected = undetectedCount(limit, actual);
   const allowed = allowedCount(limit);
-  return undetected <= allowed ? null : { file, allowed, actual: undetected, slack };
+  return undetected <= allowed ? null : { file, allowed, actual: undetected, over: undetected - allowed, slack };
 }
 
 /**
@@ -537,12 +567,13 @@ function recordFor(
   limit: MutationRecord,
   actual: MutationRecord,
   touched: boolean,
-  onSlack: boolean,
+  pass: SlackPass | null,
 ): MutationRecord {
   // 触っていないファイルの打ち切りは**動かさない**（下げない・上げない）。上振れを
   // そのまま書くと記録が緩むので、「締めない」ではなく「凍らせる」が正しい。
   const kept = touched || limit.timeout == null ? actual : { ...actual, timeout: limit.timeout };
-  return onSlack ? { ...kept, survived: limit.survived, measured: limit.measured } : kept;
+  if (pass === null) return kept;
+  return { ...kept, survived: limit.survived, measured: limit.measured, unallowed: pass.over };
 }
 
 /**
@@ -583,7 +614,7 @@ export function ratchetByFile(
     }
     const pass = slackPass(file, limit, actual, slack);
     if (pass !== null) onSlack.push(pass);
-    updated[file] = recordFor(limit, actual, touched.has(file), pass !== null);
+    updated[file] = recordFor(limit, actual, touched.has(file), pass);
   }
   return { regressed, onSlack, updated };
 }

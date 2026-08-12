@@ -10,7 +10,7 @@ import { parseSeedPattern, recordSeed, seedBaseline, refuseUnless, seedMessage, 
 // 回しても記録は空のままで、最初にそのファイルに触れた PR が自分の新コードの生き残りを
 // 許容値にしてしまう。差分に依らず宣言した範囲を測る口。
 describe("seedTargets", () => {
-  const record = { survived: 1, measured: 10, timeout: 0, noCoverage: 0 };
+  const record = { survived: 1, measured: 10, timeout: 0, noCoverage: 0, unallowed: null };
   const inScope = ["lib/a.ts", "lib/b.ts", "app/c.ts"];
   const tested = new Set(["lib/a.ts", "lib/b.ts", "app/c.ts"]);
 
@@ -96,8 +96,8 @@ describe("seedScope", () => {
 describe("seedMessage", () => {
   it("置いた数と生き残りを言い、コミットを促す", () => {
     const records = {
-      "lib/a.ts": { survived: 513, measured: 1243, timeout: 0, noCoverage: 0 },
-      "lib/b.ts": { survived: 86, measured: 359, timeout: 0, noCoverage: 0 },
+      "lib/a.ts": { survived: 513, measured: 1243, timeout: 0, noCoverage: 0, unallowed: null },
+      "lib/b.ts": { survived: 86, measured: 359, timeout: 0, noCoverage: 0, unallowed: null },
     };
     expect(seedMessage(records)).toBe(
       "mutation を記録しました（2 ファイル / 生き残り 599 件）。git add gauntlet.baseline.json でコミットしてください",
@@ -149,7 +149,7 @@ describe("recordSeed", () => {
     withRoot((root) => {
       recordSeed(root, { mutation: {} }, ["a.ts"], outcome);
       expect(loadBaseline(root)?.mutation).toEqual({
-        "a.ts": { survived: 2, measured: 20, timeout: 1, noCoverage: 1 },
+        "a.ts": { survived: 2, measured: 20, timeout: 1, noCoverage: 1, unallowed: 0 },
       });
     });
   });
@@ -157,7 +157,7 @@ describe("recordSeed", () => {
   // 種置きが既存の記録を上書きできると、赤いファイルを seed で洗える。
   it("既にある記録は残す", () => {
     withRoot((root) => {
-      const existing = { survived: 9, measured: 30, timeout: 0, noCoverage: 0 };
+      const existing = { survived: 9, measured: 30, timeout: 0, noCoverage: 0, unallowed: null };
       saveBaseline(root, { crap: 5, mutation: { "a.ts": existing } });
       recordSeed(root, { crap: 5, mutation: { "a.ts": existing } }, ["a.ts"], outcome);
       expect(loadBaseline(root)?.mutation["a.ts"]).toEqual(existing);

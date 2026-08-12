@@ -691,6 +691,10 @@ export function mutationRecords(
           timeout: counts.timeout[file] ?? 0,
           // 報告にあって測れた回なので、0 は「未計測の変異は無かった」という実測。
           noCoverage: counts.noCoverage[file] ?? 0,
+          // **突き合わせる前は許容外は無い。** ここが決まるのはラチェット側（`recordFor`）で、
+          // 余裕で通した回だけ 0 でない値が入る。0 を置くのは、前の回の値を
+          // 引きずらせないため — 殺した回に古い件数が残ると、返済が記録に出ない。
+          unallowed: 0,
         },
       ]),
   );
@@ -766,7 +770,7 @@ export function mutationRegressionText(
  */
 export function slackPassText(pass: SlackPass, survived: readonly ReportedMutant[]): string {
   const head =
-    `許容値に入っていない生き残りが ${pass.actual - pass.allowed} 件あります` +
+    `許容値に入っていない生き残りが ${pass.over} 件あります` +
     `（許容 ${pass.allowed} / 実測 ${pass.actual}。測った変異が ${pass.slack} 件増えたぶんで通しています）  ${pass.file}\n` +
     "  記録は動かしていません。殺すか、理由を書いた Stryker disable で外してください";
   return withDetails(head, survived.filter((mutant) => mutant.file === pass.file).map(describeMutant));
@@ -1145,17 +1149,36 @@ export function doctor(root: string): string[] {
  * フル実行が要るので、そこは在り処だけ言う（`list` の性格を変えないため）。
  */
 export function mutationDebt(root: string, baseline: Baseline | null): string {
-  // 消えたファイルの記録は残り続ける（ratchet は締める方向にしか動かず、
-  // 対象から外れたファイルは二度と触られない）。並べると存在しないファイルを
-  // 探しに行かせるので、今あるものだけ出す。
-  const counts = Object.entries(baseline?.mutation ?? {})
-    .map(([file, record]) => [file, record.survived] as const)
+  const records = Object.entries(baseline?.mutation ?? {});
+  return (
+    debtSection(root, records, (record) => record.survived, "記録している mutation の生き残り") +
+    // **別の節にする。** 片方は許容された借金、もう片方は許容されていない借金で、
+    // 混ぜると「記録に入っている数」が読み手に分からなくなる（#31 と同じ理由で軸を分ける）。
+    debtSection(root, records, (record) => record.unallowed, "許容値に入っていない生き残り")
+  );
+}
+
+/**
+ * 借金 1 軸分の一覧。**多い順に並べ、どこを見れば中身が分かるかまで言う。**
+ *
+ * 消えたファイルの記録は残り続ける（ratchet は締める方向にしか動かず、対象から外れた
+ * ファイルは二度と触られない）。並べると存在しないファイルを探しに行かせるので、
+ * 今あるものだけ出す。
+ */
+function debtSection(
+  root: string,
+  records: readonly (readonly [string, MutationRecord])[],
+  pick: (record: MutationRecord) => number | null,
+  head: string,
+): string {
+  const counts = records
+    .map(([file, record]) => [file, pick(record) ?? 0] as const)
     .filter(([file, n]) => n > 0 && existsSync(join(root, file)));
   if (counts.length === 0) return "";
   const total = counts.reduce((sum, [, n]) => sum + n, 0);
   const worstFirst = [...counts].sort(([, a], [, b]) => b - a);
   return [
-    `\n記録している mutation の生き残り ${total} 件（${counts.length} ファイル）:`,
+    `\n${head} ${total} 件（${counts.length} ファイル）:`,
     ...worstFirst.map(([file, n]) => `  ${String(n).padStart(4)}  ${file}`),
     `  どの変異かは、そのファイルを差分に入れて full を回すと ${REPORT_PATH} に出ます`,
   ].join("\n");
