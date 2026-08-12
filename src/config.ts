@@ -35,7 +35,14 @@ const schemaPath = join(dirname(fileURLToPath(import.meta.url)), "..", "schema",
 
 function loadValidator(): (data: unknown) => ErrorObject[] | null {
   const schema = JSON.parse(readFileSync(schemaPath, "utf8")) as AnySchema;
-  const ajv = new Ajv({ allErrors: true, strict: false });
+  const ajv = new Ajv({
+    // 1 件目で切ると、エージェントが config を直す往復がその分だけ増える。
+    allErrors: true,
+    // Stryker disable next-line BooleanLiteral: 現行スキーマは strict でも同じ結果を返す
+    // （実測で確認）。将来 strict が弾く構文が入ったときに、ajv の例外ではなく
+    // ConfigError で落とし続けるための保険なので、今は結果に差が出ない。
+    strict: false,
+  });
   const validate = ajv.compile(schema);
   return (data) => (validate(data) ? null : (validate.errors ?? []));
 }

@@ -20,7 +20,6 @@
     "src/typescript/coverage.ts": 10,
     "src/typescript/mutation.ts": 0,
     "src/typescript/runner.ts": 0,
-    "src/typescript/lint.ts": 1,
     "src/exec.ts": 3,
     "src/main.ts": 0,
     "src/node-version.ts": 0,

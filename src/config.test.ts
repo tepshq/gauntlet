@@ -71,3 +71,58 @@ describe("parseConfig", () => {
     expect(() => parse(overrides)).toThrow(pattern);
   });
 });
+
+/**
+ * メッセージの**書式**を見る。
+ *
+ * 上の `/defaultBranch/` のような部分一致は、ajv の文がキー名を含むので
+ * gauntlet 側の整形が丸ごと空を返しても通ってしまう（実測: detailOf を `""` にしても
+ * 緑のままだった）。gauntlet が足している分 — 行頭の字下げ、`/` のルート表記、
+ * 行末の `: <名前>` — をそれぞれ名指しで見る。
+ * ajv の文言そのものには寄りかからない（版が変わると書き換わるため）。
+ */
+function messageOf(body: () => unknown): string {
+  try {
+    body();
+  } catch (error) {
+    return (error as Error).message;
+  }
+  throw new Error("落ちませんでした");
+}
+
+describe("parseConfig のメッセージ", () => {
+  // エージェントは 1 回の実行で全部直したい。最初の 1 件で切ると往復が増える。
+  it("違反が 2 つあれば 2 行に並べる", () => {
+    const lines = messageOf(() => parse({ schemaVersion: 2, adapter: "python" })).split("\n").slice(1);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^ {2}\/schemaVersion \S/);
+    expect(lines[1]).toMatch(/^ {2}\/adapter .+: typescript$/);
+  });
+
+  // ルート直下の違反は instancePath が空。そのまま出すと行頭が空いて読めない。
+  it("ルート直下の違反は / と書く", () => {
+    expect(messageOf(() => parse({ crapThreshold: 30 }))).toMatch(/^ {2}\/ .+: crapThreshold$/m);
+  });
+
+  // ajv の文にもキー名は出るので、行末の `: <名前>` まで見ないと detailOf を検査できない。
+  it("欠けているキーを行末で名指しする", () => {
+    expect(messageOf(() => parse({ defaultBranch: undefined }))).toMatch(/^ {2}\/ .+: defaultBranch$/m);
+  });
+
+  // 名指しするものが無い違反に何かを足すと、読み手は無い詳細を探しにいく。
+  //
+  // ここだけ ajv の文言を丸ごと固定する。「何も足していない」は行全体を見ないと言えず、
+  // 部分一致では detailOf が別の文字列を返しても通ってしまう（実測で 1 件取り逃した）。
+  // ajv を上げてこの 1 行が落ちたら、新しい文言に置き換えれば済む。
+  it("示すものが無ければ何も足さない", () => {
+    const lines = messageOf(() => parse({ defaultBranch: "" })).split("\n").slice(1);
+    expect(lines).toEqual(["  /defaultBranch must NOT have fewer than 1 characters"]);
+  });
+
+  // catch を素通しさせても、data が undefined のままスキーマ検証に落ちて
+  // 「スキーマに一致しません」という**別の理由**で ConfigError になる。
+  // 種類だけ見ていると緑になるので、理由の方を見る。
+  it("JSON として読めない理由を出す", () => {
+    expect(messageOf(() => parseConfig("{ not json", "test.json"))).toMatch(/^test\.json が JSON として読めません: \S/);
+  });
+});

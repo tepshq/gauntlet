@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { isTestFile, listSourceFiles, reviewIncludes, toPosix, unmeasuredFiles } from "./adapter.ts";
+import type { GauntletConfig } from "../config.ts";
+import { analyze, isTestFile, listSourceFiles, reviewIncludes, toPosix, unmeasuredFiles } from "./adapter.ts";
 
 /**
  * git 管理下の小さなリポジトリ。`src/alpha.ts` / `src/utils/beta.ts` / `src/zeta.ts`。
@@ -165,6 +166,82 @@ describe("listSourceFiles", () => {
         "src/utils/beta.ts",
         "src/zeta.ts",
       ]);
+    });
+  });
+});
+
+/**
+ * `analyze` の入口。ソース（ディスク）と coverage（絶対パスのキー）を突き合わせて
+ * 関数単位の報告にするところまでを、実ファイルを置いて通す。
+ */
+function withFunctionRepo(body: (root: string) => void): void {
+  const root = mkdtempSync(join(tmpdir(), "gauntlet-analyze-"));
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" });
+    mkdirSync(join(root, "src"), { recursive: true });
+    // 2 文とも関数の内側に来る形にする（1 行目の宣言は関数のものではない）。
+    writeFileSync(join(root, "src", "add.ts"), "export function add(a: number, b: number): number {\n  const sum = a + b;\n  return sum;\n}\n");
+    writeFileSync(join(root, "src", "bare.ts"), "export const answer = 42;\n");
+    body(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const config: GauntletConfig = {
+  schemaVersion: 1,
+  adapter: "typescript",
+  runner: "vitest",
+  defaultBranch: "main",
+  source: { include: ["src/**/*.ts"] },
+};
+
+describe("analyze", () => {
+  it("関数を cc と網羅率つきで並べる", () => {
+    withFunctionRepo((root) => {
+      // 2 文のうち 1 文だけ実行された = 0.5。回数（`f`）ではなく文の被覆で数える。
+      const coverage = {
+        [join(root, "src/add.ts")]: {
+          statementMap: { "0": { start: { line: 2, column: 2 } }, "1": { start: { line: 3, column: 2 } } },
+          s: { "0": 1, "1": 0 },
+          f: { "0": 1 },
+        },
+      };
+      const report = analyze(root, config, coverage);
+      expect(report.functions).toEqual([
+        {
+          location: expect.objectContaining({ file: "src/add.ts", name: "add", startLine: 1 }),
+          cc: 1,
+          coverage: 0.5,
+        },
+      ]);
+    });
+  });
+
+  // coverage のキーは絶対パス。相対に直して引けないと、覆われている関数まで
+  // 一律 0% になり、CRAP が全関数を偽の赤にする。
+  it("coverage に現れないファイルの関数は 0%", () => {
+    withFunctionRepo((root) => {
+      const report = analyze(root, config, {});
+      expect(report.functions.map((fn) => fn.coverage)).toEqual([0]);
+    });
+  });
+
+  // 黙って落とすと「測る対象 N 関数」が理由なく減る。理由まで載せる。
+  it("関数が無いファイルは理由つきで外す", () => {
+    withFunctionRepo((root) => {
+      const report = analyze(root, config, {});
+      expect(report.excluded).toEqual([{ file: "src/bare.ts", reason: "関数がありません" }]);
+    });
+  });
+
+  // 報告の受け手（core 側）はこの 3 つで「誰が何の版で測ったか」を判断する。
+  it("スキーマ版とアダプタの素性と root を載せる", () => {
+    withFunctionRepo((root) => {
+      const report = analyze(root, config, {});
+      expect(report.schemaVersion).toBe(1);
+      expect(report.adapter).toEqual({ name: "typescript", version: "0.0.0" });
+      expect(report.root).toBe(root);
     });
   });
 });
