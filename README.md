@@ -146,21 +146,7 @@ npx skills add tepshq/gauntlet -a claude-code
 してあるのはそのためです（`tsconfig.json` の `include` は当てになりません —
 生成物・設定ファイル・e2e が混ざります）。
 
-**更新も同じ skill が持っています。** ただし順序があります — **先に skill を最新にしてから
-`/gauntlet-setup`** です。新しい版が要求する後始末は新しい skill にしか書かれていないので、
-古い手順書のまま上げると、それを知らないまま緑に見えます。
-
-```bash
-npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
-```
-
-そのあと `/gauntlet-setup` を実行すれば、パッケージの版上げ・`init` の叩き直し・版ごとの
-後始末・確認まで通します。
-
-`npx skills update` は使わないでください。実体を `.agents/skills/`（多数の agent が
-共有する置き場）へ移して `.claude/skills/` を symlink にするため、**コミット済みの
-`SKILL.md` が git から「削除」に見えます**。`update` のオプションは `-g` / `-p` / `-y` だけで、
-置き場所を指定する `-a` を受け付けません。
+更新のやり方は[下の「更新」](#更新)にあります。
 
 <details>
 <summary>Claude Code を使わず手で入れる場合</summary>
@@ -188,7 +174,7 @@ vitest と**完全一致**する版でなければ install 自体が失敗しま
 </details>
 
 skill が範囲を決めたあと `gauntlet init --include=...` を叩き、**薄いファイル 3 枚**が
-置かれます。ロジックは全てパッケージ側にあるので、更新は npm のバージョンを上げて
+置かれます。ロジックは全てパッケージ側にあるので、更新はパッケージの版を上げて
 `init` を叩き直すだけで済みます（フックの形が変わっても、あなたの設定はそのままに配線だけ
 入れ替わります）。
 
@@ -239,6 +225,45 @@ PreToolUse:Bash hook error: [npx gauntlet hook]: gauntlet quick: fail
 
 また `.claude/skills/gauntlet-setup/` に skill が 1 枚入ります。測る範囲を決め直すときや
 gauntlet を上げるときに、**人間が** `/gauntlet-setup` を実行してください。
+
+## 更新
+
+**人が新しい版に気づいたときに実行します。** gauntlet は新しい版が出たことを自分からは
+知らせません — `quick` や `full` が npm を見に行く形は、ネットワークの有無でゲートの答えが
+変わるからです（[DESIGN.md](DESIGN.md) の「検討して外したもの」）。
+
+**対象リポジトリのルートで**、まず skill を入れ直します。
+
+```bash
+npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
+```
+
+そのあと **`/gauntlet-setup`**。これで版上げ・`init` の叩き直し・版ごとの後始末・確認まで
+通ります。
+
+**skill を先に入れ直すのは、新しい版が要求する後始末が新しい skill にしか書かれていない
+から**です。古い手順書のまま上げると、記録の形式が変わったことも配線が変わったことも
+知らないまま緑に見えます。
+
+`npx skills update` は使わないでください。実体を `.agents/skills/`（多数の agent が
+共有する置き場）へ移して `.claude/skills/` を symlink にするため、**コミット済みの
+`SKILL.md` が git から「削除」に見えます**。`update` のオプションは `-g` / `-p` / `-y` だけで、
+置き場所を指定する `-a` を受け付けません。
+
+### 途中で止まることがあります
+
+どれも設計どおりで、故障ではありません。
+
+| 止まる場所 | なぜ |
+| --- | --- |
+| **記録のリセット** | 古い版から上げると `gauntlet.baseline.json` の `mutation` を空にする必要があります。これは **guard がエージェントの手を止める**ので、人間が編集します。基準を緩める経路を塞ぐ仕組みに、更新のための例外を開けないためです |
+| **pnpm の 24 時間ルール** | 公開直後の版を名指しすると pnpm が `pnpm-workspace.yaml` に除外行を書きます。版ピンとワイルドカードのどちらにするかを訊かれます |
+| **coverage provider の版ずれ** | vitest の版が動いていると `@vitest/coverage-v8` の完全一致が崩れます。**gauntlet が版を埋めた 1 行を出す**ので、それを打てば済みます |
+
+**測ったのはここまでです。** 0.21.1 → 0.23.4 を使い捨てリポジトリで通し、フラグ無しの `init` が
+範囲を保ったまま旧配線を `hook` 1 本に入れ替えること、旧形式の mutation 記録は自動では
+置き換わらないことを確認しました（[PLAN.md](PLAN.md)）。**実リポジトリ規模での更新はまだ
+測っていません。**
 
 ## gauntlet が走らせるテストは宣言する
 
