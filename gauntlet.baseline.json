@@ -90,7 +90,9 @@
       "timeout": 0
     },
     "src/main.ts": {
-      "survived": 0
+      "survived": 0,
+      "measured": 17,
+      "timeout": 0
     },
     "src/node-version.ts": {
       "survived": 0
