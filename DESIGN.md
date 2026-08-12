@@ -503,6 +503,17 @@ mutation は**記録している生き残りの数**をファイルごとに出�
   - 版の一致は**運用規律**（main にマージしたら publish）で担保する。skills には
     npm のような版指定が無く、ロックは内容ハッシュのみ。機構で縛る保険は
     食い違い事故が実際に起きてから作る
+- **`build` は先に `dist` を消す**（`rm -rf dist && tsc`）。**`tsc` は消えたソースに
+  対応する出力を消さない**ので、長く使っている checkout の `dist/` に残骸が溜まり、
+  `files` が `dist` 全体を配るため**そのまま公開される**。0.24.1 の tarball には
+  `commit.*` と `typescript/lint.*` の 6 ファイルが入っていた（`lint.ts` は 0.18.0 で
+  削除済み。0.18.0 以降ずっと混ざっていたことになる）。どこからも import されないので
+  実害は無かったが、「配るのは検査したもの」が破れる経路であり、`npx gauntlet` が
+  古い dist を実行する罠と同じ根。**掃除は `prepublishOnly` ではなく `build` に置く** —
+  `prepublishOnly` は `build` を呼ぶので publish も自動で守られる上、`npm run build` と
+  「配られるビルド」が同じ意味になる。増分は犠牲にならない: `incremental` は
+  tsconfig に無く（`tsbuildinfo` は型チェックの `--noEmit --incremental` が書いたもので
+  `build` の `tsc` は読まない）、実測は dist あり 0.81 秒 / 消してから 0.66 秒。
 - `gauntlet init` が**薄いファイルだけ**置く:
   `.claude/settings.json` のフックエントリ / `gauntlet.config.json` / `.gitignore` の追記。
   ロジックはすべて npm パッケージ側にあり、生成物にロジックを持たせない。
