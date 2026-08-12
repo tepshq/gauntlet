@@ -471,6 +471,35 @@ CLI に LLM を入れる案は flaky そのもの（走るたびに違う提案�
 - baseline の `lint` キーは `loadBaseline` が読まなくなったので **`full` が保存する
   時点で自動的に落ちた**（guard を回避せずに移行できる形）
 
+### 0.18.0 以降、公開 tarball に死んだファイルが 6 つ混ざっていた（2026-08-12）
+
+0.24.1 の publish 後、**公開された tarball と、ゲートを通したツリーが一致するか**を
+確かめて見つけた（shasum が食い違ったので中身を展開して比べた）。共通ファイルは
+全部バイト一致で、公開版にだけ 6 ファイル余分にあった:
+
+```
+dist/commit.{d.ts,js,js.map}
+dist/typescript/lint.{d.ts,js,js.map}
+```
+
+どちらもソースが存在しない。`src/typescript/lint.ts` は **0.18.0 の「lint ゲートを外す」で
+削除済み**なので、**それ以降のすべてのリリースに混ざっていた**ことになる。原因は
+`tsc` が消えたソースの出力を消さないことで、長く使っている checkout の `dist/` に
+溜まり続ける。今回気づけたのは、publish が新しく作った worktree（`npm ci` + build）から
+行われて `dist/` が綺麗だったため — 本体の checkout から publish していたら差が出ず、
+永久に気づかなかった。
+
+**実害は無かった**（`exports` は `dist/index.js`、`bin` は `dist/cli.js` のみで、
+この 6 ファイルはどこからも import されない。grep で確認）。それでも直すのは、
+「配るのは検査したもの」が破れる経路であること、そして `npx gauntlet` が古い dist を
+実行する既知の罠と根が同じであること。
+
+`build` に `rm -rf dist` を置いた（DESIGN §4）。`prepublishOnly` 側ではなく `build` 側 —
+`prepublishOnly` は `build` を呼ぶので publish も守られ、`npm run build` と「配られる
+ビルド」が同じ意味になる。増分の犠牲は無い（実測 0.81 秒 → 0.66 秒。`build` の `tsc` は
+そもそも増分ではない）。**効くことは実験で確認**した: 公開版に入っていた 6 ファイルを
+`dist/` に仕込んで `npm run build` → 6 つとも消え、`npm pack --dry-run` も 72 ファイルに戻った。
+
 ### 複数 worktree 並行開発: baseline のマージ衝突を gauntlet 自身が解決する（2026-08-12）
 
 「複数エージェント × 複数 worktree に耐えるか」の点検から。**プロセスの並行性は既に
