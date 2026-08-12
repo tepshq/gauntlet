@@ -513,13 +513,16 @@ describe("mutationScopeText の除外表示", () => {
 
   // #32: next-line がずれて 1 件も外れていない状態は、生き残りの数が動かないので
   // 正常と区別が付かない。名指ししない限り気づく手掛かりがゼロになる。
+  // **助言の中身も固定する。** 「変異のある行に付いていますか」は誤誘導だった —
+  // `} catch {` の行には変異があるのに、Stryker は node の先頭コメントしか読まない。
   it("何も抑制していない disable を名指しで言う", () => {
     const disables = {
       unexplained: [],
       ineffective: [{ file: "src/detectFurniture.ts", line: 161, mutators: ["OptionalChaining"], reason: "buf は undefined にならない" }],
     };
     expect(mutationScopeText(3, none, 0, [], {}, disables)).toBe(
-      "変異対象 3 ファイル\n何も抑制していない Stryker disable が 1 件あります — 変異のある行に付いていますか:\n" +
+      "変異対象 3 ファイル\n何も抑制していない Stryker disable が 1 件あります — " +
+        "宣言が式や文の先頭に付いていますか（`}` の手前や連鎖呼び出しの途中は Stryker が読みません）:\n" +
         "  src/detectFurniture.ts:161  OptionalChaining",
     );
   });
