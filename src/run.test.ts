@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { loadBaseline, saveBaseline } from "./baseline.ts";
+import { diskStore, loadBaseline, memoryStore, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, canRecordBaseline, mutationRecords, regressionText, settleBaseline, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -48,7 +48,7 @@ describe("applyRatchet", () => {
   // 毎回いまの状態が許容値になる。落として、コミットさせる。
   it("記録が無ければ種を置いて落とす", () => {
     withRoot((root) => {
-      expect(applyRatchet(violating(3, root), new Map())).toEqual([BASELINE_SEEDED]);
+      expect(applyRatchet(diskStore(root), violating(3, root), new Map())).toEqual([BASELINE_SEEDED]);
       expect(loadBaseline(root)).toEqual({ crap: 3, mutation: {} });
     });
   });
@@ -56,8 +56,8 @@ describe("applyRatchet", () => {
   // 落としてもファイルを残さないと、コミットするものが無くて詰む。
   it("落とした回のファイルは残す", () => {
     withRoot((root) => {
-      applyRatchet(violating(3, root), new Map());
-      expect(applyRatchet(violating(3, root), new Map())).toEqual([]);
+      applyRatchet(diskStore(root), violating(3, root), new Map());
+      expect(applyRatchet(diskStore(root), violating(3, root), new Map())).toEqual([]);
     });
   });
 
@@ -78,7 +78,7 @@ describe("applyRatchet", () => {
   // ファイルに書き出す時点で全ゲート分の枠が無いと、次のゲートが記録を失う。
   it("種を置くとき全ゲート分の枠を書く", () => {
     withRoot((root) => {
-      applyRatchet(violating(1, root), new Map());
+      applyRatchet(diskStore(root), violating(1, root), new Map());
       const written = JSON.parse(readFileSync(join(root, "gauntlet.baseline.json"), "utf8")) as object;
       expect(Object.keys(written).sort()).toEqual(["crap", "mutation"]);
     });
@@ -87,7 +87,7 @@ describe("applyRatchet", () => {
   it("増えていたら落とし、記録は変えない", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 1, mutation: {} });
-      expect(applyRatchet(violating(4, root), new Map())[0]!.message).toContain("1 → 4");
+      expect(applyRatchet(diskStore(root), violating(4, root), new Map())[0]!.message).toContain("1 → 4");
       expect(loadBaseline(root)).toEqual({ crap: 1, mutation: {} });
     });
   });
@@ -96,7 +96,7 @@ describe("applyRatchet", () => {
   it("減っていたら通し、記録を下げる", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 5, mutation: {} });
-      expect(applyRatchet(violating(2, root), new Map())).toEqual([]);
+      expect(applyRatchet(diskStore(root), violating(2, root), new Map())).toEqual([]);
       expect(loadBaseline(root)).toEqual({ crap: 2, mutation: {} });
     });
   });
@@ -104,7 +104,7 @@ describe("applyRatchet", () => {
   it("同じなら通し、記録も変わらない", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 2, mutation: {} });
-      expect(applyRatchet(violating(2, root), new Map())).toEqual([]);
+      expect(applyRatchet(diskStore(root), violating(2, root), new Map())).toEqual([]);
       expect(loadBaseline(root)).toEqual({ crap: 2, mutation: {} });
     });
   });
@@ -486,17 +486,17 @@ describe("mutationScopeText の除外表示", () => {
   // 黙って落とすと、緑が「弱いテストが無い」ではなく「そこは見ていない」を意味していることが
   // 伝わらない（--ignoreStatic の件数を出しているのと同じ理由）。
   it("外した mutator を並べる", () => {
-    expect(mutationScopeText(3, 0, 0, ["StringLiteral"])).toBe(
+    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 0 }, 0, ["StringLiteral"])).toBe(
       "変異対象 3 ファイル（StringLiteral の変異は Stryker が置けないので測っていません）",
     );
   });
 
   it("外していなければ何も足さない", () => {
-    expect(mutationScopeText(3, 0, 0, [])).toBe("変異対象 3 ファイル");
+    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 0 }, 0, [])).toBe("変異対象 3 ファイル");
   });
 
   it("複数なら並べる", () => {
-    expect(mutationScopeText(3, 0, 0, ["A", "B"])).toContain("A、B の変異は");
+    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 0 }, 0, ["A", "B"])).toContain("A、B の変異は");
   });
 });
 
@@ -817,82 +817,129 @@ describe("canRecordBaseline", () => {
   });
 });
 
-describe("settleBaseline", () => {
-  let root = "";
-  beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "gauntlet-settle-"));
+// 書いてよい実行かを store の差し替えで表す。分岐がここに集まるので、runTier は呼ぶだけ。
+describe("baselineStoreFor", () => {
+  function withRepo(body: (root: string) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-store-"));
+    const run = (...args: string[]): void => {
+      execFileSync("git", args, { cwd: root, stdio: "ignore" });
+    };
+    try {
+      run("init", "-q");
+      run("config", "user.name", "t");
+      run("config", "user.email", "t@t");
+      writeFileSync(join(root, "a.txt"), "x");
+      run("add", "-A");
+      run("commit", "-qm", "init");
+      body(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+  const base = { crap: 5, mutation: {}, duplication: 10 };
+
+  it("full かつ clean はディスクに書く", () => {
+    withRepo((root) => {
+      const store = baselineStoreFor(root, "full", base);
+      expect(store.persists).toBe(true);
+      store.save({ ...base, crap: 3 });
+      expect(loadBaseline(root)?.crap).toBe(3);
+    });
   });
-  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  // 書けない実行がディスクに触れないこと自体が、クラッシュ窓が無いことの根拠。
+  it("汚れたツリーではメモリに逸れる", () => {
+    withRepo((root) => {
+      writeFileSync(join(root, "b.txt"), "y");
+      const store = baselineStoreFor(root, "full", base);
+      expect(store.persists).toBe(false);
+      store.save({ ...base, crap: 3 });
+      expect(store.load()?.crap).toBe(3);
+      expect(loadBaseline(root)).toBe(null);
+    });
+  });
+
+  // 種置きは例外 — init 直後は必ず未コミットで、書かないと導入が始まらない。
+  it("記録が無ければ汚れていてもディスクに書く", () => {
+    withRepo((root) => {
+      writeFileSync(join(root, "b.txt"), "y");
+      const store = baselineStoreFor(root, "full", null);
+      expect(store.persists).toBe(true);
+    });
+  });
+
+  it("quick はメモリに逸れる", () => {
+    withRepo((root) => {
+      expect(baselineStoreFor(root, "quick", base).persists).toBe(false);
+    });
+  });
+});
+
+describe("baselineNotes", () => {
   const before = { crap: 5, mutation: {}, duplication: 10 };
   const tightened = { crap: 3, mutation: {}, duplication: 10 };
 
-  it("clean なら残して、締まったことを知らせる", () => {
-    saveBaseline(root, tightened);
-    const notes = settleBaseline(root, before, true);
-    expect(notes[0]).toContain("許容値を締めました（CRAP 違反 5 → 3）");
-    expect(loadBaseline(root)).toEqual(tightened);
+  it("書ける実行なら、締まったことを知らせる", () => {
+    const store = memoryStore(tightened);
+    expect(baselineNotes(store, before, true)[0]).toContain("許容値を締めました（CRAP 違反 5 → 3）");
   });
 
-  // 文言を丸ごと固定する。後半（次に何をすればよいか）だけが消えても toContain は通ってしまう。
-  it("clean でなければ書き戻して、そう言う", () => {
-    saveBaseline(root, tightened);
-    expect(settleBaseline(root, before, false)).toEqual([
-      "実測は記録より良くなっていましたが、作業ツリーが clean でないため記録していません" +
-        "（作業途中の値を基準にしないため）。コミットしてから full を回すと記録が締まります",
+  // 以前は「書いてから書き戻す」で、その間に死ぬと作業途中の値が残った（実際に
+  // 使用量上限でプロセスが kill された報告がある）。いまは書けない実行はメモリに
+  // 逸れるので、ディスクに触れる瞬間が無い。
+  it("書けない実行では、動いた中身ごと知らせる", () => {
+    const store = memoryStore(tightened);
+    expect(baselineNotes(store, before, false)).toEqual([
+      "実測では記録が動きました（CRAP 違反 5 → 3）が、" +
+        "作業ツリーが clean でないため保存していません（作業途中の値を基準にしないため）。" +
+        "コミットしてから full を回すと記録されます",
     ]);
-    expect(loadBaseline(root)).toEqual(before);
   });
 
-  // 記録ファイルが消えた・壊れた回に落ちない。null の早期 return が消えると
-  // canonicalBaseline(null) で例外になる。
-  it("記録が読めなくなっていても落ちない", () => {
-    rmSync(join(root, "gauntlet.baseline.json".split("/").join("/")), { force: true });
-    expect(settleBaseline(root, before, false)).toEqual([]);
-  });
-
-  // 種置き（before 無し）は例外 — init 直後は必ず未コミットで、書かないと導入が始まらない。
-  it("種を置いた回は clean でなくても残す", () => {
-    saveBaseline(root, tightened);
-    expect(settleBaseline(root, null, false)).toEqual([]);
-    expect(loadBaseline(root)).toEqual(tightened);
+  it("種を置いた回は黙る（別の案内が出る）", () => {
+    expect(baselineNotes(memoryStore(tightened), null, false)).toEqual([]);
   });
 
   it("動いていなければ何も言わない", () => {
-    saveBaseline(root, before);
-    expect(settleBaseline(root, before, false)).toEqual([]);
+    expect(baselineNotes(memoryStore(before), before, false)).toEqual([]);
   });
 
-  // duplication だけが動いた回も、書き戻しと知らせの対象。
+  // duplication だけが動いた回も知らせの対象。
   it("duplication だけの変化も見る", () => {
-    saveBaseline(root, { crap: 5, mutation: {}, duplication: 7 });
-    const notes = settleBaseline(root, before, false);
-    expect(notes).toHaveLength(1);
-    expect(loadBaseline(root)?.duplication).toBe(10);
+    const store = memoryStore({ crap: 5, mutation: {}, duplication: 7 });
+    expect(baselineNotes(store, before, false)).toHaveLength(1);
   });
 
   // mutation のキー順は保存のたびに揃うとは限らない（対象の順で書かれる）。
   it("mutation のキー順が違うだけなら動いていない", () => {
     const record = { survived: 1, measured: 5 };
-    saveBaseline(root, { crap: 5, mutation: { "b.ts": record, "a.ts": record }, duplication: 10 });
-    expect(settleBaseline(root, { crap: 5, mutation: { "a.ts": record, "b.ts": record }, duplication: 10 }, false)).toEqual(
+    const store = memoryStore({ crap: 5, mutation: { "b.ts": record, "a.ts": record }, duplication: 10 });
+    expect(baselineNotes(store, { crap: 5, mutation: { "a.ts": record, "b.ts": record }, duplication: 10 }, false)).toEqual(
       [],
     );
   });
 
-  // キー順に依存すると、手で編集された記録が「毎回動いた」ことになる。
-  it("キー順が違うだけなら動いていない", () => {
-    writeFileSync(
-      join(root, "gauntlet.baseline.json".split("/").join("/")),
-      JSON.stringify({ duplication: 10, mutation: {}, crap: 5 }),
-    );
-    expect(settleBaseline(root, before, false)).toEqual([]);
-  });
-
   // duplication の無い記録と 0 の記録は別物。潰すと「欄が消えた」ことに気づけない。
   it("duplication が消えたら動いたと見なす", () => {
-    saveBaseline(root, { crap: 5, mutation: {} });
-    const notes = settleBaseline(root, before, false);
-    expect(notes).toHaveLength(1);
+    const store = memoryStore({ crap: 5, mutation: {} });
+    expect(baselineNotes(store, before, false)).toHaveLength(1);
+  });
+
+  it("記録が読めなくなっていても落ちない", () => {
+    expect(baselineNotes(memoryStore(null), before, false)).toEqual([]);
+  });
+
+  // メモリの store はディスクに触れない — クラッシュ窓が無いことの根拠そのもの。
+  it("メモリの store はディスクに書かない", () => {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-mem-"));
+    try {
+      const store = memoryStore(before);
+      store.save(tightened);
+      expect(store.load()).toEqual(tightened);
+      expect(existsSync(join(root, "gauntlet.baseline.json".split("/").join("/")))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1093,16 +1140,16 @@ describe("crapViolations", () => {
   const touched = new Map([["a.ts", new Set([15])]]);
 
   it("触った関数の違反を出す", () => {
-    expect(crapViolations("quick", report, touched)[0]!.message).toContain("CRAP 30.0");
+    expect(crapViolations(memoryStore(null), "quick", report, touched)[0]!.message).toContain("CRAP 30.0");
   });
 
   // quick は差分に関係するテストしか走らせないので、全体の数字は当てにならない。
   it("quick ではリポジトリ全体を見ない", () => {
-    expect(crapViolations("quick", report, touched)).toHaveLength(1);
+    expect(crapViolations(memoryStore(null), "quick", report, touched)).toHaveLength(1);
   });
 
   it("触っていなければ quick では何も出ない", () => {
-    expect(crapViolations("quick", report, new Map())).toEqual([]);
+    expect(crapViolations(memoryStore(null), "quick", report, new Map())).toEqual([]);
   });
 
   // full はフル実行なのでリポジトリ全体のラチェットも当てる。
@@ -1112,7 +1159,7 @@ describe("crapViolations", () => {
     try {
       saveBaseline(root, { crap: 0, mutation: {} });
       const scoped = { ...report, root };
-      const messages = crapViolations("full", scoped, new Map()).map((v) => v.message);
+      const messages = crapViolations(diskStore(root), "full", scoped, new Map()).map((v) => v.message);
       expect(messages).toEqual([
         "リポジトリ全体の違反が 0 → 1 に増えました。差分の外にある違反（増えた分と、以前から許容されている分）:\n" +
           "  CRAP 30.0 (> 8)  複雑度 5 / 網羅率 0%  a.ts:10 f  → 網羅率 51% で通ります",
@@ -1146,22 +1193,22 @@ describe("crapCheckViolations", () => {
   const green = { passed: true, total: 10 };
 
   it("測れていて違反が無ければ通す", () => {
-    expect(crapCheckViolations("quick", report, new Map(), green)).toEqual([]);
+    expect(crapCheckViolations(memoryStore(null), "quick", report, new Map(), green)).toEqual([]);
   });
 
   // テストが落ちていれば coverage が無い。偽の違反で本当の原因を埋もれさせない。
   it("テストが落ちていればそう言う", () => {
-    expect(crapCheckViolations("quick", report, new Map(), { passed: false, total: 10 })).toEqual([CRAP_NEEDS_TESTS]);
+    expect(crapCheckViolations(memoryStore(null), "quick", report, new Map(), { passed: false, total: 10 })).toEqual([CRAP_NEEDS_TESTS]);
   });
 
   // 設定が現実とずれていると「違反ゼロ」に見える。走らなかったゲートを緑にしない。
   it("対象が空なら閾値を当てずに落とす", () => {
-    const violations = crapCheckViolations("quick", empty, new Map(), green);
+    const violations = crapCheckViolations(memoryStore(null), "quick", empty, new Map(), green);
     expect(violations[0]!.message).toContain("source.include");
   });
 
   it("テスト失敗の方が設定のずれより先に出る", () => {
-    expect(crapCheckViolations("quick", empty, new Map(), { passed: false, total: 10 })).toEqual([CRAP_NEEDS_TESTS]);
+    expect(crapCheckViolations(memoryStore(null), "quick", empty, new Map(), { passed: false, total: 10 })).toEqual([CRAP_NEEDS_TESTS]);
   });
 
   // 測れていることを確かめたら、次は閾値を当てる。ここを飛ばすと
@@ -1170,7 +1217,7 @@ describe("crapCheckViolations", () => {
     const violating: FunctionReport = { ...good, location: { ...good.location, name: "g" }, cc: 5, coverage: 0 };
     // good（網羅率 1）が居るので「どの関数も覆われていない」には当たらない。
     const mixed: AdapterReport = { ...report, functions: [good, violating] };
-    const violations = crapCheckViolations("quick", mixed, new Map([["a.ts", new Set([1])]]), green);
+    const violations = crapCheckViolations(memoryStore(null), "quick", mixed, new Map([["a.ts", new Set([1])]]), green);
     expect(violations).toHaveLength(1);
     expect(violations[0]!.message).toContain("CRAP 30.0");
   });
@@ -1180,7 +1227,7 @@ describe("crapCheckViolations", () => {
   it("設定のずれがあれば閾値の違反は出さない", () => {
     const violating: FunctionReport = { ...good, cc: 5, coverage: 0 };
     const broken: AdapterReport = { ...report, functions: [violating] };
-    const violations = crapCheckViolations("full", broken, new Map([["a.ts", new Set([1])]]), green);
+    const violations = crapCheckViolations(memoryStore(null), "full", broken, new Map([["a.ts", new Set([1])]]), green);
     expect(violations).toHaveLength(1);
     expect(violations[0]!.message).toContain("coverage.include");
   });
@@ -1192,7 +1239,7 @@ describe("crapCheckViolations", () => {
   it("quick では coverage が空でも設定のずれと言わない", () => {
     const violating: FunctionReport = { ...good, cc: 5, coverage: 0 };
     const untested: AdapterReport = { ...report, functions: [violating] };
-    const violations = crapCheckViolations("quick", untested, new Map([["a.ts", new Set([1])]]), green);
+    const violations = crapCheckViolations(memoryStore(null), "quick", untested, new Map([["a.ts", new Set([1])]]), green);
     expect(violations).toHaveLength(1);
     expect(violations[0]!.message).toContain("CRAP 30.0");
   });
@@ -1200,13 +1247,13 @@ describe("crapCheckViolations", () => {
   // 触った関数が 0 の quick も同じ扱い。hono（4795 テスト）で誤検知して落ちた形。
   it("quick で触った関数が 0 なら、coverage が空でも通す", () => {
     const untouched: AdapterReport = { ...report, functions: [{ ...good, coverage: 0 }] };
-    expect(crapCheckViolations("quick", untouched, new Map(), { passed: true, total: 4795 })).toEqual([]);
+    expect(crapCheckViolations(memoryStore(null), "quick", untouched, new Map(), { passed: true, total: 4795 })).toEqual([]);
   });
 
   // full はフル実行なので、触った関数が 0 でも coverage が空なのは設定のずれ。
   it("full では触った関数が 0 でも coverage の空を咎める", () => {
     const untouched: AdapterReport = { ...report, functions: [{ ...good, coverage: 0 }] };
-    const violations = crapCheckViolations("full", untouched, new Map(), { passed: true, total: 4795 });
+    const violations = crapCheckViolations(memoryStore(null), "full", untouched, new Map(), { passed: true, total: 4795 });
     expect(violations[0]!.message).toContain("coverage.include");
   });
 });
@@ -1225,7 +1272,7 @@ describe("duplicationViolations", () => {
   it("欄が無ければ種を置いて落とす", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 5, mutation: {} });
-      expect(duplicationViolations(root, 1090)).toEqual([BASELINE_SEEDED]);
+      expect(duplicationViolations(diskStore(root), 1090)).toEqual([BASELINE_SEEDED]);
       expect(loadBaseline(root)).toEqual({ crap: 5, mutation: {}, duplication: 1090 });
     });
   });
@@ -1233,7 +1280,7 @@ describe("duplicationViolations", () => {
   // baseline ファイル自体が無いリポジトリでも落ちずに種を置く。
   it("記録ファイルそのものが無くても種を置いて落とす", () => {
     withRoot((root) => {
-      expect(duplicationViolations(root, 42)).toEqual([BASELINE_SEEDED]);
+      expect(duplicationViolations(diskStore(root), 42)).toEqual([BASELINE_SEEDED]);
       expect(loadBaseline(root)?.duplication).toBe(42);
     });
   });
@@ -1241,7 +1288,7 @@ describe("duplicationViolations", () => {
   it("増えていたら落とし、記録は変えない", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
-      expect(duplicationViolations(root, 150)).toEqual([
+      expect(duplicationViolations(diskStore(root), 150)).toEqual([
         { message: "重複が 100 → 150 トークンに増えました" },
       ]);
       expect(loadBaseline(root)?.duplication).toBe(100);
@@ -1252,7 +1299,7 @@ describe("duplicationViolations", () => {
   it("減っていたら通し、記録を下げる", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
-      expect(duplicationViolations(root, 60)).toEqual([]);
+      expect(duplicationViolations(diskStore(root), 60)).toEqual([]);
       expect(loadBaseline(root)?.duplication).toBe(60);
     });
   });
@@ -1260,7 +1307,7 @@ describe("duplicationViolations", () => {
   it("同じなら通し、記録も変わらない", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
-      expect(duplicationViolations(root, 100)).toEqual([]);
+      expect(duplicationViolations(diskStore(root), 100)).toEqual([]);
       expect(loadBaseline(root)?.duplication).toBe(100);
     });
   });
@@ -1312,30 +1359,30 @@ describe("coveredFiles", () => {
 
 describe("mutationScopeText", () => {
   it("対象のファイル数を出す", () => {
-    expect(mutationScopeText(3, 0)).toBe("変異対象 3 ファイル");
+    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 0 })).toBe("変異対象 3 ファイル");
   });
 
   // 測らなかった分を黙って落とすと、緑が「弱いテストが無い」ではなく
   // 「そこは見ていない」を意味していることが伝わらない。
   it("測らなかった件数があれば添える", () => {
-    expect(mutationScopeText(3, 10)).toBe("変異対象 3 ファイル（静的な変異 10 件は測っていません）");
+    expect(mutationScopeText(3, { static: 10, declared: 0, unexplained: 0 })).toBe("変異対象 3 ファイル（静的な変異 10 件は測っていません）");
   });
 
   // テストが触れないファイルは変異させても全部 NoCoverage（数えない）な上、
   // Stryker が「No tests were executed」で落ちる。外すが、外した数は言う。
   it("テストが触れないファイルを外した数を添える", () => {
-    expect(mutationScopeText(0, 0, 1)).toBe(
+    expect(mutationScopeText(0, { static: 0, declared: 0, unexplained: 0 }, 1)).toBe(
       "変異対象 0 ファイル（テストが触れない 1 ファイルは対象外 — 網羅率 0 は CRAP が見る）",
     );
   });
 
   it("外した数と静的変異は並ぶ", () => {
-    expect(mutationScopeText(2, 5, 1)).toBe(
+    expect(mutationScopeText(2, { static: 5, declared: 0, unexplained: 0 }, 1)).toBe(
       "変異対象 2 ファイル（テストが触れない 1 ファイルは対象外 — 網羅率 0 は CRAP が見る）（静的な変異 5 件は測っていません）",
     );
   });
 
   it("対象が無くても形は同じ", () => {
-    expect(mutationScopeText(0, 0)).toBe("変異対象 0 ファイル");
+    expect(mutationScopeText(0, { static: 0, declared: 0, unexplained: 0 })).toBe("変異対象 0 ファイル");
   });
 });

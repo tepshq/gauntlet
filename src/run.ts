@@ -5,7 +5,7 @@
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
 import { type GauntletConfig, loadConfig } from "./config.ts";
-import { BASELINE_FILENAME, type Baseline, type FileRatchet, type MutationRecord, loadBaseline, ratchetByFile, ratchetNumber, saveBaseline } from "./baseline.ts";
+import { BASELINE_FILENAME, type Baseline, type BaselineStore, type FileRatchet, type MutationRecord, diskStore, loadBaseline, memoryStore, ratchetByFile, ratchetNumber } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
 import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, touchedFunctions } from "./gate.ts";
 import { crap } from "./crap.ts";
@@ -23,7 +23,7 @@ import {
 import { type DeadInclude, type IncludeReview, analyze, isTestFile, listSourceFiles, reviewIncludes, unmeasuredFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
-import { REPORT_PATH, type SurvivedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
+import { REPORT_PATH, type IgnoredBreakdown, type SurvivedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
 import { RunnerError, type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
 
@@ -99,13 +99,15 @@ export function runTier(root: string, tier: TierName, notify: Notify = () => {})
 
   const report = analyze(root, config, outcome.coverage);
   const changed = changedLines(root, base);
-  const canSave = canRecordBaseline(root, tier, before);
+  const store = baselineStoreFor(root, tier, before);
+  const persist = store.persists;
 
   const runners: Record<CheckName, () => CheckResult> = {
     typecheck: () => typecheck(root, config),
     tests: () => testsCheck(outcome, testsMs),
     crap: () =>
       crapCheck(
+        store,
         tier,
         report,
         changed,
@@ -116,6 +118,7 @@ export function runTier(root: string, tier: TierName, notify: Notify = () => {})
       ),
     mutation: () =>
       mutationCheck(
+        store,
         root,
         config,
         mutationScope(changed.keys(), (tests) =>
@@ -125,7 +128,7 @@ export function runTier(root: string, tier: TierName, notify: Notify = () => {})
         new Set(coveredFiles(root, outcome.coverage)),
         notify,
       ),
-    duplication: () => duplicationCheck(root, config),
+    duplication: () => duplicationCheck(store, root, config),
   };
   const checks = TIER_CHECKS[tier].map((name) => {
     notify(`${name} …`);
@@ -137,7 +140,7 @@ export function runTier(root: string, tier: TierName, notify: Notify = () => {})
     status: tierStatus(checks),
     checks,
     durationMs: performance.now() - started,
-    notes: settleBaseline(root, before, canSave),
+    notes: baselineNotes(store, before, persist),
   };
 }
 
@@ -163,6 +166,22 @@ export function canRecordBaseline(root: string, tier: TierName, before: Baseline
   return tier === "full" && before !== null && workingTreeClean(root);
 }
 
+/**
+ * この実行の記録の読み書き口。**書いてよい実行かを store の差し替えで表す。**
+ *
+ * 書けない実行はメモリに逸れるので、「書いてから書き戻す」のクラッシュ窓
+ * （その間に死ぬと作業途中の値が残る）が無い。種置き（before 無し）はディスク —
+ * init 直後は必ず未コミットで、書かないと導入が始まらない。
+ */
+export function baselineStoreFor(
+  root: string,
+  tier: TierName,
+  before: Baseline | null,
+): BaselineStore & { persists: boolean } {
+  const persists = before === null || canRecordBaseline(root, tier, before);
+  return { ...(persists ? diskStore(root) : memoryStore(before)), persists };
+}
+
 /** キー順に依存しない比較のための正規形。手で編集された記録は順序が揃っていない。 */
 function canonicalBaseline(baseline: Baseline): string {
   return JSON.stringify({
@@ -172,15 +191,15 @@ function canonicalBaseline(baseline: Baseline): string {
   });
 }
 
-export function settleBaseline(root: string, before: Baseline | null, canSave: boolean): string[] {
-  const after = loadBaseline(root);
+export function baselineNotes(store: BaselineStore, before: Baseline | null, persist: boolean): string[] {
+  const after = store.load();
   if (before === null || after === null) return [];
   if (canonicalBaseline(after) === canonicalBaseline(before)) return [];
-  if (canSave) return ratchetNote(before, after);
-  saveBaseline(root, before);
+  if (persist) return ratchetNote(before, after);
   return [
-    "実測は記録より良くなっていましたが、作業ツリーが clean でないため記録していません" +
-      "（作業途中の値を基準にしないため）。コミットしてから full を回すと記録が締まります",
+    `実測では記録が動きました（${ratchetChanges(before, after).join(" / ")}）が、` +
+      "作業ツリーが clean でないため保存していません（作業途中の値を基準にしないため）。" +
+      "コミットしてから full を回すと記録されます",
   ];
 }
 
@@ -456,13 +475,17 @@ export function ratchetViolation(
  * 改善は自動で固定する。記録し損ねると許容値が緩いまま残り、
  * あとで同じだけ悪化させても通ってしまう。
  */
-export function applyRatchet(report: ReturnType<typeof analyze>, changed: Map<string, Set<number>>): Violation[] {
-  const baseline = loadBaseline(report.root);
+export function applyRatchet(
+  store: BaselineStore,
+  report: ReturnType<typeof analyze>,
+  changed: Map<string, Set<number>>,
+): Violation[] {
+  const baseline = store.load();
   const outcome = gateRepository(report, baseline);
   if (outcome.kind === "regressed") {
     return [ratchetViolation(report, changed, outcome)];
   }
-  if (outcome.kind !== "ok") saveBaseline(report.root, { ...EMPTY_BASELINE, ...baseline, crap: outcome.to });
+  if (outcome.kind !== "ok") store.save({ ...EMPTY_BASELINE, ...baseline, crap: outcome.to });
   return outcome.kind === "seeded" ? [BASELINE_SEEDED] : [];
 }
 
@@ -496,11 +519,12 @@ const EMPTY_REVIEW: IncludeReview = { dead: [], unmatched: [] };
 
 /** リポジトリ全体のラチェットはフル実行のある `full` でだけ判定する。 */
 export function crapViolations(
+  store: BaselineStore,
   tier: TierName,
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
 ): Violation[] {
-  return [...gateTouched(report, changed), ...(tier === "full" ? applyRatchet(report, changed) : [])];
+  return [...gateTouched(report, changed), ...(tier === "full" ? applyRatchet(store, report, changed) : [])];
 }
 
 /**
@@ -510,6 +534,7 @@ export function crapViolations(
  * どちらも「違反ゼロ」に見えてしまうので、先に潰す。
  */
 export function crapCheckViolations(
+  store: BaselineStore,
   tier: TierName,
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
@@ -519,7 +544,7 @@ export function crapCheckViolations(
 ): Violation[] {
   if (!outcome.passed) return [CRAP_NEEDS_TESTS];
   const faults = measurementFaults(report, outcome.total, tier === "full", includes.dead, unmeasured);
-  return faults.length === 0 ? crapViolations(tier, report, changed) : faults;
+  return faults.length === 0 ? crapViolations(store, tier, report, changed) : faults;
 }
 
 /**
@@ -554,6 +579,7 @@ export function crapScope(
 }
 
 function crapCheck(
+  store: BaselineStore,
   tier: TierName,
   report: ReturnType<typeof analyze>,
   changed: Map<string, Set<number>>,
@@ -562,7 +588,7 @@ function crapCheck(
   unmeasured: readonly string[],
 ): CheckResult {
   return timed("crap", () => ({
-    violations: crapCheckViolations(tier, report, changed, outcome, includes, unmeasured),
+    violations: crapCheckViolations(store, tier, report, changed, outcome, includes, unmeasured),
     scope: crapScope(report, changed, includes.unmatched),
   }));
 }
@@ -617,15 +643,15 @@ export function regressionText(entry: FileRatchet["regressed"][number]): string 
 }
 
 function gateByFile(
-  root: string,
+  store: BaselineStore,
   key: "mutation",
   targets: readonly string[],
   counts: Record<string, MutationRecord>,
   describe: (entry: FileRatchet["regressed"][number]) => string,
 ): Violation[] {
-  const baseline = loadBaseline(root) ?? EMPTY_BASELINE;
+  const baseline = store.load() ?? EMPTY_BASELINE;
   const { regressed, updated } = ratchetByFile(baseline[key], targets, counts);
-  saveBaseline(root, { ...baseline, [key]: updated });
+  store.save({ ...baseline, [key]: updated });
   return regressed.map((entry) => ({ message: describe(entry), file: entry.file }));
 }
 
@@ -637,16 +663,23 @@ function gateByFile(
  */
 export function mutationScopeText(
   targets: number,
-  ignored: number,
+  ignored: IgnoredBreakdown,
   untested = 0,
   excluded: readonly string[] = [],
 ): string {
   const bare = untested === 0 ? "" : `（テストが触れない ${untested} ファイルは対象外 — 網羅率 0 は CRAP が見る）`;
-  const skipped = ignored === 0 ? "" : `（静的な変異 ${ignored} 件は測っていません）`;
-  // 上流が置けずに外した分。黙って落とすと、緑が「弱いテストが無い」ではなく
-  // 「そこは見ていない」を意味していることが伝わらない（`--ignoreStatic` と同じ扱い）。
+  // 静的な除外と意図的な除外を分けて数える。混ぜると、意図的に外した総数を誰も知れない
+  // （「見えていれば人が気づける」を軸に disable 方式を選んだのに、そこだけ見えなくなる）。
+  const parts = [
+    ...(ignored.static > 0 ? [`静的な変異 ${ignored.static} 件`] : []),
+    ...(ignored.declared > 0 ? [`宣言して外した変異 ${ignored.declared} 件`] : []),
+  ];
+  const skipped = parts.length === 0 ? "" : `（${parts.join("・")}は測っていません）`;
+  // 理由必須は原則。落としはしないが、破れは件数で言う。
+  const bare2 =
+    ignored.unexplained === 0 ? "" : `（理由の無い Stryker disable が ${ignored.unexplained} 件あります — 理由を書いてください）`;
   const dropped = excluded.length === 0 ? "" : `（${excluded.join("、")} の変異は Stryker が置けないので測っていません）`;
-  return `変異対象 ${targets} ファイル${bare}${skipped}${dropped}`;
+  return `変異対象 ${targets} ファイル${bare}${skipped}${bare2}${dropped}`;
 }
 
 /** 一覧の 1 行に収める。変異後のコードは複数行のことがある。 */
@@ -666,6 +699,7 @@ export function describeSurvivor(mutant: SurvivedMutant): string {
 
 /** 差分に関係するソースだけを変異させる。既存リポジトリ全体を一度に赤にしない。 */
 function mutationCheck(
+  store: BaselineStore,
   root: string,
   config: GauntletConfig,
   covered: Iterable<string>,
@@ -680,7 +714,8 @@ function mutationCheck(
   const untested = inScope.length - targets.length;
   return timed("mutation", () => {
     requireMutationTools(root);
-    if (targets.length === 0) return { scope: mutationScopeText(0, 0, untested), violations: [] };
+    if (targets.length === 0)
+      return { scope: mutationScopeText(0, { static: 0, declared: 0, unexplained: 0 }, untested), violations: [] };
     // 一番長い段。件数が分かれば時間の見積もりが立つ。書き換えの予告も兼ねる —
     // `--inPlace` は実ファイルを書き換えるので、途中で止めると計装が残る（duct で実測）。
     notify(`mutation 変異対象 ${targets.length} ファイル。作業ツリーを一時的に書き換えます`);
@@ -688,7 +723,7 @@ function mutationCheck(
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
       scope: mutationScopeText(targets.length, ignored, untested, excluded),
-      violations: gateByFile(root, "mutation", targets, mutationRecords(targets, countByFile(survived), measured), (entry) =>
+      violations: gateByFile(store, "mutation", targets, mutationRecords(targets, countByFile(survived), measured), (entry) =>
         withDetails(
           regressionText(entry),
           survived.filter((mutant) => mutant.file === entry.file).map(describeSurvivor),
@@ -705,23 +740,23 @@ function mutationCheck(
  * 数えるかという割り付けの判断を増やさずに済む。絶対閾値も持たない（既存リポジトリを
  * 導入初日に赤で埋めない）。「増やさない」だけを課し、減れば自動で締まる。
  */
-export function duplicationViolations(root: string, actual: number): Violation[] {
-  const baseline = loadBaseline(root);
+export function duplicationViolations(store: BaselineStore, actual: number): Violation[] {
+  const baseline = store.load();
   const allowed = baseline?.duplication;
   // 0.11.0 より前の baseline にはこの欄が無い。種を置いた回は通さない（crap と同じ理由）。
   if (allowed === undefined) {
-    saveBaseline(root, { ...EMPTY_BASELINE, ...baseline, duplication: actual });
+    store.save({ ...EMPTY_BASELINE, ...baseline, duplication: actual });
     return [BASELINE_SEEDED];
   }
   const outcome = ratchetNumber(allowed, actual);
   if (outcome.kind === "regressed") {
     return [{ message: `重複が ${outcome.allowed} → ${outcome.actual} トークンに増えました` }];
   }
-  if (outcome.kind === "improved") saveBaseline(root, { ...EMPTY_BASELINE, ...baseline, duplication: outcome.to });
+  if (outcome.kind === "improved") store.save({ ...EMPTY_BASELINE, ...baseline, duplication: outcome.to });
   return [];
 }
 
-function duplicationCheck(root: string, config: GauntletConfig): CheckResult {
+function duplicationCheck(store: BaselineStore, root: string, config: GauntletConfig): CheckResult {
   return timed("duplication", () => {
     // **渡した数を出す。** jscpd の `sources` は「min-tokens 以上あってクローンに
     // 参加しうるファイル数」で、渡した数ではない（duct で 794 → 760）。同じ実行の
@@ -730,7 +765,7 @@ function duplicationCheck(root: string, config: GauntletConfig): CheckResult {
     const { duplicatedTokens } = runDuplication(root, files);
     return {
       scope: `重複 ${duplicatedTokens} トークン / 対象 ${files.length} ファイル`,
-      violations: duplicationViolations(root, duplicatedTokens),
+      violations: duplicationViolations(store, duplicatedTokens),
     };
   });
 }

@@ -96,6 +96,35 @@ export function saveBaseline(root: string, baseline: Baseline): void {
   writeFileSync(join(root, BASELINE_FILENAME), `${JSON.stringify({ ...baseline, mutation }, null, 2)}\n`);
 }
 
+/**
+ * 記録の読み書き口。**書いてよい実行かどうかを、この差し替えで表す。**
+ *
+ * 以前は各ゲートがディスクに直接書き、実行の最後に「clean でなければ書き戻す」形
+ * だった。それだと**書いた瞬間から書き戻すまでの数十秒〜分単位の窓**があり、そこで
+ * プロセスが死ぬと（Ctrl-C、CI の timeout、使用量上限での kill — 実際に報告がある）
+ * 作業途中の値がディスクに残る。防ごうとした事故がそのまま起きる。
+ * 書けない実行ではメモリに逸らせば、窓ごと消える。
+ */
+export interface BaselineStore {
+  load(): Baseline | null;
+  save(baseline: Baseline): void;
+}
+
+export function diskStore(root: string): BaselineStore {
+  return { load: () => loadBaseline(root), save: (baseline) => saveBaseline(root, baseline) };
+}
+
+/** ディスクには触れない。ゲートは普段どおり書き、結果は知らせ（notes）にだけ使われる。 */
+export function memoryStore(initial: Baseline | null): BaselineStore {
+  let current = initial;
+  return {
+    load: () => current,
+    save: (baseline) => {
+      current = baseline;
+    },
+  };
+}
+
 export type RatchetOutcome =
   | { kind: "ok" }
   | { kind: "seeded"; to: number }

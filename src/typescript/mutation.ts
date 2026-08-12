@@ -33,6 +33,8 @@ interface Mutant {
   mutatorName: string;
   replacement?: string;
   status: string;
+  /** Ignored の理由。static は Stryker の固定文言、disable はコメントの理由文。 */
+  statusReason?: string;
   location: { start: { line: number } };
 }
 
@@ -82,14 +84,35 @@ export function measuredByFile(report: MutationReport): Record<string, number> {
   );
 }
 
-/** `--ignoreStatic` で測らなかった変異の数。黙って落とさず、件数として出す。 */
-export function ignoredCount(report: MutationReport): number {
-  return Object.values(report.files).reduce(
-    (total, entry) =>
-      total +
-      entry.mutants.filter((mutant) => mutant.status === "Ignored").length,
-    0,
-  );
+/**
+ * 測らなかった変異の内訳。
+ *
+ * Stryker は `--ignoreStatic` の除外も `// Stryker disable` の除外も同じ `Ignored` に
+ * するので、数を分けないと**意図的な除外が「静的な変異」の件数に吸収されて見えなくなる**
+ * （#25。「見えていれば人が気づける」を軸に disable 方式を選んだのに、総数だけが
+ * 見えない形になっていた）。区別は `statusReason` — static は Stryker の固定文言、
+ * disable はコメントの理由文が入る。理由の無い disable は空になるので、それも数える。
+ */
+export interface IgnoredBreakdown {
+  /** モジュール読み込みに影響するため測れない変異（`--ignoreStatic`）。 */
+  static: number;
+  /** `// Stryker disable` で理由つきで外した変異。 */
+  declared: number;
+  /** `// Stryker disable` だが理由が書かれていない変異。原則（理由必須）の破れ。 */
+  unexplained: number;
+}
+
+export function ignoredBreakdown(report: MutationReport): IgnoredBreakdown {
+  const breakdown = { static: 0, declared: 0, unexplained: 0 };
+  for (const entry of Object.values(report.files)) {
+    for (const mutant of entry.mutants) {
+      if (mutant.status !== "Ignored") continue;
+      if ((mutant.statusReason ?? "").startsWith("Static mutant")) breakdown.static += 1;
+      else if ((mutant.statusReason ?? "").trim() === "") breakdown.unexplained += 1;
+      else breakdown.declared += 1;
+    }
+  }
+  return breakdown;
 }
 
 /**
@@ -157,7 +180,7 @@ export function vitestRunnerPlugin(root: string): string {
  * （30 行の component で 11 変異中 8 件）。**これは無料ではない** — timeout せずに
  * 判定が出ていた分も失う（同じ実測で Killed 2・Survived 1）。それでも入れる理由は、
  * timeout は違反に数えないので**分単位を払って何も分からない**状態だったこと、
- * そして duct の CI が既に 13 分に達していること。失った分は `ignoredCount` で件数を出す。
+ * そして duct の CI が既に 13 分に達していること。失った分は `ignoredBreakdown` で件数を出す。
  */
 export function strykerConfig(
   files: readonly string[],
@@ -301,7 +324,7 @@ export function strykerFiles(
 export interface MutationOutcome {
   survived: SurvivedMutant[];
   /** `--ignoreStatic` で測らなかった数。 */
-  ignored: number;
+  ignored: IgnoredBreakdown;
   /** 上流が置けなくて外した mutator。これも測っていない分。 */
   excluded: string[];
   /** ファイルごとの「測った変異」の数。記録に入り、増加の理由の切り分けに使う。 */
@@ -543,7 +566,7 @@ export function runMutation(
   const report = JSON.parse(readFileSync(path, "utf8")) as MutationReport;
   return {
     survived: survivedFrom(report),
-    ignored: ignoredCount(report),
+    ignored: ignoredBreakdown(report),
     excluded,
     measured: measuredByFile(report),
   };

@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } fr
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { REPORT_PATH, type MutationReport, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredCount, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, NO_TESTS_TO_MUTATE, dryRunFailure, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
+import { REPORT_PATH, type MutationReport, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredBreakdown, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, NO_TESTS_TO_MUTATE, dryRunFailure, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
 import { RunnerError, lastLines } from "./runner.ts";
 
 // レポートが出ていないときは Stryker の出力が唯一の手がかりになる。
@@ -93,23 +93,47 @@ describe("survivedFrom", () => {
   });
 });
 
-describe("ignoredCount", () => {
-  // --ignoreStatic で外した分。黙って落とすと、緑が「弱いテストが無い」ではなく
-  // 「そこは見ていない」を意味していることが伝わらない。
-  it("Ignored の数を返す", () => {
-    expect(ignoredCount(report({ "a.ts": [["Ignored", 1], ["Ignored", 2], ["Killed", 3]] }))).toBe(2);
+// static の除外と disable の除外はどちらも Ignored。混ぜると意図的な除外の総数が
+// 見えなくなる（#25）。区別は statusReason — static は Stryker の固定文言。
+describe("ignoredBreakdown", () => {
+  const ignored = (statusReason?: string) => ({
+    mutatorName: "X",
+    status: "Ignored",
+    ...(statusReason === undefined ? {} : { statusReason }),
+    location: { start: { line: 1 } },
+  });
+
+  it("static と宣言と理由なしを分けて数える", () => {
+    const report: MutationReport = {
+      files: {
+        "a.ts": {
+          mutants: [
+            ignored('Static mutant (and "ignoreStatic" was enabled)'),
+            ignored("後段の存在確認が同じ結果を返すため"),
+            ignored(),
+            { mutatorName: "X", status: "Killed", location: { start: { line: 2 } } },
+          ],
+        },
+      },
+    };
+    expect(ignoredBreakdown(report)).toEqual({ static: 1, declared: 1, unexplained: 1 });
+  });
+
+  // 空白だけの理由は「書いた」ことにならない。
+  it("空白だけの理由は理由なしと数える", () => {
+    const report: MutationReport = { files: { "a.ts": { mutants: [ignored("  ")] } } };
+    expect(ignoredBreakdown(report)).toEqual({ static: 0, declared: 0, unexplained: 1 });
   });
 
   it("ファイルを跨いで合計する", () => {
-    expect(ignoredCount(report({ "a.ts": [["Ignored", 1]], "b.ts": [["Ignored", 2]] }))).toBe(2);
+    const report: MutationReport = {
+      files: { "a.ts": { mutants: [ignored("理由")] }, "b.ts": { mutants: [ignored("理由")] } },
+    };
+    expect(ignoredBreakdown(report).declared).toBe(2);
   });
 
-  it("無ければ 0", () => {
-    expect(ignoredCount(report({ "a.ts": [["Killed", 1], ["Survived", 2]] }))).toBe(0);
-  });
-
-  it("何も無ければ 0", () => {
-    expect(ignoredCount(report({}))).toBe(0);
+  it("何も無ければ全部 0", () => {
+    expect(ignoredBreakdown({ files: {} })).toEqual({ static: 0, declared: 0, unexplained: 0 });
   });
 });
 
