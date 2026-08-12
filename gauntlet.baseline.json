@@ -3,9 +3,10 @@
   "duplication": 0,
   "mutation": {
     "src/baseline.ts": {
-      "survived": 1,
-      "measured": 214,
-      "timeout": 0
+      "survived": 2,
+      "measured": 244,
+      "timeout": 0,
+      "noCoverage": 0
     },
     "src/cli.ts": {
       "survived": 0
@@ -13,22 +14,26 @@
     "src/config.ts": {
       "survived": 1,
       "measured": 43,
-      "timeout": 0
+      "timeout": 0,
+      "noCoverage": 7
     },
     "src/crap.ts": {
       "survived": 0,
       "measured": 12,
-      "timeout": 0
+      "timeout": 0,
+      "noCoverage": 0
     },
     "src/gate.ts": {
       "survived": 0,
-      "measured": 126,
-      "timeout": 0
+      "measured": 127,
+      "timeout": 0,
+      "noCoverage": 0
     },
     "src/git.ts": {
       "survived": 0,
       "measured": 103,
-      "timeout": 0
+      "timeout": 0,
+      "noCoverage": 24
     },
     "src/guard.ts": {
       "survived": 0,
@@ -44,12 +49,14 @@
     "src/report.ts": {
       "survived": 0,
       "measured": 7,
-      "timeout": 0
+      "timeout": 0,
+      "noCoverage": 0
     },
     "src/run.ts": {
       "survived": 0,
-      "measured": 545,
-      "timeout": 0
+      "measured": 592,
+      "timeout": 0,
+      "noCoverage": 81
     },
     "src/tier.ts": {
       "survived": 0
@@ -57,7 +64,8 @@
     "src/typescript/adapter.ts": {
       "survived": 0,
       "measured": 57,
-      "timeout": 0
+      "timeout": 0,
+      "noCoverage": 0
     },
     "src/typescript/ast.ts": {
       "survived": 2,
@@ -76,13 +84,15 @@
     },
     "src/typescript/mutation.ts": {
       "survived": 0,
-      "measured": 151,
-      "timeout": 0
+      "measured": 154,
+      "timeout": 0,
+      "noCoverage": 82
     },
     "src/typescript/runner.ts": {
       "survived": 0,
       "measured": 109,
-      "timeout": 0
+      "timeout": 0,
+      "noCoverage": 24
     },
     "src/exec.ts": {
       "survived": 2,
@@ -105,7 +115,8 @@
     "src/package-manager.ts": {
       "survived": 1,
       "measured": 44,
-      "timeout": 0
+      "timeout": 0,
+      "noCoverage": 0
     }
   }
 }
