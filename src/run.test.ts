@@ -483,6 +483,32 @@ describe("withDetails", () => {
 });
 
 describe("mutationScopeText の除外表示", () => {
+  const none = { static: 0, declared: 0, unexplained: 0 };
+
+  // 意図的な除外の総数が static に吸収されると、誰も気づけない（#25）。
+  it("static と宣言の内訳を分けて出す", () => {
+    expect(mutationScopeText(3, { static: 213, declared: 2, unexplained: 0 })).toBe(
+      "変異対象 3 ファイル（静的な変異 213 件・宣言して外した変異 2 件は測っていません）",
+    );
+  });
+
+  it("宣言だけなら宣言だけ言う", () => {
+    expect(mutationScopeText(3, { static: 0, declared: 2, unexplained: 0 })).toBe(
+      "変異対象 3 ファイル（宣言して外した変異 2 件は測っていません）",
+    );
+  });
+
+  it("両方 0 なら黙る", () => {
+    expect(mutationScopeText(3, none)).toBe("変異対象 3 ファイル");
+  });
+
+  // 理由必須は原則。落としはしないが、破れは件数で言う。
+  it("理由の無い disable は件数で言う", () => {
+    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 1 })).toBe(
+      "変異対象 3 ファイル（理由の無い Stryker disable が 1 件あります — 理由を書いてください）",
+    );
+  });
+
   // 黙って落とすと、緑が「弱いテストが無い」ではなく「そこは見ていない」を意味していることが
   // 伝わらない（--ignoreStatic の件数を出しているのと同じ理由）。
   it("外した mutator を並べる", () => {
@@ -894,6 +920,12 @@ describe("baselineNotes", () => {
         "作業ツリーが clean でないため保存していません（作業途中の値を基準にしないため）。" +
         "コミットしてから full を回すと記録されます",
     ]);
+  });
+
+  // 複数の変化は区切りで並ぶ。区切りが消えると 2 つの変化が 1 つに読める。
+  it("複数の変化を区切って並べる", () => {
+    const store = memoryStore({ crap: 3, mutation: {}, duplication: 7 });
+    expect(baselineNotes(store, before, false)[0]).toContain("CRAP 違反 5 → 3 / 重複 10 → 7 トークン");
   });
 
   it("種を置いた回は黙る（別の案内が出る）", () => {

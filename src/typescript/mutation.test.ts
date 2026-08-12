@@ -132,6 +132,14 @@ describe("ignoredBreakdown", () => {
     expect(ignoredBreakdown(report).declared).toBe(2);
   });
 
+  // Stryker の固定文言そのもので判定する。別の文字列に変わると static が宣言側に化ける。
+  it("Static mutant で始まらない理由は宣言と数える", () => {
+    const report: MutationReport = {
+      files: { "a.ts": { mutants: [{ mutatorName: "X", status: "Ignored", statusReason: "static っぽい話", location: { start: { line: 1 } } }] } },
+    };
+    expect(ignoredBreakdown(report)).toEqual({ static: 0, declared: 1, unexplained: 0 });
+  });
+
   it("何も無ければ全部 0", () => {
     expect(ignoredBreakdown({ files: {} })).toEqual({ static: 0, declared: 0, unexplained: 0 });
   });
