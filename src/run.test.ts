@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { diskStore, loadBaseline, memoryStore, saveBaseline } from "./baseline.ts";
-import { ConfigError } from "./config.ts";
+import { type GauntletConfig, ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, settleConflictedBaseline, violatorReport, describeCrash, describeMutant, detailLines, formatResult, mutationRegressionText, mutationScopeText, mutationTargets, noCoverageText, noCoverageTotal, oneLine, timeoutTotal, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, declaredProjects, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, settleConflictedBaseline, violatorReport, describeCrash, describeMutant, detailLines, formatResult, mutationRegressionText, mutationScopeText, mutationTargets, noCoverageText, noCoverageTotal, oneLine, timeoutTotal, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -1758,5 +1758,30 @@ describe("noCoverageTotal", () => {
 
   it("記録が無ければ 0", () => {
     expect(noCoverageTotal({})).toBe(0);
+  });
+});
+
+/**
+ * 走らせる vitest project の宣言。**空 = 宣言なし = 全部走らせる**（DESIGN §2）。
+ *
+ * ここで既定の一覧を作ると、宣言していないリポジトリのテストが黙って一部しか
+ * 走らなくなる（走らなかったぶんは網羅率 0 として CRAP に出るので、赤の理由が
+ * 「テストが無い」に化ける）。
+ */
+describe("declaredProjects", () => {
+  const config: GauntletConfig = {
+    schemaVersion: 1,
+    adapter: "typescript",
+    runner: "vitest",
+    defaultBranch: "main",
+    source: { include: ["src/**/*.ts"] },
+  };
+
+  it("宣言があればその一覧を返す", () => {
+    expect(declaredProjects({ ...config, tests: { projects: ["node", "dom"] } })).toEqual(["node", "dom"]);
+  });
+
+  it("宣言が無ければ空（全部走らせる）", () => {
+    expect(declaredProjects(config)).toEqual([]);
   });
 });

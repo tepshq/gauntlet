@@ -1,5 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ConfigError, parseConfig } from "./config.ts";
+import { CONFIG_FILENAME, ConfigError, loadConfig, parseConfig } from "./config.ts";
 
 const valid = {
   schemaVersion: 1,
@@ -124,5 +127,48 @@ describe("parseConfig のメッセージ", () => {
   // 種類だけ見ていると緑になるので、理由の方を見る。
   it("JSON として読めない理由を出す", () => {
     expect(messageOf(() => parseConfig("{ not json", "test.json"))).toMatch(/^test\.json が JSON として読めません: \S/);
+  });
+});
+
+describe("loadConfig", () => {
+  function withDir(body: (root: string) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-loadconfig-"));
+    try {
+      body(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("置いてある設定を読む", () => {
+    withDir((root) => {
+      writeFileSync(join(root, CONFIG_FILENAME), JSON.stringify(valid));
+      expect(loadConfig(root)).toMatchObject({ adapter: "typescript", defaultBranch: "main" });
+    });
+  });
+
+  // 「設定が無い」と「設定が壊れている」は直し方が違う。前者は init を案内する。
+  it("設定が無ければ、場所と次の一手を言って落ちる", () => {
+    withDir((root) => {
+      const message = messageOf(() => loadConfig(root));
+      expect(message).toContain(join(root, CONFIG_FILENAME));
+      expect(message).toContain("gauntlet init");
+    });
+  });
+
+  // 読めたものは parseConfig に渡る。init の案内で塗り潰すと、直す先を間違える。
+  it("壊れた設定は JSON の理由を言って落ちる", () => {
+    withDir((root) => {
+      writeFileSync(join(root, CONFIG_FILENAME), "{ not json");
+      const message = messageOf(() => loadConfig(root));
+      expect(message).toContain("JSON として読めません");
+      expect(message).not.toContain("gauntlet init");
+    });
+  });
+
+  it("落ちるのは ConfigError", () => {
+    withDir((root) => {
+      expect(() => loadConfig(root)).toThrow(ConfigError);
+    });
   });
 });

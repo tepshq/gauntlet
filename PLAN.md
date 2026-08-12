@@ -570,6 +570,35 @@ CRAP 違反の `analyze` を覆った途端に NoCoverage だった変異が測�
 
 `full` の所要は変異対象 6 ファイルで 20.0 秒（うち mutation 16.3 秒）。
 
+### export しているのに未検査の関数を洗った（2026-08-12）
+
+「どこに穴があるか」をファイル単位の網羅率で探すのをやめて、**gauntlet 自身の
+`analyze` + `coverageByFunction` を使って関数単位で洗った**。exported で 100% 未満は
+14 件。うち **9 件はプロセスを起動する部分**（`run` / `doctor` / `runTier` /
+`listViolators` / `runDuplication` / `dryRunMutation` / `runMutation` / `runTests`、
+それと `runCli` の catch 側）で、残る 5 件が純粋だった。
+
+| | 何を守るか |
+| --- | --- |
+| `declaredProjects` | 宣言が無ければ**空**（全部走らせる）。既定を作ると宣言していないリポジトリのテストが黙って一部しか走らない |
+| `measuredByFile` | ratchet の余裕（#24）の分母。多く数えると slack が広がり、生き残りが増えても通る |
+| `timeoutByFile` | 同上の打ち切り側。Survived との境目は実行速度で動くので、和で比べるために別に数える |
+| `loadConfig` | 「設定が無い」と「設定が壊れている」で案内を出し分ける |
+| `mergeBase` | 差分の起点。決まらないまま進むと差分が全量になる |
+
+**覆った副作用で新しい生き残りが 5 件出た**（#24 の形。config.ts 1 → 2、git.ts 0 → 4）。
+git.ts の 4 件は全部殺した。特に `GitError` の `name` は表示用ではなく**機能**で、
+`describeCrash` が `EXPECTED_ERRORS.has(error.name)` を見て「メッセージだけ出す」か
+「スタックごと出す」かを決めている — 空になると想定内の失敗にスタックトレースが付いて
+エージェントの文脈を埋める。config.ts の増分 1 件は等価だった
+（`readFileSync(path, "utf8")` の `""` は Buffer が同じ文字列に落ちる）。
+
+網羅率は Statements 81.2% → **83.5%**、Functions 81.9% → **85.7%**。テスト 810 → 825。
+
+**残りは全部「実行を伴う部分」。** ここから先は単体テストではなく、
+実際に vitest / jscpd / Stryker / git を起動する形になる。`npm test` は今 1.4 秒で、
+`quick` の予算に直結しているので、その形を入れるかは速度との取引になる。
+
 ### main.ts の 0% は「テストしにくい」ではなく「形」だった（2026-08-12）
 
 網羅率 0%・171 行。理由はファイル末尾の

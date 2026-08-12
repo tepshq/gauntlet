@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } fr
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { REPORT_PATH, type MutationReport, disableComments, reviewDisables, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredBreakdown, noCoverageFrom, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, NO_TESTS_TO_MUTATE, dryRunFailure, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
+import { REPORT_PATH, type MutationReport, disableComments, reviewDisables, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredBreakdown, measuredByFile, noCoverageFrom, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, NO_TESTS_TO_MUTATE, dryRunFailure, requireMutationTools, survivedFrom, timeoutByFile, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
 import { RunnerError, lastLines } from "./runner.ts";
 
 // レポートが出ていないときは Stryker の出力が唯一の手がかりになる。
@@ -50,6 +50,43 @@ function report(entries: Record<string, [status: string, line: number][]>): Muta
     ),
   };
 }
+
+/**
+ * 記録の母数と打ち切り。**ratchet の余裕（#24）の入力そのもの。**
+ *
+ * `measured` を多く数えると `fileRegression` の slack が広がり、生き残りが増えても
+ * 通る（ゲートが黙って緩む）。`timeout` を別に数えるのは、Survived との境目が
+ * 実行速度で動くため — 和なら揺れない。
+ */
+describe("measuredByFile", () => {
+  it("Ignored と NoCoverage は母数に入れない", () => {
+    const entries = report({
+      "a.ts": [["Killed", 1], ["Survived", 2], ["Timeout", 3], ["Ignored", 4], ["NoCoverage", 5]],
+    });
+    expect(measuredByFile(entries)).toEqual({ "a.ts": 3 });
+  });
+
+  it("ファイルごとに数える", () => {
+    const entries = report({ "a.ts": [["Killed", 1]], "b.ts": [["Survived", 1], ["Killed", 2]] });
+    expect(measuredByFile(entries)).toEqual({ "a.ts": 1, "b.ts": 2 });
+  });
+
+  // 「全部外れて母数 0」と「報告に無い」は別物。0/0/0 の記録を作らせないために区別する。
+  it("測ったものが 1 つも無ければ 0", () => {
+    expect(measuredByFile(report({ "a.ts": [["Ignored", 1]] }))).toEqual({ "a.ts": 0 });
+  });
+});
+
+describe("timeoutByFile", () => {
+  it("打ち切りだけを数える", () => {
+    const entries = report({ "a.ts": [["Timeout", 1], ["Timeout", 2], ["Killed", 3], ["Survived", 4]] });
+    expect(timeoutByFile(entries)).toEqual({ "a.ts": 2 });
+  });
+
+  it("打ち切りが無ければ 0", () => {
+    expect(timeoutByFile(report({ "a.ts": [["Killed", 1]] }))).toEqual({ "a.ts": 0 });
+  });
+});
 
 describe("survivedFrom", () => {
   it("生き残った変異を場所つきで返す", () => {

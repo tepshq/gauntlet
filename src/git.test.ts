@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { branchCandidates, changedLines, collectHunks, executableFiles, hunkLines, lines, repoSourceSet } from "./git.ts";
+import { GitError, branchCandidates, changedLines, collectHunks, executableFiles, hunkLines, lines, mergeBase, repoSourceSet } from "./git.ts";
 
 describe("branchCandidates", () => {
   // PR がマージされる先は origin/main。手元の main は fetch では動かず、いくらでも古くなる
@@ -274,5 +274,88 @@ describe("lines", () => {
 
   it("空なら空", () => {
     expect(lines("")).toEqual([]);
+  });
+});
+
+describe("mergeBase", () => {
+  function repo(body: (root: string, run: (...args: string[]) => void) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-mergebase-"));
+    const run = (...args: string[]): void => {
+      execFileSync("git", args, { cwd: root, stdio: "ignore" });
+    };
+    try {
+      run("init", "-q", "-b", "main");
+      run("config", "user.name", "t");
+      run("config", "user.email", "t@t");
+      writeFileSync(join(root, "seed.txt"), "x\n");
+      run("add", "-A");
+      run("commit", "-qm", "seed");
+      body(root, run);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // 差分の起点。ここがずれると quick の見る範囲がそのままずれる。
+  it("既定ブランチとの分岐点を返す", () => {
+    repo((root, run) => {
+      const forked = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+      run("switch", "-q", "-c", "work");
+      writeFileSync(join(root, "next.txt"), "y\n");
+      run("add", "-A");
+      run("commit", "-qm", "next");
+      expect(mergeBase(root, "main")).toBe(forked);
+    });
+  });
+
+  // CI の浅い clone では既定ブランチがローカルに無い。分岐点が決まらないまま進むと
+  // 差分が全量になるので、黙って続けずに直し方まで言って落ちる。
+  // CI の浅い clone では既定ブランチがローカルに無い。分岐点が決まらないまま進むと
+  // 差分が全量になるので、黙って続けずに直し方まで言って落ちる。
+  it("見つからなければ、探した名前と直し方を言って落ちる", () => {
+    repo((root) => {
+      expect(() => mergeBase(root, "nowhere")).toThrow(GitError);
+      const message = thrownBy(() => mergeBase(root, "nowhere")).message;
+      // 名前が出ないと、設定の defaultBranch が誤っているのか浅い clone なのか分からない。
+      expect(message).toContain("nowhere");
+      expect(message).toContain("fetch-depth: 0");
+    });
+  });
+});
+
+/** 投げられたエラーを取り出す。名前とメッセージそのものを見るため。 */
+function thrownBy(body: () => unknown): Error {
+  try {
+    body();
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("落ちませんでした");
+}
+
+describe("GitError", () => {
+  function notARepo(body: (root: string) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-notrepo-"));
+    try {
+      body(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // name は表示のためだけではない。describeCrash が `EXPECTED_ERRORS.has(error.name)` で
+  // 「メッセージだけ出す」か「スタックごと出す」かを決めるので、ここが変わると
+  // 想定内の失敗にスタックトレースが付いてエージェントの文脈を埋める。
+  it("名前を名乗る", () => {
+    notARepo((root) => {
+      expect(thrownBy(() => repoSourceSet(root)).name).toBe("GitError");
+    });
+  });
+
+  // どの git 呼び出しが落ちたか言わないと、原因の当たりが付けられない。
+  it("失敗した git のサブコマンドと引数を出す", () => {
+    notARepo((root) => {
+      expect(thrownBy(() => repoSourceSet(root)).message).toContain("git ls-files --cached --others");
+    });
   });
 });
