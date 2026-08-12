@@ -151,8 +151,21 @@ describe("ratchetByFile", () => {
     expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(1, 10) }).updated["a.ts"]).toEqual(record(1, 10));
   });
 
-  it("生き残りが無くなれば 0 にする", () => {
-    expect(ratchetByFile(allowed, ["a.ts"], {}).updated["a.ts"]).toEqual(record(0, 0, 0));
+  // 「全部殺した」と「測られていない」は別物。後者に 0/0/0 を書くと負債の記録が
+  // 消え、measured の余裕と組み合わさってゲートが恒久的に外れる（#27 で実測）。
+  it("測られなかったファイルの記録は触らない", () => {
+    expect(ratchetByFile(allowed, ["a.ts"], {}).updated["a.ts"]).toEqual(record(2, 10));
+  });
+
+  it("測って生き残りが無くなれば 0 にする", () => {
+    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(0, 10, 0) }).updated["a.ts"]).toEqual(record(0, 10, 0));
+  });
+
+  // 既に 0/0/0 が書かれてしまった記録（#27 の被害）にも余裕を作らない。
+  // 静かに通り続けるより、大声で落ちて人の目に入る方が安全側。
+  it("measured が 0 の記録には余裕を作らない", () => {
+    const poisoned = { "a.ts": record(0, 0, 0) };
+    expect(ratchetByFile(poisoned, ["a.ts"], { "a.ts": record(3, 30, 0) }).regressed).toHaveLength(1);
   });
 
   // 既存リポジトリは導入時点で大量に抱えている。0 から始めると誰も入れられない。

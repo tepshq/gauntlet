@@ -199,7 +199,10 @@ function fileRegression(
   actual: MutationRecord,
 ): FileRatchet["regressed"][number] | null {
   if (limit === undefined) return null;
-  const slack = limit.measured == null ? 0 : Math.max(0, (actual.measured ?? 0) - limit.measured);
+  // 二重の歯止め: measured が 0 の記録にも余裕を作らない。0/0/0 の記録に measured の
+  // 余裕を与えると ceiling = actual.measured になり、survived + timeout は measured の
+  // 部分集合なので**必ず通る** — そのファイルのゲートが恒久的に無効になる（#27 で実測）。
+  const slack = !limit.measured ? 0 : Math.max(0, (actual.measured ?? 0) - limit.measured);
   const undetected = limit.timeout == null ? actual.survived : actual.survived + (actual.timeout ?? 0);
   const ceiling = limit.survived + (limit.timeout ?? 0) + slack;
   if (undetected <= ceiling) return null;
@@ -222,7 +225,12 @@ export function ratchetByFile(
   const regressed: FileRatchet["regressed"] = [];
   const updated = { ...allowed };
   for (const file of scanned) {
-    const actual = counts[file] ?? { survived: 0, measured: 0, timeout: 0 };
+    const actual = counts[file];
+    // 測定結果が無いファイルは、突き合わせも更新もしない。0/0/0 を「実測」として
+    // 書くと、負債の記録が消える（#27 では 17 件・19 件・2 件の負債が記録上 0 になり、
+    // measured の余裕と組み合わさってゲートが外れた）。候補に入っても測られない経路は
+    // 普通にある — 型定義だけのファイル、変異の作れないファイル。
+    if (actual === undefined) continue;
     const entry = fileRegression(file, allowed[file], actual);
     if (entry !== null) regressed.push(entry);
     else updated[file] = actual;

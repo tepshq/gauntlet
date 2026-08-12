@@ -982,10 +982,21 @@ describe("mutationRecords", () => {
     });
   });
 
-  // 報告に無い = 変異が全部殺された（または作られなかった）。0 として記録しないと、
-  // 次回の突き合わせ相手が消える。
-  it("報告に無い対象は 0 と記録する", () => {
-    expect(mutationRecords(["a.ts"], {}, {}, {})).toEqual({ "a.ts": { survived: 0, measured: 0, timeout: 0 } });
+  // 報告に無い = 知らない。0/0/0 を「実測」として作ると負債の記録が消える（#27）。
+  it("報告に無い対象は記録を作らない", () => {
+    expect(mutationRecords(["a.ts"], {}, {}, {})).toEqual({});
+  });
+
+  // 全部が NoCoverage / Ignored のファイル（measured 0）も「知らない」扱い。
+  it("measured が 0 の対象は記録を作らない", () => {
+    expect(mutationRecords(["a.ts"], {}, { "a.ts": 0 }, {})).toEqual({});
+  });
+
+  // 測って全部殺した（報告にあり、生き残り 0）は 0 を記録してよい成果。
+  it("全部殺したファイルは 0 と記録する", () => {
+    expect(mutationRecords(["a.ts"], {}, { "a.ts": 12 }, {})).toEqual({
+      "a.ts": { survived: 0, measured: 12, timeout: 0 },
+    });
   });
 });
 

@@ -619,7 +619,12 @@ const EMPTY_BASELINE = { crap: 0, mutation: {} };
  * 0 件を要求すると既存リポジトリはどこも導入できない（gauntlet 自身ですら
  * 生き残りが 53 件あった）。CRAP と同じく「増やさない」だけを課す。
  */
-/** ファイルごとの実測を記録の形に揃える。対象なのに報告に無いファイルは 0（全部殺した）。 */
+/**
+ * ファイルごとの実測を記録の形に揃える。
+ *
+ * 「全部殺した」（報告にあり、生き残り 0）と「測られていない」（報告に無い／measured 0）は
+ * 別物 — 前者は 0 を記録してよい成果で、後者は何も分かっていない。
+ */
 export function mutationRecords(
   targets: readonly string[],
   survived: Record<string, number>,
@@ -627,10 +632,15 @@ export function mutationRecords(
   timeout: Record<string, number>,
 ): Record<string, MutationRecord> {
   return Object.fromEntries(
-    targets.map((file) => [
-      file,
-      { survived: survived[file] ?? 0, measured: measured[file] ?? 0, timeout: timeout[file] ?? 0 },
-    ]),
+    targets
+      // **測った実体のあるファイルだけ。** 候補に入っても Stryker の報告に現れない・
+      // 全部が NoCoverage/Ignored で measured 0、というファイルに 0/0/0 を作ると、
+      // それが「実測」として記録され、負債が消える（#27）。報告に無い = 知らない、で通す。
+      .filter((file) => (measured[file] ?? 0) > 0)
+      .map((file) => [
+        file,
+        { survived: survived[file] ?? 0, measured: measured[file] ?? 0, timeout: timeout[file] ?? 0 },
+      ]),
   );
 }
 
