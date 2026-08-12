@@ -65,8 +65,8 @@
       "timeout": 5
     },
     "src/typescript/complexity.ts": {
-      "survived": 10,
-      "measured": 85,
+      "survived": 3,
+      "measured": 88,
       "timeout": 0
     },
     "src/typescript/coverage.ts": {
