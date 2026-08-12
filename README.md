@@ -132,17 +132,23 @@ npx skills add tepshq/gauntlet -a claude-code
 置かれるのは skill 1 枚（`.claude/skills/gauntlet-setup/`）と `skills-lock.json` だけ。
 **この時点では何も有効になりません** — ゲートも設定も、範囲が決まってから入ります。
 
-あとは **Claude Code で `/gauntlet-setup` を実行するだけ**です（「gauntlet を入れて」と
-言っても起動します）。skill がここから先の全部 — 依存の投入（パッケージマネージャの
-検出込み）、測る範囲の決定、外部サービスを要するテストの分離、CI への 1 行、
-ラチェットの種置き、ゲートが実際に噛むことの確認 — をユーザーと対話しながら進めます。
+あとは **Claude Code で `/gauntlet-setup` を実行するだけ**です。skill がここから先の全部 —
+依存の投入（パッケージマネージャの検出込み）、測る範囲の決定、外部サービスを要するテストの
+分離、CI への 1 行、ラチェットの種置き、ゲートが実際に噛むことの確認 — をユーザーと対話
+しながら進めます。
+
+**起動できるのは人間だけです**（`disable-model-invocation`）。測る範囲を書き換えられる
+唯一の skill なので、エージェントが自分で起動できると、赤いときの最短経路が「範囲を狭める」
+になります。常駐する description の分の context も要りません。
 
 推測で範囲を入れると、狭いまま緑になり、それが一番気づけない失敗になります。
 エージェントがリポジトリを読み、理由つきで範囲を提案し、合意してから確定する流れに
 してあるのはそのためです（`tsconfig.json` の `include` は当てになりません —
 生成物・設定ファイル・e2e が混ざります）。
 
-skill が更新されたら、**同じ `add` をもう一度**打って追随します。
+**更新も同じ skill が持っています。** gauntlet を上げるときも `/gauntlet-setup` を実行すれば、
+パッケージの版上げ・`init` の叩き直し・skill 自身の追随・確認まで通します。手で打つ場合、
+skill の追随は**同じ `add` をもう一度**です。
 
 ```bash
 npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
@@ -228,8 +234,8 @@ PreToolUse:Bash hook error: [npx gauntlet hook]: gauntlet quick: fail
 既に `.claude/settings.json` がある場合、**既存のフックやプラグイン設定はそのまま残ります**
 （追記するだけで、同じものは二度足しません）。
 
-また `.claude/skills/gauntlet-setup/` に skill が 1 枚入ります。測る範囲を決め直すときに
-「gauntlet の設定を見直して」と言えば起動します。
+また `.claude/skills/gauntlet-setup/` に skill が 1 枚入ります。測る範囲を決め直すときや
+gauntlet を上げるときに、**人間が** `/gauntlet-setup` を実行してください。
 
 ## gauntlet が走らせるテストは宣言する
 
@@ -293,7 +299,7 @@ npx gauntlet doctor   # Stryker が vitest を起動できるか（導入時に 
 
 | repo | テスト数 | `quick` | `full` |
 | --- | --- | --- | --- |
-| gauntlet 自身 | 691 | 0.8 秒 | 2.5 秒（変異対象 0 の回） |
+| gauntlet 自身 | 700 | 0.8 秒 | 2.5 秒（変異対象 0 の回）/ 20 秒（6 ファイル） |
 | hue | 412 | 5.5 秒 | 24 秒（CI） |
 | teps | 3822 | 10.4 秒 | 199 秒（CI） |
 | duct | 7213 | 64 秒 | 75 秒（手元） |

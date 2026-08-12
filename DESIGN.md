@@ -459,8 +459,17 @@ mutation は**記録している生き残りの数**をファイルごとに出�
 - **道具は npm、使い方は skills。** 配布経路を 2 つに分ける（0.17.0）。
   - `npx skills add tepshq/gauntlet -a claude-code` が skill 1 枚を置く（`-a` が無いと
     `.agents/` + symlink という別の構造が入るので、Claude Code 指定で実体コピーにする）。
-    ロックファイルが内容ハッシュを記録するので `skills update` で追随できる
-  - skill が依存を入れ、範囲を決め、`gauntlet init --include=...` を叩く
+    **追随も同じ `add`。`skills update` は使わない** — 置き場所を指定する `-a` を
+    受け付けず、実体を `.agents/` へ移して `.claude/skills/` を symlink にするため、
+    追跡済みの `SKILL.md` が git から「削除」に見える（h3 で実測。6 行の変更が
+    324 行削除に化けた）
+  - skill が依存を入れ、範囲を決め、`gauntlet init --include=...` を叩く。
+    **更新（版上げ → `init` の叩き直し → skill の追随）も同じ skill が持つ** —
+    導入と更新で配線の知識が 2 か所に割れないようにする
+  - **起動できるのは人間だけ**（`disable-model-invocation`）。**測る範囲を書き換えられる
+    唯一の skill** なので、エージェントが自分で起動できると、赤いときの最短経路が
+    「範囲を狭める」になる — baseline をフックで守るのと同じ理由。年に数回しか撃たない
+    description が導入先の全リポジトリの全ターンに常駐する context も、これで消える
   - **skill の正本はリポジトリ直下の `skills/gauntlet-setup/SKILL.md`。** 0.16 までは
     `init` が生成しており、その成果物を skills CLI が拾う循環になっていた
   - 版の一致は**運用規律**（main にマージしたら publish）で担保する。skills には

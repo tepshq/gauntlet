@@ -1,15 +1,18 @@
 ---
 name: gauntlet-setup
-description: gauntlet をこのリポジトリに導入する、または測る範囲・走らせるテストの宣言を直す。
+description: gauntlet の導入・更新と、測る範囲の見直し。
+disable-model-invocation: true
 ---
 
-# gauntlet の導入
-
-**測る範囲はユーザーと決める。** 範囲が狭いまま緑になるのが、このツールで一番気づけない
-失敗だから、判断が割れる場所は必ず訊く。
+# gauntlet の導入と更新
 
 この skill は `npx skills add tepshq/gauntlet -a claude-code` が置く。gauntlet 本体の
 インストールから種置きまで、全部ここの手順で行う。
+
+**新しい版に上げるだけなら「更新する」へ。0〜6 は新規導入の手順。**
+
+**測る範囲はユーザーと決める。** 範囲が狭いまま緑になるのが、このツールで一番気づけない
+失敗だから、判断が割れる場所は必ず訊く。
 
 ## 0. 何をするか説明して、進めてよいか訊く
 
@@ -369,9 +372,39 @@ Stryker が対象リポジトリの vitest を起動できるかだけを見る�
 編集と、書き換える形の Bash コマンド（リダイレクト・`sed -i`・`rm`・`git restore` 等）は
 `PreToolUse` フックで止まる。読む・`git add` は通る。赤を消すには違反そのものを直す。
 
-## 古いバージョンから上げる場合
+## 更新する
 
-新規導入では読まなくてよい。0.16 以前が入っているリポジトリにだけ後始末が要る。
+すでに入っているリポジトリを新しい版に追随させる手順。範囲は変わらないので、
+確認を挟まず上から通す。
+
+```
+npx gauntlet --version              # 上げる前の版。控えておく（下の「版ごとの後始末」の引き金）
+V=$(npm view @teps/gauntlet version)
+npm i -D "@teps/gauntlet@$V"        # 上げるのはこれだけ。PM の判定と pnpm の 24 時間ルールは 1 と同じ
+npx gauntlet init                   # フラグ無し
+npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
+npx gauntlet quick
+```
+
+**フラグ無しの `init` は範囲を書き換えない**（4）。`gauntlet.config.json` の
+`include` / `exclude` / `tests.projects` も手書きの `commands` もそのまま残り、
+`.claude/settings.json` のフックと `.gitignore` だけが今の版の形に揃う。旧配線は撤去される。
+
+**skill の追随は `add` を打ち直す。`npx skills update` は使わない** — 実体を
+`.agents/skills/`（多数の agent が共有する置き場。`~/.agents` があると対象が広がる）へ
+移して `.claude/skills/` を symlink にするため、**追跡済みの `SKILL.md` が「削除」扱いに
+なる**（h3 で実測。6 行の変更が 324 行削除に化けた）。`update` のオプションは
+`-g` / `-p` / `-y` だけで、置き場所を指定する `-a` を受け付けない。
+
+**完了条件** — `npx gauntlet --version` が npm の latest と一致すること（1 の完了条件と
+同じ理由）。`npx gauntlet quick` が通り、`package.json` / lockfile /
+`.claude/settings.json` / `.claude/skills/gauntlet-setup/` がコミットされていること。
+
+### 版ごとの後始末
+
+**上げる前の版が 0.23 より前なら、ここを上から当てる。** それ以降からの更新なら要らない。
+
+0.16 以前が入っていたリポジトリには残骸がある:
 
 ```
 git config --unset core.hooksPath   # 0.13 の pre-commit 配線
@@ -380,20 +413,8 @@ rm -rf .claude/skills/gauntlet      # 0.9.x の旧名 skill
 ```
 
 - `.claude/settings.json` に `Stop` フック（0.12 以前）が残っていたら消す
-- **skill が古いまま残る**（0.17.0 で `init` は skill を書かなくなった）。
-  **`add` で置き換える。追随も同じコマンドで行う**:
-
-  ```
-  npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
-  ```
-
-  `npx skills update` は使わない — 実体を `.agents/skills/`（多数の agent が共有する
-  置き場。`~/.agents` があると対象が広がる）へ移して `.claude/skills/` を symlink に
-  するため、**追跡済みの `SKILL.md` が「削除」扱いになる**（h3 で実測。6 行の変更が
-  324 行削除に化けた）。`update` のオプションは `-g` / `-p` / `-y` だけで、置き場所を
-  指定する `-a` を受け付けない
-- **0.22.1 でフックが `hook` 1 本に変わった。** `npx gauntlet init` を叩き直すと配線が
-  入れ替わる（guard / quick / precommit の旧配線は自動で撤去される）。旧配線のままだと
+- **0.22.1 でフックが `hook` 1 本に変わった。** 上の `init` で配線が入れ替わる
+  （guard / quick / precommit の旧配線は自動で撤去される）。旧配線のままだと
   二重に走るか、`if` の解釈が揺れる環境でコミット以外にも quick が走る
 - **手元では通るのに CI でだけ mutation が落ち続ける場合**、0.23 より前の記録が原因
   （打ち切りの数を持たないため、速い機械の Timeout が遅い CI で Survived に流れた分を
