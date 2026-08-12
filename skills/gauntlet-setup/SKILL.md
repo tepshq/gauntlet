@@ -379,12 +379,26 @@ Stryker が対象リポジトリの vitest を起動できるかだけを見る�
 すでに入っているリポジトリを新しい版に追随させる手順。範囲は変わらないので、
 確認を挟まず上から通す。
 
+**最初にこの skill 自身を最新にする。**
+
 ```
 npx gauntlet --version              # 上げる前の版。控えておく（下の「版ごとの後始末」の引き金）
+npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
+```
+
+**そのうえで `SKILL.md` を読み直してから下へ進む。** いま読んでいるのは上書きされる前の
+本文で、新しい版が要求する後始末はそこに書かれていない。記録の形式が変わったことも
+配線が変わったことも知らないまま緑に見える、というのがこれを飛ばしたときの失敗の形。
+
+**差分の有無で読み直しを分岐しない。** 過去に `skills update` を打ったリポジトリは実体が
+`.agents/skills/` にあり `.claude/skills/` は symlink なので、中身が古くても `git status` は
+空になる。読み直しはタダなので、条件を付けると偽の緑を作るだけになる。
+skill に版番号も無い（lock が持つのは内容ハッシュだけ）。
+
+```
 V=$(npm view @teps/gauntlet version)
 npm i -D "@teps/gauntlet@$V"        # 上げるのはこれだけ。PM の判定と pnpm の 24 時間ルールは 1 と同じ
 npx gauntlet init                   # フラグ無し
-npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
 npx gauntlet quick
 ```
 
@@ -400,11 +414,20 @@ npx gauntlet quick
 
 **完了条件** — `npx gauntlet --version` が npm の latest と一致すること（1 の完了条件と
 同じ理由）。`npx gauntlet quick` が通り、`package.json` / lockfile /
-`.claude/settings.json` / `.claude/skills/gauntlet-setup/` がコミットされていること。
+`.claude/settings.json` / `.claude/skills/gauntlet-setup/` / `skills-lock.json` が
+コミットされていること（後ろの 2 つは `skills add` が書く）。
 
 ### 版ごとの後始末
 
-**上げる前の版が 0.23 より前なら、ここを上から当てる。** それ以降からの更新なら要らない。
+**控えた「上げる前の版」を、下の各項目が名指ししている版と突き合わせる。** その版より前から
+上げたなら当てる。全部より新しければ何も要らない。新しい後始末が増えれば項目が増えるので、
+判断の根拠は常にこの一覧そのもので、覚えておく閾値は無い。
+
+**記録の `mutation` を `{}` にする作業は、エージェントには実行できない。** guard が
+`gauntlet.baseline.json` の書き換えを止めるからで、これは正しい動作（緩める経路を塞ぐ
+仕組みに、更新のための例外を開けない）。**該当したらユーザーに編集を頼み、そのあと
+`full` を回す。** 頼むときは、どの項目に当たったのかと、回し直すと何が置き直されるのかを
+言う。
 
 0.16 以前が入っていたリポジトリには残骸がある:
 
