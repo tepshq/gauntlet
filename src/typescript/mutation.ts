@@ -75,6 +75,16 @@ export function survivedFrom(report: MutationReport): SurvivedMutant[] {
  * 記録（`MutationRecord.measured`）に入り、生き残りの増加が「テストが弱くなった」のか
  * 「測定集合が広がった」のかを突き合わせ側が区別できるようにする。
  */
+/** ファイルごとの打ち切り数。記録に入り、`survived + timeout` の突き合わせに使う。 */
+export function timeoutByFile(report: MutationReport): Record<string, number> {
+  return Object.fromEntries(
+    Object.entries(report.files).map(([file, entry]) => [
+      file,
+      entry.mutants.filter((mutant) => mutant.status === "Timeout").length,
+    ]),
+  );
+}
+
 export function measuredByFile(report: MutationReport): Record<string, number> {
   return Object.fromEntries(
     Object.entries(report.files).map(([file, entry]) => [
@@ -331,6 +341,8 @@ export interface MutationOutcome {
   excluded: string[];
   /** ファイルごとの「測った変異」の数。記録に入り、増加の理由の切り分けに使う。 */
   measured: Record<string, number>;
+  /** ファイルごとの打ち切り数。`survived + timeout` が環境不変の突き合わせ対象。 */
+  timeout: Record<string, number>;
 }
 
 /**
@@ -571,6 +583,7 @@ export function runMutation(
     ignored: ignoredBreakdown(report),
     excluded,
     measured: measuredByFile(report),
+    timeout: timeoutByFile(report),
   };
 }
 

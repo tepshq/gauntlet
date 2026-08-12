@@ -624,9 +624,13 @@ export function mutationRecords(
   targets: readonly string[],
   survived: Record<string, number>,
   measured: Record<string, number>,
+  timeout: Record<string, number>,
 ): Record<string, MutationRecord> {
   return Object.fromEntries(
-    targets.map((file) => [file, { survived: survived[file] ?? 0, measured: measured[file] ?? 0 }]),
+    targets.map((file) => [
+      file,
+      { survived: survived[file] ?? 0, measured: measured[file] ?? 0, timeout: timeout[file] ?? 0 },
+    ]),
   );
 }
 
@@ -639,7 +643,11 @@ export function mutationRecords(
  */
 export function regressionText(entry: FileRatchet["regressed"][number]): string {
   const measured = `測った変異 ${entry.measuredBefore ?? "記録なし"} → ${entry.measuredNow ?? 0}`;
-  return `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました（${measured}）  ${entry.file}`;
+  // 打ち切りも言う。閾値は実行速度に比例するので、「遅くなるだけの変異」は速い機械で
+  // Timeout・遅い CI で Survived になる — 生き残りだけ見ると「テストが弱くなった」と
+  // 誤読する（実際に誤読され、原因に辿るには CI から mutation.json を持ち帰るしかなかった）。
+  const timeout = `打ち切り ${entry.timeoutBefore ?? "記録なし"} → ${entry.timeoutNow ?? 0}`;
+  return `テストを通り抜ける変異が ${entry.allowed} → ${entry.actual} に増えました（${timeout}、${measured}）  ${entry.file}`;
 }
 
 function gateByFile(
@@ -719,11 +727,11 @@ function mutationCheck(
     // 一番長い段。件数が分かれば時間の見積もりが立つ。書き換えの予告も兼ねる —
     // `--inPlace` は実ファイルを書き換えるので、途中で止めると計装が残る（duct で実測）。
     notify(`mutation 変異対象 ${targets.length} ファイル。作業ツリーを一時的に書き換えます`);
-    const { survived, ignored, excluded, measured } = runMutation(root, targets, declaredProjects(config));
+    const { survived, ignored, excluded, measured, timeout } = runMutation(root, targets, declaredProjects(config));
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
       scope: mutationScopeText(targets.length, ignored, untested, excluded),
-      violations: gateByFile(store, "mutation", targets, mutationRecords(targets, countByFile(survived), measured), (entry) =>
+      violations: gateByFile(store, "mutation", targets, mutationRecords(targets, countByFile(survived), measured, timeout), (entry) =>
         withDetails(
           regressionText(entry),
           survived.filter((mutant) => mutant.file === entry.file).map(describeSurvivor),

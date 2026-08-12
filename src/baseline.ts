@@ -44,15 +44,30 @@ export interface MutationRecord {
   survived: number;
   /** 測った変異の数（Ignored / NoCoverage を除く）。0.22 より前の記録には無い。 */
   measured: number | null;
+  /**
+   * 打ち切られた変異の数。0.23 より前の記録には無い。
+   *
+   * **突き合わせは `survived + timeout` で行う。** 打ち切りの閾値は実行速度に比例する
+   * （`timeoutFactor × 通常実行時間`）ので、「遅くなるだけの変異」は速い機械では
+   * Timeout、遅い CI では Survived になる — 同じコミットで手元と CI の生き残りが
+   * 食い違い、**何度締めても CI が通らない**（+3 が常に残る実測がある）。
+   * Killed は環境で動かないので、その補集合 `survived + timeout` は環境不変。
+   * 副作用も正しい向きで、「時計で殺した」変異は借金の返済に数えられなくなる。
+   */
+  timeout: number | null;
 }
 
 /** 0.22 より前は生き残りの数だけを記録していた。読める形は全部受ける。 */
 function toRecord(value: unknown): MutationRecord | null {
-  if (typeof value === "number") return { survived: value, measured: null };
+  if (typeof value === "number") return { survived: value, measured: null, timeout: null };
   if (typeof value === "object" && value !== null && "survived" in value) {
-    const { survived, measured } = value as { survived: unknown; measured?: unknown };
+    const { survived, measured, timeout } = value as { survived: unknown; measured?: unknown; timeout?: unknown };
     if (typeof survived !== "number") return null;
-    return { survived, measured: typeof measured === "number" ? measured : null };
+    return {
+      survived,
+      measured: typeof measured === "number" ? measured : null,
+      timeout: typeof timeout === "number" ? timeout : null,
+    };
   }
   return null;
 }
@@ -90,7 +105,7 @@ export function saveBaseline(root: string, baseline: Baseline): void {
   const mutation = Object.fromEntries(
     Object.entries(baseline.mutation).map(([file, record]) => [
       file,
-      record.measured === null ? { survived: record.survived } : record,
+      Object.fromEntries(Object.entries(record).filter(([, value]) => value !== null)),
     ]),
   );
   writeFileSync(join(root, BASELINE_FILENAME), `${JSON.stringify({ ...baseline, mutation }, null, 2)}\n`);
@@ -156,6 +171,9 @@ export interface FileRatchet {
     /** 旧記録（0.22 より前）は null。突き合わせの条件が読み手に見えるように残す。 */
     measuredBefore: number | null;
     measuredNow: number | null;
+    /** 旧記録（0.23 より前）は null。 */
+    timeoutBefore: number | null;
+    timeoutNow: number | null;
   }[];
   updated: Record<string, MutationRecord>;
 }
@@ -166,6 +184,36 @@ export interface FileRatchet {
  * 記録が無いファイルは今の実測値を種にする。既存リポジトリは導入時点で
  * 大量に抱えているので、0 から始めると誰も入れられない。
  */
+/**
+ * ファイル 1 つ分の突き合わせ。超えていれば報告の材料を、収まっていれば null を返す。
+ *
+ * 測定集合が広がった分（テストが増えて static が測定に入った等）は増加を許す。
+ * 旧記録（measured 無し）には余裕を作れないので、従来どおり厳格に比べる。
+ * 比べる数は「殺せなかった数」= survived + timeout。打ち切りの閾値は実行速度に
+ * 比例して動くので、Survived と Timeout の境目は環境で揺れる — 和は揺れない。
+ * 旧記録（timeout 無し）は survived だけで比べる（和に混ぜると片側だけ膨らむ）。
+ */
+function fileRegression(
+  file: string,
+  limit: MutationRecord | undefined,
+  actual: MutationRecord,
+): FileRatchet["regressed"][number] | null {
+  if (limit === undefined) return null;
+  const slack = limit.measured == null ? 0 : Math.max(0, (actual.measured ?? 0) - limit.measured);
+  const undetected = limit.timeout == null ? actual.survived : actual.survived + (actual.timeout ?? 0);
+  const ceiling = limit.survived + (limit.timeout ?? 0) + slack;
+  if (undetected <= ceiling) return null;
+  return {
+    file,
+    allowed: limit.survived,
+    actual: actual.survived,
+    measuredBefore: limit.measured,
+    measuredNow: actual.measured,
+    timeoutBefore: limit.timeout,
+    timeoutNow: actual.timeout,
+  };
+}
+
 export function ratchetByFile(
   allowed: Record<string, MutationRecord>,
   scanned: readonly string[],
@@ -174,21 +222,10 @@ export function ratchetByFile(
   const regressed: FileRatchet["regressed"] = [];
   const updated = { ...allowed };
   for (const file of scanned) {
-    const actual = counts[file] ?? { survived: 0, measured: 0 };
-    const limit = allowed[file];
-    // 測定集合が広がった分（テストが増えて static が測定に入った等）は増加を許す。
-    // 旧記録（measured 無し）には余裕を作れないので、従来どおり厳格に比べる。
-    const slack =
-      limit?.measured == null ? 0 : Math.max(0, (actual.measured ?? 0) - limit.measured);
-    if (limit !== undefined && actual.survived > limit.survived + slack) {
-      regressed.push({
-        file,
-        allowed: limit.survived,
-        actual: actual.survived,
-        measuredBefore: limit.measured,
-        measuredNow: actual.measured,
-      });
-    } else updated[file] = actual;
+    const actual = counts[file] ?? { survived: 0, measured: 0, timeout: 0 };
+    const entry = fileRegression(file, allowed[file], actual);
+    if (entry !== null) regressed.push(entry);
+    else updated[file] = actual;
   }
   return { regressed, updated };
 }
