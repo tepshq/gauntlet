@@ -161,6 +161,25 @@ describe("gateRepository", () => {
   it("記録が無ければ今の実測値を種にする", () => {
     expect(gateRepository(reportOf([BAD, BAD, GOOD]), null)).toEqual({ kind: "seeded", to: 2 });
   });
+
+  // #28: 記録はあっても crap の欄が無いことがある（前の回に計測が中断し、完走した
+  // duplication だけが種を置いた）。0 として突き合わせると、次に完走した回が
+  // 「0 → 2 に増えました」で落ち、guard が記録を守るので以後ずっと赤になる。
+  it("crap の欄が無い記録も、まだ測っていないとして種にする", () => {
+    expect(gateRepository(reportOf([BAD, BAD, GOOD]), { duplication: 29482, mutation: {} })).toEqual({
+      kind: "seeded",
+      to: 2,
+    });
+  });
+
+  // 「無い」と 0 は違う。0 は測って違反ゼロだった記録なので、そのまま最も厳しく噛む。
+  it("許容 0 は種置きではなく突き合わせ", () => {
+    expect(gateRepository(reportOf([BAD]), { crap: 0, duplication: 0, mutation: {} })).toEqual({
+      kind: "regressed",
+      allowed: 0,
+      actual: 1,
+    });
+  });
 });
 
 describe("measurementFaults", () => {

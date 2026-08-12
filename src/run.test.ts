@@ -619,6 +619,16 @@ describe("formatResult", () => {
     expect(formatResult(result([check("crap", "fail", "CRAP 30.0")]))).not.toContain(BASELINE_NOT_COMMITTED.message);
   });
 
+  // 書けなかった回に「作りました。コミットしてください」だけを出すと、書かれていない
+  // 記録をコミットしに行かせる。理由（clean でない）を持っているのは notes。
+  it("保存できなかった回は、種置きの案内より notes を出す", () => {
+    const seeded: CheckResult = { ...check("crap", "fail"), violations: [BASELINE_SEEDED] };
+    const withNote: TierResult = { ...result([seeded]), notes: ["作業ツリーが clean でないため保存していません"] };
+    const output = formatResult(withNote);
+    expect(output).toContain("clean でないため保存していません");
+    expect(output).not.toContain(BASELINE_NOT_COMMITTED.message);
+  });
+
   // scope も複数行になりうる（マッチ 0 件の include）。段に入れないとチェックの木から外れる。
   it("複数行の scope も段に入れる", () => {
     const scoped: CheckResult = { ...check("crap", "pass"), scope: "触った関数 0 / 測る対象 5 関数\n続き" };
@@ -720,6 +730,14 @@ describe("ratchetNote", () => {
   it("締まった中身を言い、コミットを促す", () => {
     expect(ratchetNote(base, { ...base, crap: 79 })).toEqual([
       "許容値を締めました（CRAP 違反 80 → 79）。git add -A などでコミットしてください",
+    ]);
+  });
+
+  // 前の回に crap が計測を中断していると、欄そのものが無い（0 ではない）。
+  // 「0 → 772」と言うと、実際には起きていない後退を報告することになる。
+  it("crap の欄が無かった記録は「記録なし」から言う", () => {
+    expect(ratchetNote({ mutation: {}, duplication: 100 }, { crap: 772, mutation: {}, duplication: 100 })).toEqual([
+      "許容値を締めました（CRAP 違反 記録なし → 772）。git add -A などでコミットしてください",
     ]);
   });
 
@@ -1444,6 +1462,77 @@ describe("duplicationViolations", () => {
       saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
       expect(duplicationViolations(diskStore(root), 100)).toEqual([]);
       expect(loadBaseline(root)?.duplication).toBe(100);
+    });
+  });
+
+  // #28: 種を置くとき、**自分以外のゲートの欄は作らない**。埋め草の crap: 0 が
+  // 混ざると、crap ゲートが 1 度も書いていない「最も厳しい値」がディスクに残る。
+  it("種を置くとき crap の欄は作らない", () => {
+    withRoot((root) => {
+      duplicationViolations(diskStore(root), 29482);
+      expect(loadBaseline(root)).toEqual({ duplication: 29482, mutation: {} });
+    });
+  });
+});
+
+/**
+ * #28 の通し。crap が計測を中断した回に他のゲートが種を置き、その埋め草の
+ * `crap: 0` が「実測」として残って以降の `full` が恒久的に赤になった経路。
+ */
+describe("計測を中断したゲートと種置きの相互作用", () => {
+  function withRoot(body: (root: string) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-seed-"));
+    try {
+      body(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  const violating: FunctionReport = {
+    location: { file: "a.ts", name: "f", scope: [], startLine: 1, startColumn: 0, endLine: 5, endColumn: 0 },
+    cc: 5,
+    coverage: 0,
+  };
+  const report: AdapterReport = {
+    schemaVersion: REPORT_SCHEMA_VERSION,
+    adapter: { name: "typescript", version: "0" },
+    root: "/repo",
+    functions: [violating],
+    excluded: [],
+  };
+
+  // vitest の既定 coverage.exclude が製品コード（`-test.ts` 等）を消していると、
+  // crap は違反を数え終える前に中断する。書いてよい値は 1 つも持っていない。
+  function abortedCrap(root: string): string {
+    const violations = crapCheckViolations(
+      diskStore(root),
+      "full",
+      report,
+      new Map(),
+      { passed: true, total: 7354 },
+      { dead: [], unmatched: [] },
+      ["lib/settings/connection-test.ts"],
+    );
+    return violations[0]!.message;
+  }
+
+  it("中断した回に完走した duplication が種を置いても、crap の欄は空のまま", () => {
+    withRoot((root) => {
+      expect(abortedCrap(root)).toContain("網羅率を測っていないファイル");
+      expect(duplicationViolations(diskStore(root), 29482)).toEqual([BASELINE_SEEDED]);
+      expect(loadBaseline(root)).not.toHaveProperty("crap");
+    });
+  });
+
+  // 報告された症状そのもの: 実際には触っていないのに「0 → 772 に増えました」と言われ、
+  // 記録の書き換えは guard が止めるので、エージェント側に出口が無くなっていた。
+  it("不整合を解消した次の回は、後退ではなく種置きになる", () => {
+    withRoot((root) => {
+      abortedCrap(root);
+      duplicationViolations(diskStore(root), 29482);
+      expect(applyRatchet(diskStore(root), report, new Map())).toEqual([BASELINE_SEEDED]);
+      expect(loadBaseline(root)).toEqual({ crap: 1, duplication: 29482, mutation: {} });
     });
   });
 });

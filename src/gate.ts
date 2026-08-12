@@ -6,7 +6,7 @@
  * リポジトリ全体のラチェットはフル実行のある `full` でだけ判定する。
  */
 
-import { type RatchetOutcome, ratchet } from "./baseline.ts";
+import { type RatchetOutcome, ratchetNumber } from "./baseline.ts";
 import type { Baseline } from "./baseline.ts";
 import { CRAP_THRESHOLD, crap } from "./crap.ts";
 import { type AdapterReport, type FunctionLocation, type FunctionReport, describeLocation } from "./report.ts";
@@ -173,9 +173,14 @@ export function repositoryViolators(report: AdapterReport): FunctionReport[] {
  *
  * 記録が無ければ今の実測値を種にする（`seeded`）。既存リポジトリを導入初日に
  * 赤で埋めないため。以降はそこから下げる方向にしか動かない。
+ *
+ * **「記録が無い」はファイルが無い回だけではない。** 記録はあっても crap の欄が
+ * 無いことがある（前の回に計測が中断し、他のゲートだけが種を置いた — #28）。
+ * どちらも「まだ測っていない」なので種を置く。0 として突き合わせると、次に完走した
+ * 回が「0 → N に増えました」で落ち、以後ずっと赤になる。
  */
 export function gateRepository(report: AdapterReport, baseline: Baseline | null): RatchetOutcome {
   const actual = repositoryViolators(report).length;
-  if (baseline === null) return { kind: "seeded", to: actual };
-  return ratchet(baseline, actual);
+  if (baseline?.crap === undefined) return { kind: "seeded", to: actual };
+  return ratchetNumber(baseline.crap, actual);
 }

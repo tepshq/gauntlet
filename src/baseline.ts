@@ -11,8 +11,15 @@ import { join } from "node:path";
 export const BASELINE_FILENAME = "gauntlet.baseline.json";
 
 export interface Baseline {
-  /** リポジトリ全体で許容する CRAP 違反の数。 */
-  crap: number;
+  /**
+   * リポジトリ全体で許容する CRAP 違反の数。
+   *
+   * **無いのと 0 は違う。** 0 は「測って違反ゼロだった」で、そのまま最も厳しい基準として
+   * 噛む。計測が完了しなかった回に 0 を書くと、次の完走が「0 → 772 に増えました」に
+   * なって恒久的な赤になり、guard が記録の書き換えを止めるのでエージェントには
+   * 出口が無い（#28 で実測）。だから測れなかったゲートの欄は無いままにする — optional。
+   */
+  crap?: number;
   /**
    * リポジトリ全体で許容する重複トークンの数。
    *
@@ -72,25 +79,38 @@ function toRecord(value: unknown): MutationRecord | null {
   return null;
 }
 
-/** 読める形なら Baseline に、そうでなければ null。読み込みと衝突解決が共有する。 */
+/**
+ * 読める形なら Baseline に、そうでなければ null。読み込みと衝突解決が共有する。
+ *
+ * **「無い」はゲートごとに読む。** 記録は 1 ファイルだが、そこに値を置くゲートは 3 つ
+ * あって、片方だけが完走する回がある（crap が計測を中断し、duplication は完走した —
+ * #28 の形）。ファイルがあることと、そのゲートの値があることは別。混ぜて欠けた欄に
+ * 0 を埋めると、測っていないゲートに最も厳しい基準が入る。
+ */
 export function parseBaseline(text: string): Baseline | null {
   try {
-    const data = JSON.parse(text) as Partial<Baseline>;
-    if (typeof data.crap !== "number") return null;
-    const mutation: Record<string, MutationRecord> = {};
-    for (const [file, value] of Object.entries(data.mutation ?? {})) {
-      const record = toRecord(value);
-      if (record !== null) mutation[file] = record;
-    }
-    return {
-      crap: data.crap,
-      // 無いのと 0 は違う。無ければ欄ごと無し（種を置く判定に使う）。
-      ...(typeof data.duplication === "number" ? { duplication: data.duplication } : {}),
-      mutation,
-    };
+    const data = JSON.parse(text) as unknown;
+    // オブジェクトでなければ記録ではない（「欄が 1 つも無い記録」とは別物）。
+    if (typeof data !== "object" || data === null) return null;
+    return toBaseline(data as Partial<Baseline>);
   } catch {
     return null;
   }
+}
+
+/** 読める欄だけを拾う。**読めない欄は落とし、0 で埋めない。** */
+function toBaseline(data: Partial<Baseline>): Baseline {
+  const mutation: Record<string, MutationRecord> = {};
+  for (const [file, value] of Object.entries(data.mutation ?? {})) {
+    const record = toRecord(value);
+    if (record !== null) mutation[file] = record;
+  }
+  // 無いのと 0 は違う。無ければ欄ごと無し（種を置く判定に使う）。
+  return {
+    ...(typeof data.crap === "number" ? { crap: data.crap } : {}),
+    ...(typeof data.duplication === "number" ? { duplication: data.duplication } : {}),
+    mutation,
+  };
 }
 
 /**
@@ -156,20 +176,18 @@ export type RatchetOutcome =
   | { kind: "regressed"; allowed: number; actual: number };
 
 /**
- * 実測を許容値と突き合わせる。
+ * 実測を許容値と突き合わせる。単一の数の ratchet で、crap と duplication が共有する。
  *
  * 改善は自動で固定し、後退だけを落とす。改善を記録し損ねると許容値が緩いまま残り、
  * あとで同じだけ悪化させても通ってしまう。
+ *
+ * 「記録が無いなら種を置く」の判定はここには無い。許容値のあるなしを知っているのは
+ * 呼び出し側（`gateRepository` / `duplicationViolations`）で、そこに 1 つずつある。
  */
-/** 単一の数の ratchet。crap と duplication が共有する。 */
 export function ratchetNumber(allowed: number, actual: number): RatchetOutcome {
   if (actual > allowed) return { kind: "regressed", allowed, actual };
   if (actual < allowed) return { kind: "improved", from: allowed, to: actual };
   return { kind: "ok" };
-}
-
-export function ratchet(baseline: Baseline, actual: number): RatchetOutcome {
-  return ratchetNumber(baseline.crap, actual);
 }
 
 export interface FileRatchet {
@@ -297,8 +315,14 @@ export function tighterRecord(a: MutationRecord, b: MutationRecord): MutationRec
   return (a.measured ?? Infinity) >= (b.measured ?? Infinity) ? a : b;
 }
 
-/** 無い方は「まだゲートが無い」なので、有る方が常に厳しい。両方有れば小さい方。 */
-function tighterDuplication(a: number | undefined, b: number | undefined): number | undefined {
+/**
+ * 無い方は「まだゲートが無い」なので、有る方が常に厳しい。両方有れば小さい方。
+ *
+ * crap と duplication が共有する。**`Math.min` で済ませてはいけない** — 片側に欄が
+ * 無いと `NaN` が記録に書かれ、以降どんな実測とも比べられなくなる（#28 で crap も
+ * optional になったので、crap 側にも同じ穴が開いていた）。
+ */
+function tighterCount(a: number | undefined, b: number | undefined): number | undefined {
   if (a === undefined) return b;
   if (b === undefined) return a;
   return Math.min(a, b);
@@ -320,9 +344,10 @@ export function mergeBaselines(ours: Baseline, theirs: Baseline): Baseline {
     const b = theirs.mutation[file];
     mutation[file] = a === undefined ? b! : b === undefined ? a : tighterRecord(a, b);
   }
-  const duplication = tighterDuplication(ours.duplication, theirs.duplication);
+  const crap = tighterCount(ours.crap, theirs.crap);
+  const duplication = tighterCount(ours.duplication, theirs.duplication);
   return {
-    crap: Math.min(ours.crap, theirs.crap),
+    ...(crap === undefined ? {} : { crap }),
     ...(duplication === undefined ? {} : { duplication }),
     mutation,
   };

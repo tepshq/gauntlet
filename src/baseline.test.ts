@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BASELINE_FILENAME, conflictSides, hasConflictMarkers, loadBaseline, mergeBaselines, ratchet, ratchetByFile, resolveConflictedBaseline, saveBaseline, tighterRecord } from "./baseline.ts";
+import { BASELINE_FILENAME, conflictSides, hasConflictMarkers, loadBaseline, mergeBaselines, ratchetByFile, ratchetNumber, resolveConflictedBaseline, saveBaseline, tighterRecord } from "./baseline.ts";
 
 let root: string;
 
@@ -32,11 +32,25 @@ describe("loadBaseline", () => {
   it.each([
     ["ファイルが無い", null],
     ["JSON として壊れている", "{ not json"],
-    ["crap が無い", "{}"],
-    ["crap が数値でない", '{"crap": "many"}'],
+    ["オブジェクトでない", "29482"],
+    ["null が書かれている", "null"],
   ])("%s なら null（記録が無い）", (_label, contents) => {
     if (contents !== null) put(contents);
     expect(loadBaseline(root)).toBeNull();
+  });
+
+  // #28: crap が計測を中断した回は、完走した duplication だけが種を置く。その記録を
+  // 「crap = 0」として読むと、次に完走した回が「0 → 772 に増えました」で落ちる。
+  // 欠けているのは値であってファイルではないので、欄ごと無いまま読む。
+  it("crap が無ければ欄ごと無い（0 にしない）", () => {
+    put('{"duplication": 29482, "mutation": {}}');
+    expect(loadBaseline(root)).toEqual({ duplication: 29482, mutation: {} });
+  });
+
+  // 読めない値を 0 に丸めるのは、上と同じ事故（測っていないゲートに最も厳しい値が入る）。
+  it("crap が数値でなければ欄ごと無い", () => {
+    put('{"crap": "many", "duplication": 1090}');
+    expect(loadBaseline(root)).toEqual({ duplication: 1090, mutation: {} });
   });
 
   it("書いたものを読み戻せる", () => {
@@ -333,6 +347,17 @@ describe("mergeBaselines", () => {
     expect(mergeBaselines({ crap: 5, mutation: {} }, { crap: 3, mutation: {} }).crap).toBe(3);
   });
 
+  // #28 で crap も optional になった。`Math.min(undefined, 3)` は NaN で、それが記録に
+  // 書かれると以降どんな実測とも比べられない。duplication と同じ扱いに揃える。
+  it("crap は片方だけでもその値を残す", () => {
+    expect(mergeBaselines({ mutation: {} }, { crap: 3, mutation: {} }).crap).toBe(3);
+    expect(mergeBaselines({ crap: 3, mutation: {} }, { mutation: {} }).crap).toBe(3);
+  });
+
+  it("crap は両方無ければ欄ごと無し", () => {
+    expect(mergeBaselines({ mutation: {} }, { mutation: {} })).not.toHaveProperty("crap");
+  });
+
   it("duplication は両方有れば小さい方", () => {
     expect(mergeBaselines({ crap: 0, duplication: 200, mutation: {} }, { crap: 0, duplication: 100, mutation: {} }).duplication).toBe(100);
   });
@@ -422,21 +447,22 @@ describe("resolveConflictedBaseline", () => {
   });
 });
 
-describe("ratchet", () => {
+describe("ratchetNumber", () => {
   it("許容値ちょうどなら通す", () => {
-    expect(ratchet({ crap: 5, mutation: {} }, 5)).toEqual({ kind: "ok" });
+    expect(ratchetNumber(5, 5)).toEqual({ kind: "ok" });
   });
 
   it("許容値を超えたら落とす", () => {
-    expect(ratchet({ crap: 5, mutation: {} }, 6)).toEqual({ kind: "regressed", allowed: 5, actual: 6 });
+    expect(ratchetNumber(5, 6)).toEqual({ kind: "regressed", allowed: 5, actual: 6 });
   });
 
   // 改善を記録し損ねると許容値が緩いまま残り、後で同じだけ悪化させても通る。
   it("改善したら新しい値を返す", () => {
-    expect(ratchet({ crap: 5, mutation: {} }, 3)).toEqual({ kind: "improved", from: 5, to: 3 });
+    expect(ratchetNumber(5, 3)).toEqual({ kind: "improved", from: 5, to: 3 });
   });
 
+  // 許容 0 は「測って違反ゼロだった」。記録が無いのとは別物で、そのまま噛む。
   it("0 まで下がりきったら ok", () => {
-    expect(ratchet({ crap: 0, mutation: {} }, 0)).toEqual({ kind: "ok" });
+    expect(ratchetNumber(0, 0)).toEqual({ kind: "ok" });
   });
 });

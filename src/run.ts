@@ -212,7 +212,8 @@ export function baselineStoreFor(
 /** キー順に依存しない比較のための正規形。手で編集された記録は順序が揃っていない。 */
 function canonicalBaseline(baseline: Baseline): string {
   return JSON.stringify({
-    crap: baseline.crap,
+    // 「まだ測っていない」を 0 と同じ形にすると、種を置いた回が「動いていない」に見える。
+    crap: baseline.crap ?? null,
     duplication: baseline.duplication ?? null,
     mutation: Object.fromEntries(Object.entries(baseline.mutation).sort()),
   });
@@ -245,7 +246,8 @@ export function ratchetNote(before: Baseline | null, after: Baseline | null): st
 /** 記録のどこが動いたか。言い方は `ratchetNote` の仕事。 */
 export function ratchetChanges(before: Baseline, after: Baseline): string[] {
   const changes: string[] = [];
-  if (after.crap !== before.crap) changes.push(`CRAP 違反 ${before.crap} → ${after.crap}`);
+  // 前の回に crap が計測を中断していると、欄そのものが無い（0 ではない）。
+  if (after.crap !== before.crap) changes.push(`CRAP 違反 ${before.crap ?? "記録なし"} → ${after.crap}`);
   if (after.duplication !== before.duplication) {
     changes.push(`重複 ${before.duplication ?? 0} → ${after.duplication ?? 0} トークン`);
   }
@@ -638,7 +640,17 @@ export function countByFile(mutants: readonly { file: string }[]): Record<string
   return counts;
 }
 
-const EMPTY_BASELINE = { crap: 0, mutation: {} };
+/**
+ * 記録が無いときに欠けている欄を補う埋め草。**測っていないゲートの値は入れない。**
+ *
+ * ここに `crap: 0` を置いていたせいで、crap が計測を中断した回に duplication が
+ * 種を置くと、**crap ゲートが 1 度も書いていない 0 がディスクに残った**（#28）。
+ * 0 は最も厳しい値なので、次に完走した回は「0 → 772 に増えました」で落ち、
+ * guard が記録の書き換えを止めるためエージェントには出口が無くなる。
+ * `mutation` だけを埋めるのは、型が要求する欄で、かつ「ファイルごとに記録が無ければ
+ * 触らない」（#27）が空の Record でそのまま成り立つから。
+ */
+const EMPTY_BASELINE = { mutation: {} };
 
 /**
  * ファイル単位のラチェットを当て、記録を更新する。mutation が使う。
@@ -830,7 +842,10 @@ export function formatResult(result: TierResult): string {
   const seeded = result.checks.some((check) =>
     check.violations.some((violation) => violation.message === BASELINE_SEEDED.message),
   );
-  const footer = seeded ? [BASELINE_NOT_COMMITTED.message] : result.notes;
+  // **書けなかった回に「作りました」と言わない。** notes は「clean でないため保存して
+  // いません」を持っているので、そちらを優先する。逆にすると、書かれていない記録を
+  // コミットしに行かせる（#28 の修正で、crap の欄だけを後から置く回が普通になった）。
+  const footer = result.notes.length > 0 ? result.notes : seeded ? [BASELINE_NOT_COMMITTED.message] : [];
   return [header, ...lines, ...(footer.length === 0 ? [] : ["", ...footer])].join("\n");
 }
 
