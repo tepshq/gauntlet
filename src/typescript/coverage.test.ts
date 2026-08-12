@@ -76,3 +76,49 @@ describe("coverageByFunction", () => {
     expect(rates(source, [[1, 0, 0], [3, 2, 1]])).toEqual([["f", 1]]);
   });
 });
+
+/**
+ * 範囲の端。**ここを 1 つ間違えると全関数の網羅率が静かにずれ、CRAP の数字が全部狂う。**
+ *
+ * 上の describe は「典型的な形で正しく割り当たるか」を見ている。端は行と列の
+ * 両方に 4 つ（開始行・開始列・終了行・終了列）あり、どれも「1 つ内側」と
+ * 「1 つ外側」で答えが変わらないと検査になっていない。
+ */
+describe("coverageByFunction の境界", () => {
+  // 1 行に収まった関数。開始行の内側にある文を落とすと、その関数は
+  // 「覆うものが無い（= 1）」に化けて、網羅率 0% が満点として通る。
+  it("開始行の内側にある文を数える", () => {
+    expect(rates("function f() { const a = 1; }", [[1, 15, 0]])).toEqual([["f", 0]]);
+  });
+
+  // 後ろの文を吸うと、無関係な行の実行・未実行がその関数の網羅率を動かす。
+  it("終了行より後ろの文は数えない", () => {
+    const source = "function f() {\n  const a = 1;\n}\nconst tail = 2;";
+    expect(rates(source, [[2, 2, 1], [4, 0, 0]])).toEqual([["f", 1]]);
+  });
+
+  // 閉じ括弧と同じ行に続く文。行だけで見ると内側と区別がつかない。
+  it("終了行の、終了列より後ろの文は数えない", () => {
+    const source = "function f() {\n  const a = 1;\n} const tail = 2;";
+    expect(rates(source, [[2, 2, 1], [3, 2, 0]])).toEqual([["f", 1]]);
+  });
+
+  // 入れ子が同じ行から始まる形。行が同じなので、内外は列でしか決められない。
+  it("同じ行から始まる入れ子は、開始列で内側を選ぶ", () => {
+    const source = "function outer() { return [1].map((x) => { const c = 3; return c; }); }";
+    expect(rates(source, [[1, 19, 1], [1, 43, 0]])).toEqual([
+      ["outer", 1],
+      ["(anonymous)", 0],
+    ]);
+  });
+
+  // 逆に、行が違えば列は見てはいけない。外側が長い名前の代入で右に寄ると、
+  // **内側の方が左から始まる**。列で決めると外側を内側と取り違える。
+  it("行が違えば、内側が左にあっても行で内側を選ぶ", () => {
+    const source = "const someLongVariableName = () => {\nconst g = (x) => x;\nreturn g;\n};";
+    expect(rates(source, [[2, 0, 1], [3, 0, 1], [2, 17, 0]])).toEqual([
+      ["someLongVariableName", 1],
+      ["g", 0],
+    ]);
+  });
+});
