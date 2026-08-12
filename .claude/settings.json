@@ -6,17 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx gauntlet guard"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "if": "Bash(git commit *)",
-            "command": "npx gauntlet quick"
+            "command": "npx gauntlet hook"
           }
         ]
       }

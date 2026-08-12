@@ -292,7 +292,8 @@ export function probe(a: number, b: number): number {
 ```
 
 `git add <probe パス> && git commit -m "probe"` を**エージェント自身の Bash 呼び出しで**行う
-（スクリプトに包むとフックの `if` が `git commit` を見つけられず、素通りして確認にならない）。
+（スクリプトに包むとフックがコマンド文字列から `git commit` を見つけられず、
+素通りして確認にならない）。
 
 **`git add -A` にしない。** init が書いた 3 ファイルはまだコミットされていないので、
 `-A` だと probe commit に巻き込まれ、取り消しで一緒に消える。結果は 3 通り:
@@ -329,7 +330,9 @@ npx gauntlet full
 
 初回は「`gauntlet.baseline.json` を作りました。…コミットしてください」で**落ちる**。
 これが正常。ファイルはできているので、コミットしてもう一度回せば通る。コミットは
-`git add -A` で行う — ファイル名を含む Bash コマンドは guard が止める。
+`git add gauntlet.baseline.json` でも `git add -A` でも構わない — フックが止めるのは
+**書き換える形**の Bash コマンド（リダイレクト・`sed -i`・`rm`・`git restore` 等）だけで、
+読む・add するコマンドは通る。
 
 **種を置くのは手元の仕事。** CI が置いた種はコンテナの中に書かれて捨てられ、毎 PR が
 その PR の状態を許容値として置き直すので、ラチェットが一度も噛まない。
@@ -363,8 +366,8 @@ Stryker が対象リポジトリの vitest を起動できるかだけを見る�
 ## 触らないもの
 
 `gauntlet.baseline.json` は許容する違反数の記録で、減らすのは gauntlet が自動で行う。
-編集と、ファイル名に触れる Bash コマンドは `PreToolUse` フックで止まる（読むには Read
-ツール、コミットには `git add -A`）。赤を消すには違反そのものを直す。
+編集と、書き換える形の Bash コマンド（リダイレクト・`sed -i`・`rm`・`git restore` 等）は
+`PreToolUse` フックで止まる。読む・`git add` は通る。赤を消すには違反そのものを直す。
 
 ## 古いバージョンから上げる場合
 

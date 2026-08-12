@@ -98,7 +98,7 @@ const USAGE = `gauntlet <command>
   quick   差分に閉じた検査。型チェック + 関連テスト + 触った関数の CRAP
           （PreToolUse フックが git commit の直前に呼ぶ。手動でもそのまま叩ける）
   full    全量検査。上に加えて全テスト・重複・ラチェット・mutation（CI から）
-  list    baseline が許容している CRAP 違反を全部並べる（ゲートではない）
+  list    baseline が許容している CRAP 違反と mutation の生き残りを全部並べる（ゲートではない）
   doctor  Stryker が vitest を起動できるか確かめる（導入時に mutation は走らないため）
   init    設定とフックを置く（範囲の決め方と CI は skill が案内する）
   hook       PreToolUse フックから。baseline の書き換えを止め、git commit なら quick を回す

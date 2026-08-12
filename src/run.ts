@@ -861,15 +861,6 @@ export function doctor(root: string): string[] {
 }
 
 /**
- * baseline が今許容している CRAP 違反を全部並べる。**ゲートではない。**
- *
- * ratchet は数しか記録しないので、`{ "crap": 35 }` から「どの 35 件か」に辿れなかった
- * （h3 の導入報告。手で coverage を取り直して未参照コードと網羅率 0 の公開 API を
- * 見つけている）。赤を減らす作業に取りかかるには、この一覧が要る。
- *
- * mutation の生き残りは含めない — Stryker のフル実行（分単位）が要る別の道具になる。
- */
-/**
  * 記録している mutation の生き残り。**Stryker は回さない。**
  *
  * 数はもう記録の中にあるので、出すのはただの読み出し。どの変異かまでは
@@ -905,7 +896,14 @@ export function violatorReport(
   return formatViolators(repositoryViolators(report), scopeText(report), allowed);
 }
 
-/** 判断は `violatorReport` にある。ここはプロセスとファイルを触るだけの殻。 */
+/**
+ * baseline が今許容している CRAP 違反と mutation の生き残りを全部並べる。**ゲートではない。**
+ *
+ * ratchet は数しか記録しないので、`{ "crap": 35 }` から「どの 35 件か」に辿れなかった
+ * （h3 の導入報告。手で coverage を取り直して未参照コードと網羅率 0 の公開 API を
+ * 見つけている）。赤を減らす作業に取りかかるには、この一覧が要る。
+ * 判断は `violatorReport` と `mutationDebt` にある。ここはプロセスとファイルを触るだけの殻。
+ */
 export function listViolators(root: string): string {
   const config = loadConfig(root);
   const outcome = runTests(root, null, declaredProjects(config), [], config.source.include);

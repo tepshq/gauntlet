@@ -19,7 +19,7 @@ Robert C. Martin が 2026 年 7 月に「自分はもうエージェントのコ
 | `full` | CI | 赤なら**マージできない** |
 
 `quick` が効くのが一番の違いです。人間が「テスト通してね」と言わなくても、エージェントは
-緑になるまで終われません。数秒で終わるように作ってあります（実測: 5.5〜20 秒）。
+緑になるまで終われません。数秒〜数十秒で終わるように作ってあります（下の実測表）。
 
 ## 何を見るか
 
@@ -103,7 +103,8 @@ AAA の骨格が似るのは自然です。`exclude` に書く必要はありま
 `gauntlet.baseline.json` はエージェントが編集できないよう `PreToolUse` フックで守られます。
 赤を消す最短経路が「基準を緩める」になってしまうためです。人間は編集できます。
 
-記録されるのは**数**だけなので、中身は `list` で見ます（ゲートではないので通ります）。
+記録されるのは**数**だけ（mutation はファイルごとの生き残り・母数・打ち切りの数）なので、
+「どの関数か・どの変異か」は `list` で見ます（ゲートではないので通ります）。
 
 ```bash
 npx gauntlet list
@@ -112,6 +113,9 @@ npx gauntlet list
 ```
 CRAP 違反 35 件 / 測る対象 411 関数（50 ファイル）（gauntlet.baseline.json の許容 35）
   CRAP 132.0 (> 8)  複雑度 11 / 網羅率 0%  src/utils/internal/path.ts:12 joinURL  → 複雑度 9 以上は…
+
+記録している mutation の生き残り 22 件（1 ファイル）:
+    22  src/styleTypes.ts
 ```
 
 悪い順に全部並ぶので、上から手を付けられます（h3 では未参照のまま残っていた関数が
@@ -181,7 +185,7 @@ skill が範囲を決めたあと `gauntlet init --include=...` を叩き、**�
 
 | 置くもの | 内容 |
 | --- | --- |
-| `.claude/settings.json` | **フック 2 つ**（下記）。既存の設定は壊しません |
+| `.claude/settings.json` | **フック 1 本**（下記の 2 つの検問）。既存の設定は壊しません |
 | `gauntlet.config.json` | このリポジトリの事実。閾値は入りません |
 | `.gitignore` | 足りない行だけ追記 |
 
@@ -202,7 +206,8 @@ skill が範囲を決めたあと `gauntlet init --include=...` を叩き、**�
 
 ### Claude Code の挙動が変わります
 
-`init` が `.claude/settings.json` に `PreToolUse` フックを 2 つ足します。
+`init` が `.claude/settings.json` に `PreToolUse` フック（`npx gauntlet hook`）を 1 本足します。
+検問は 2 つで、どちらに当たるかは gauntlet が自分で判定します。
 **配線の手作業はありません** — このファイルはコミットで伝播するので、clone した全員に効きます。
 
 **1. コミットの検問** — エージェントが `git commit` しようとすると `gauntlet quick` が走り、
@@ -210,7 +215,7 @@ skill が範囲を決めたあと `gauntlet init --include=...` を叩き、**�
 不変条件になります。違反の内容はエージェントに直接届くので、そのまま直しにいきます:
 
 ```
-PreToolUse:Bash hook error: [npx gauntlet quick]: gauntlet quick: fail
+PreToolUse:Bash hook error: [npx gauntlet hook]: gauntlet quick: fail
   ✗ crap  CRAP 42.0 (> 8)  複雑度 6 / 網羅率 0%  src/probe.ts:1 tangled
 ```
 
@@ -270,7 +275,7 @@ projects: [
 ```bash
 npx gauntlet quick
 npx gauntlet full
-npx gauntlet list     # ゲートではない。baseline が許容している CRAP 違反を全部並べる
+npx gauntlet list     # ゲートではない。許容している CRAP 違反と mutation の生き残りを全部並べる
 npx gauntlet doctor   # Stryker が vitest を起動できるか（導入時に mutation は走らないため）
 ```
 
@@ -288,12 +293,13 @@ npx gauntlet doctor   # Stryker が vitest を起動できるか（導入時に 
 
 | repo | テスト数 | `quick` | `full` |
 | --- | --- | --- | --- |
-| gauntlet 自身 | 398 | 1.0 秒 | 20 秒 |
+| gauntlet 自身 | 691 | 0.8 秒 | 2.5 秒（変異対象 0 の回） |
 | hue | 412 | 5.5 秒 | 24 秒（CI） |
 | teps | 3822 | 10.4 秒 | 199 秒（CI） |
 | duct | 7213 | 64 秒 | 75 秒（手元） |
 
 `quick` は差分に関係するテストだけを走らせるので、変更したファイルによって前後します。
+`full` は差分が決める mutation の変異対象で大きく変わります（対象があれば分単位まで伸びます）。
 
 ## 設計
 

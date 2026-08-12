@@ -1,7 +1,7 @@
 # gauntlet
 
 エージェントが書いたコードを、人間がコードを読まずに機械的な制約で縛る、チーム共用の品質ゲート。
-coverage・CRAP・mutation testing を `quick`（差分に閉じた検査。起動点は Stop フック / pre-commit / 手動をリポジトリが選ぶ）と `full`（全量 + ラチェット + mutation。CI）の 2 tier で回す。
+coverage・CRAP・mutation testing・重複（+ 対象リポジトリの型チェック）を `quick`（差分に閉じた検査。エージェントの `git commit` を PreToolUse フックで止める）と `full`（全量 + ラチェット + mutation。CI）の 2 tier で回す。
 
 ## 設計を貫く 2 つの語
 
@@ -40,5 +40,6 @@ DESIGN.md / PLAN.md / CLAUDE.md は、コードと実測の現状に一致して
 ## このリポジトリ自身について
 
 gauntlet は自分自身の最初のユーザーで、閾値も ratchet も自分に適用する。
-CRAP ≤ 8 が実際の TypeScript でどれだけ厳しいかは未検証で、その一次情報をパイロット投入前にここで得る。
+CRAP ≤ 8 の一次情報は dogfooding で出た: 集中開発の 2 日間で絶対閾値に 6 回止められ、
+全て関数分割か純関数の抽出で解決した（DESIGN §7-4）。閾値を緩める理由はまだ出ていない。
 厳しすぎて実装が歪むと判断したら、閾値ではなく dogfooding の方を外してよい。
