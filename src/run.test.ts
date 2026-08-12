@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { diskStore, loadBaseline, memoryStore, saveBaseline } from "./baseline.ts";
 import { type GauntletConfig, ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, declaredProjects, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, settleConflictedBaseline, violatorReport, describeCrash, describeMutant, detailLines, formatResult, mutationRegressionText, mutationScopeText, mutationTargets, noCoverageText, noCoverageTotal, oneLine, timeoutTotal, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, declaredProjects, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, settleConflictedBaseline, violatorReport, describeCrash, describeMutant, detailLines, formatResult, mutationRegressionText, mutationScopeText, mutationTargets, mutationViolations, noCoverageText, slackPassNote, slackPassText, noCoverageTotal, oneLine, timeoutTotal, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -1218,6 +1218,80 @@ describe("mutationRegressionText", () => {
     const entry = { kind: "noCoverage", file: "a.ts", allowed: 1, actual: 2 } as const;
     expect(mutationRegressionText(entry, survived, uncovered)).not.toContain("L99");
   });
+
+  // 「自分の差分のせいではない」に到達できないと、直しようのない赤を追いかけることになる
+  // （#37 / #39）。文が消えても一覧は出るので、名指しの検査だけでは気づけない。
+  it("差分に無いファイルなら、そう言う", () => {
+    const entry = { kind: "noCoverage", file: "a.ts", allowed: 1, actual: 2 } as const;
+    expect(mutationRegressionText(entry, survived, uncovered, new Set())).toContain(
+      "\n  このファイルは差分にありません（変更したテストが覆っているので対象に入りました）。実行ごとに揺れることがあります",
+    );
+  });
+
+  it("差分にあるファイルには言わない", () => {
+    const entry = { kind: "noCoverage", file: "a.ts", allowed: 1, actual: 2 } as const;
+    expect(mutationRegressionText(entry, survived, uncovered, new Set(["a.ts"]))).not.toContain("差分にありません");
+  });
+});
+
+// #40。落とさないので、**言わなければ存在しないのと同じ**になる。gauntlet 自身で
+// 7 件が記録に入ったとき、出力に出たのは `mutation 2 ファイル` の 1 語だけだった。
+describe("slackPassText", () => {
+  const mutant = (file: string, line: number, mutator: string) => ({ file, line, mutator, replacement: "false" });
+  const survived = [mutant("a.ts", 809, "StringLiteral"), mutant("b.ts", 20, "BooleanLiteral")];
+  // 許容値を 0 にすると「超えた分」と「実測」が同じ数になり、引き算の間違いを検知できない。
+  const pass = { file: "a.ts", allowed: 1, actual: 3, slack: 25 } as const;
+
+  // 超えた件数・許容値・通した理由の 3 つが無いと、読み手は「なぜ緑なのか」に辿り着けない。
+  it("何件が許容値の外にあり、なぜ通ったかを言う", () => {
+    expect(slackPassText(pass, survived)).toContain(
+      "許容値に入っていない生き残りが 2 件あります（許容 1 / 実測 3。測った変異が 25 件増えたぶんで通しています）  a.ts",
+    );
+  });
+
+  // 記録が動いていないことを言わないと、「もう許容値に入った」と読める。
+  it("記録を動かしていないことと、直し方を言う", () => {
+    expect(slackPassText(pass, survived)).toContain(
+      "記録は動かしていません。殺すか、理由を書いた Stryker disable で外してください",
+    );
+  });
+
+  it("そのファイルの生き残りだけを名指しする", () => {
+    const text = slackPassText(pass, survived);
+    expect(text).toContain("L809 StringLiteral");
+    expect(text).not.toContain("L20 ");
+  });
+
+  describe("slackPassNote", () => {
+    // 余裕で通したファイルが無い回に空行が入ると、scope の括弧書きから段落が離れる。
+    it("無ければ何も足さない", () => {
+      expect(slackPassNote([], survived)).toBe("");
+    });
+
+    // scope の末尾にそのまま繋がるので、1 件目の前にも改行が要る。**全文で固定する** —
+    // 「含む」で見ると、区切りに余計な文字が入っても通ってしまう。
+    it("1 件ごとに改行で区切って並べる", () => {
+      const second = { file: "b.ts", allowed: 0, actual: 1, slack: 4 } as const;
+      expect(slackPassNote([pass, second], survived)).toBe(
+        `\n${slackPassText(pass, survived)}\n${slackPassText(second, survived)}`,
+      );
+    });
+  });
+});
+
+describe("mutationViolations", () => {
+  const entry = { kind: "noCoverage", file: "a.ts", allowed: 1, actual: 2 } as const;
+
+  // 落ちたファイルを違反に載せないと、報告がファイル単位で並ばない。
+  it("後退 1 件を、文とファイルを持つ違反にする", () => {
+    expect(mutationViolations([entry], [], [], new Set(["a.ts"]))).toEqual([
+      { message: noCoverageText(entry), file: "a.ts" },
+    ]);
+  });
+
+  it("後退が無ければ違反も無い", () => {
+    expect(mutationViolations([], [], [], new Set())).toEqual([]);
+  });
 });
 
 describe("mutationDebt", () => {
@@ -1703,6 +1777,14 @@ describe("mutationScopeText", () => {
 
   it("対象が無くても形は同じ", () => {
     expect(mutationScopeText(0, { static: 0, declared: 0 })).toBe("変異対象 0 ファイル");
+  });
+
+  // #40 の知らせは括弧書きではなく段落なので、括弧の並びの**後ろ**に付ける。
+  it("余裕で通した分は括弧書きの後ろに付ける", () => {
+    const disables = { unexplained: [], ineffective: [] };
+    expect(mutationScopeText(2, { static: 5, declared: 0 }, 0, [], {}, disables, "\n許容値の外に 1 件")).toBe(
+      "変異対象 2 ファイル（静的な変異 5 件は測っていません）\n許容値の外に 1 件",
+    );
   });
 
   // #34: 打ち切りは測定に入り、突き合わせでは生き残りと同じ「殺せなかった数」になるのに、

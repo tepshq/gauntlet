@@ -5,7 +5,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { type GauntletConfig, loadConfig } from "./config.ts";
-import { BASELINE_FILENAME, type Baseline, type BaselineStore, type MutationRecord, type MutationRegression, diskStore, loadBaseline, memoryStore, ratchetByFile, ratchetNumber, resolveConflictedBaseline, saveBaseline } from "./baseline.ts";
+import { BASELINE_FILENAME, type Baseline, type BaselineStore, type MutationRecord, type FileRatchet, type MutationRegression, type SlackPass, diskStore, loadBaseline, memoryStore, ratchetByFile, ratchetNumber, resolveConflictedBaseline, saveBaseline } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
 import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, touchedFunctions } from "./gate.ts";
 import { crap } from "./crap.ts";
@@ -758,18 +758,55 @@ export function mutationRegressionText(
   return withDetails(outside, mutants.filter((mutant) => mutant.file === entry.file).map(describeMutant));
 }
 
+/**
+ * 余裕で通したファイル 1 件。**違反ではないので落とさないが、毎回言う（#40）。**
+ *
+ * 記録を動かしていないので、殺すか外すまで同じ文が出続ける。名指しの一覧は後退の文と
+ * 同じ限界を持つ — 記録は数しか持たないので、超えた分だけを特定はできない。
+ */
+export function slackPassText(pass: SlackPass, survived: readonly ReportedMutant[]): string {
+  const head =
+    `許容値に入っていない生き残りが ${pass.actual - pass.allowed} 件あります` +
+    `（許容 ${pass.allowed} / 実測 ${pass.actual}。測った変異が ${pass.slack} 件増えたぶんで通しています）  ${pass.file}\n` +
+    "  記録は動かしていません。殺すか、理由を書いた Stryker disable で外してください";
+  return withDetails(head, survived.filter((mutant) => mutant.file === pass.file).map(describeMutant));
+}
+
+/** 余裕で通した分の知らせ。scope にぶら下げる（違反の列に混ぜると落ちたように読める）。 */
+export function slackPassNote(passes: readonly SlackPass[], survived: readonly ReportedMutant[]): string {
+  return passes.map((pass) => `\n${slackPassText(pass, survived)}`).join("");
+}
+
+/**
+ * 後退の一覧を違反に変える。
+ *
+ * **`mutationCheck` の中に置かない。** あそこはどのテストも通らない層（Stryker を回す）
+ * なので、置いた分だけ `NoCoverage` が増える（#31 のラチェットが止める）。
+ */
+export function mutationViolations(
+  regressed: readonly MutationRegression[],
+  survived: readonly ReportedMutant[],
+  noCoverage: readonly ReportedMutant[],
+  touched: ReadonlySet<string>,
+): Violation[] {
+  return regressed.map((entry) => ({
+    message: mutationRegressionText(entry, survived, noCoverage, touched),
+    file: entry.file,
+  }));
+}
+
+/** 記録を突き合わせて書き戻す。**判定の中身には触らない** — 文にするのは呼び出し側。 */
 function gateByFile(
   store: BaselineStore,
   key: "mutation",
   targets: readonly string[],
   counts: Record<string, MutationRecord>,
   touched: ReadonlySet<string>,
-  describe: (entry: MutationRegression) => string,
-): Violation[] {
+): FileRatchet {
   const baseline = store.load() ?? EMPTY_BASELINE;
-  const { regressed, updated } = ratchetByFile(baseline[key], targets, counts, touched);
-  store.save({ ...baseline, [key]: updated });
-  return regressed.map((entry) => ({ message: describe(entry), file: entry.file }));
+  const ratchet = ratchetByFile(baseline[key], targets, counts, touched);
+  store.save({ ...baseline, [key]: ratchet.updated });
+  return ratchet;
 }
 
 /** 括弧書き 1 つ分。件数が 0 なら黙る（「0 件」を並べると本題が埋もれる）。 */
@@ -871,6 +908,9 @@ export function mutationScopeText(
   // 入れ替えても型が通る。記録から数えれば画面と記録が構造的に一致する（#34 / #31）。
   records: Record<string, MutationRecord> = {},
   disables: DisableReview = { unexplained: [], ineffective: [] },
+  // 余裕で通した分（#40）。整形済みの文で受ける — ここに組み立てを持つと、
+  // 名指しに要る変異の一覧まで引き回すことになる。落とさない知らせなので scope に付く。
+  slack = "",
 ): string {
   const notes = [
     untestedText(untested),
@@ -880,7 +920,7 @@ export function mutationScopeText(
     droppedText(excluded),
     disableReviewText(disables),
   ];
-  return `変異対象 ${targets} ファイル${notes.join("")}`;
+  return `変異対象 ${targets} ファイル${notes.join("")}${slack}`;
 }
 
 /**
@@ -969,12 +1009,19 @@ function mutationCheck(
       timeout,
       noCoverage: countByFile(noCoverage),
     });
+    const ratchet = gateByFile(store, "mutation", targets, records, touched);
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
-      scope: mutationScopeText(targets.length, ignored, untested, excluded, records, disables),
-      violations: gateByFile(store, "mutation", targets, records, touched, (entry) =>
-        mutationRegressionText(entry, survived, noCoverage, touched),
+      scope: mutationScopeText(
+        targets.length,
+        ignored,
+        untested,
+        excluded,
+        records,
+        disables,
+        slackPassNote(ratchet.onSlack, survived),
       ),
+      violations: mutationViolations(ratchet.regressed, survived, noCoverage, touched),
     };
   });
 }

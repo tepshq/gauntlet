@@ -247,37 +247,82 @@ export type MutationRegression =
     }
   | { kind: "noCoverage"; file: string; allowed: number; actual: number };
 
+/**
+ * 記録された許容値を超えているのに、測定集合が広がった余裕（slack）で通したファイル。
+ *
+ * **落とさないが、許容値にも入れない（#40）。** 未計測だった変異が測定に入って
+ * 生き残ると、slack はその増加を必ず飲み込む（増分と生き残りが同じ原因から来るので、
+ * 件数では出所を割り当てられない）。飲み込んだ回に記録を実測で置き直すと、
+ * 誰も直していない生き残りが**そのまま許容値になる** — 記録は埋まり `full` は緑なので、
+ * 緩んだことに気づく手掛かりが残らない。
+ *
+ * だから通しはするが記録は動かさず（`recordFor`）、**解消されるまで毎回名指しする**。
+ * `noCoverage`（#31）と disable 点検（#32）が採っている「落とさずに言い続ける」と同じ形。
+ */
+export interface SlackPass {
+  file: string;
+  /** 記録された許容値（殺せなかった数 = 生き残り + 打ち切り）。 */
+  allowed: number;
+  /** 今回の実測（同じ数え方）。`allowed` を超えている。 */
+  actual: number;
+  /** 通した余裕。測った変異が増えた分（#24）。 */
+  slack: number;
+}
+
 export interface FileRatchet {
   regressed: MutationRegression[];
+  /** 余裕で通したが、許容値には入れなかったファイル（#40）。 */
+  onSlack: SlackPass[];
   updated: Record<string, MutationRecord>;
 }
 
 /**
- * ファイルごとに件数を突き合わせる。mutation が使う。
+ * 突き合わせる「殺せなかった数」= survived + timeout。
  *
- * 記録が無いファイルは今の実測値を種にする。既存リポジトリは導入時点で
- * 大量に抱えているので、0 から始めると誰も入れられない。
+ * 打ち切りの閾値は実行速度に比例して動くので、Survived と Timeout の境目は環境で
+ * 揺れる — 和は揺れない。旧記録（timeout 無し）は survived だけで比べる
+ * （和に混ぜると片側だけ膨らむ）。
  */
+function undetectedCount(limit: MutationRecord, actual: MutationRecord): number {
+  return limit.timeout == null ? actual.survived : actual.survived + (actual.timeout ?? 0);
+}
+
+/** 記録された許容値。`undetectedCount` と同じ数え方でなければ比べられない。 */
+function allowedCount(limit: MutationRecord): number {
+  return limit.survived + (limit.timeout ?? 0);
+}
+
+/**
+ * 測定集合が広がった分の余裕。**ソースが差分にあるファイルには作らない（#40）。**
+ *
+ * `measured` はテストを足しても増えるが、**本番コードを足しても増える**（新しい変異が
+ * Killed になった分もここに入る）。触ったファイルに余裕を渡すと、その PR 自身が書いた
+ * 弱い箇所の生き残りが自分で作った枠に収まって黙って通る。#24 が守りたかったのは
+ * 「**触っていない**ファイルの生き残りが、他所のテスト追加で測定に入って増え、
+ * 無関係な PR が落ちる」ことなので、言い訳を認める相手をそこに限る。
+ *
+ * 二重の歯止め: measured が 0 の記録にも余裕を作らない。0/0/0 の記録に measured の
+ * 余裕を与えると ceiling = actual.measured になり、survived + timeout は measured の
+ * 部分集合なので**必ず通る** — そのファイルのゲートが恒久的に無効になる（#27 で実測）。
+ */
+function measuredSlack(limit: MutationRecord, actual: MutationRecord, touched: boolean): number {
+  if (touched || !limit.measured) return 0;
+  return Math.max(0, (actual.measured ?? 0) - limit.measured);
+}
+
 /**
  * ファイル 1 つ分の突き合わせ。超えていれば報告の材料を、収まっていれば null を返す。
  *
- * 測定集合が広がった分（テストが増えて static が測定に入った等）は増加を許す。
  * 旧記録（measured 無し）には余裕を作れないので、従来どおり厳格に比べる。
- * 比べる数は「殺せなかった数」= survived + timeout。打ち切りの閾値は実行速度に
- * 比例して動くので、Survived と Timeout の境目は環境で揺れる — 和は揺れない。
- * 旧記録（timeout 無し）は survived だけで比べる（和に混ぜると片側だけ膨らむ）。
  */
 function undetectedRegression(
   file: string,
   limit: MutationRecord,
   actual: MutationRecord,
+  slack: number,
 ): MutationRegression | null {
-  // 二重の歯止め: measured が 0 の記録にも余裕を作らない。0/0/0 の記録に measured の
-  // 余裕を与えると ceiling = actual.measured になり、survived + timeout は measured の
-  // 部分集合なので**必ず通る** — そのファイルのゲートが恒久的に無効になる（#27 で実測）。
-  const slack = !limit.measured ? 0 : Math.max(0, (actual.measured ?? 0) - limit.measured);
-  const undetected = limit.timeout == null ? actual.survived : actual.survived + (actual.timeout ?? 0);
-  const allowed = limit.survived + (limit.timeout ?? 0);
+  const undetected = undetectedCount(limit, actual);
+  const allowed = allowedCount(limit);
   if (undetected <= allowed + slack) return null;
   return {
     kind: "undetected",
@@ -320,13 +365,24 @@ function noCoverageRegression(
 /** ファイル 1 つ分を全部の軸で突き合わせる。**両方増えたら両方言う** — 直し方が違う。 */
 function fileRegressions(
   file: string,
-  limit: MutationRecord | undefined,
+  limit: MutationRecord,
   actual: MutationRecord,
+  slack: number,
 ): MutationRegression[] {
-  if (limit === undefined) return [];
-  return [undetectedRegression(file, limit, actual), noCoverageRegression(file, limit, actual)].filter(
+  return [undetectedRegression(file, limit, actual, slack), noCoverageRegression(file, limit, actual)].filter(
     (entry): entry is MutationRegression => entry !== null,
   );
+}
+
+/**
+ * 許容値は超えているが、余裕で通したか。**後退していないことは呼び出し側が確かめてから呼ぶ。**
+ *
+ * 超えているのに後退になっていないなら、通したのは余裕しかない。
+ */
+function slackPass(file: string, limit: MutationRecord, actual: MutationRecord, slack: number): SlackPass | null {
+  const undetected = undetectedCount(limit, actual);
+  const allowed = allowedCount(limit);
+  return undetected <= allowed ? null : { file, allowed, actual: undetected, slack };
 }
 
 /**
@@ -470,14 +526,31 @@ export function resolveConflictedBaseline(text: string): Baseline | null {
  * ある**（そこを締めないと、いちばん歓迎すべき改善が記録されなくなる。#39 の指摘）。
  *
  * 旧記録（欄なし）への初回の書き込みは「締め」ではないので、触っていなくても入れる。
+ *
+ * **余裕で通した回は、突き合わせの両辺（生き残りと母数）も凍らせる（#40）。** 実測で
+ * 置き直すと、誰も直していない生き残りがそのまま許容値になり、次の回からは「超えている」
+ * ことすら分からなくなる。両辺を一緒に凍らせるのは、片方だけ動かすと次の回の余裕が
+ * 消えて**無関係な回が赤になる**ため — 同じコードで緑と赤が出るのが一番避けたい形。
+ * `noCoverage` と打ち切りは凍らせない（余裕を持たない軸なので、締めて安全）。
  */
-function recordFor(limit: MutationRecord | undefined, actual: MutationRecord, touched: boolean): MutationRecord {
-  const keep = limit?.timeout;
+function recordFor(
+  limit: MutationRecord,
+  actual: MutationRecord,
+  touched: boolean,
+  onSlack: boolean,
+): MutationRecord {
   // 触っていないファイルの打ち切りは**動かさない**（下げない・上げない）。上振れを
   // そのまま書くと記録が緩むので、「締めない」ではなく「凍らせる」が正しい。
-  return touched || keep == null ? actual : { ...actual, timeout: keep };
+  const kept = touched || limit.timeout == null ? actual : { ...actual, timeout: limit.timeout };
+  return onSlack ? { ...kept, survived: limit.survived, measured: limit.measured } : kept;
 }
 
+/**
+ * ファイルごとに件数を突き合わせる。mutation が使う。
+ *
+ * 記録が無いファイルは今の実測値を種にする。既存リポジトリは導入時点で
+ * 大量に抱えているので、0 から始めると誰も入れられない。
+ */
 export function ratchetByFile(
   allowed: Record<string, MutationRecord>,
   scanned: readonly string[],
@@ -486,6 +559,7 @@ export function ratchetByFile(
   touched: ReadonlySet<string> = new Set(scanned),
 ): FileRatchet {
   const regressed: FileRatchet["regressed"] = [];
+  const onSlack: FileRatchet["onSlack"] = [];
   const updated = { ...allowed };
   for (const file of scanned) {
     const actual = counts[file];
@@ -494,11 +568,22 @@ export function ratchetByFile(
     // measured の余裕と組み合わさってゲートが外れた）。候補に入っても測られない経路は
     // 普通にある — 型定義だけのファイル、変異の作れないファイル。
     if (actual === undefined) continue;
+    const limit = allowed[file];
+    if (limit === undefined) {
+      updated[file] = actual;
+      continue;
+    }
+    const slack = measuredSlack(limit, actual, touched.has(file));
     // どれか 1 つの軸でも後退していれば記録は動かさない（片方だけ締めると、
     // 後退した軸の許容値が「直った後の実測」で置き直せなくなる）。
-    const entries = fileRegressions(file, allowed[file], actual);
-    if (entries.length > 0) regressed.push(...entries);
-    else updated[file] = recordFor(allowed[file], actual, touched.has(file));
+    const entries = fileRegressions(file, limit, actual, slack);
+    if (entries.length > 0) {
+      regressed.push(...entries);
+      continue;
+    }
+    const pass = slackPass(file, limit, actual, slack);
+    if (pass !== null) onSlack.push(pass);
+    updated[file] = recordFor(limit, actual, touched.has(file), pass !== null);
   }
-  return { regressed, updated };
+  return { regressed, onSlack, updated };
 }

@@ -117,6 +117,7 @@ describe("ratchetByFile", () => {
   it("許容数ちょうどなら通す", () => {
     expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(2, 10) })).toEqual({
       regressed: [],
+      onSlack: [],
       updated: { "a.ts": record(2, 10), "b.ts": record(5, 20) },
     });
   });
@@ -124,34 +125,36 @@ describe("ratchetByFile", () => {
   it("増えていたら落とし、記録は上げない", () => {
     expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(4, 10) })).toEqual({
       regressed: [{ kind: "undetected", file: "a.ts", allowed: 2, actual: 4, survivedBefore: 2, survivedNow: 4, measuredBefore: 10, measuredNow: 10, timeoutBefore: null, timeoutNow: null }],
+      onSlack: [],
       updated: { "a.ts": record(2, 10), "b.ts": record(5, 20) },
     });
   });
 
   // **生き残りの数は単調ではない。** テストを足すと ignoreStatic で外れていた変異が
   // 測定に入り、触っていないファイルの生き残りが増える（39 → 41 で実際に落ちた）。
-  // 測定集合が広がった分だけ増加を許す。
+  // 測定集合が広がった分だけ増加を許す。**通すだけで、許容値には入れない（#40）。**
   it("測った数が増えた分だけは、生き残りの増加を許す", () => {
-    const outcome = ratchetByFile(allowed, ["a.ts"], { "a.ts": record(4, 12) });
+    const outcome = ratchetByFile(allowed, ["a.ts"], { "a.ts": record(4, 12) }, new Set());
     expect(outcome.regressed).toEqual([]);
-    expect(outcome.updated["a.ts"]).toEqual(record(4, 12));
+    expect(outcome.onSlack).toEqual([{ file: "a.ts", allowed: 2, actual: 4, slack: 2 }]);
+    expect(outcome.updated["a.ts"]).toEqual(record(2, 10));
   });
 
   it("測った数の増加を超える分は落とす", () => {
-    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(5, 12) }).regressed).toEqual([
+    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(5, 12) }, new Set()).regressed).toEqual([
       { kind: "undetected", file: "a.ts", allowed: 2, actual: 5, survivedBefore: 2, survivedNow: 5, measuredBefore: 10, measuredNow: 12, timeoutBefore: null, timeoutNow: null },
     ]);
   });
 
   // assert を消す形の攻撃は測った数が変わらない。余裕は生まれず、今までどおり落ちる。
   it("測った数が同じなら 1 件の増加も許さない", () => {
-    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(3, 10) }).regressed).toHaveLength(1);
+    expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(3, 10) }, new Set()).regressed).toHaveLength(1);
   });
 
   // 旧記録には測った数が無いので、余裕を作れない。従来どおり厳格に比べる。
   it("旧記録（measured 無し）は厳格に比べる", () => {
     const legacy = { "a.ts": record(2) };
-    expect(ratchetByFile(legacy, ["a.ts"], { "a.ts": record(3, 12) }).regressed).toEqual([
+    expect(ratchetByFile(legacy, ["a.ts"], { "a.ts": record(3, 12) }, new Set()).regressed).toEqual([
       { kind: "undetected", file: "a.ts", allowed: 2, actual: 3, survivedBefore: 2, survivedNow: 3, measuredBefore: null, measuredNow: 12, timeoutBefore: null, timeoutNow: null },
     ]);
   });
@@ -180,7 +183,7 @@ describe("ratchetByFile", () => {
   // 静かに通り続けるより、大声で落ちて人の目に入る方が安全側。
   it("measured が 0 の記録には余裕を作らない", () => {
     const poisoned = { "a.ts": record(0, 0, 0) };
-    expect(ratchetByFile(poisoned, ["a.ts"], { "a.ts": record(3, 30, 0) }).regressed).toHaveLength(1);
+    expect(ratchetByFile(poisoned, ["a.ts"], { "a.ts": record(3, 30, 0) }, new Set()).regressed).toHaveLength(1);
   });
 
   // 既存リポジトリは導入時点で大量に抱えている。0 から始めると誰も入れられない。
@@ -236,6 +239,61 @@ describe("ratchetByFile", () => {
       const outcome = ratchetByFile({ "a.ts": record(0, 200, 5) }, ["a.ts"], { "a.ts": record(0, 400, 7) }, new Set());
       expect(outcome.regressed).toEqual([]); // measured が増えた分の余裕で通る
       expect(outcome.updated["a.ts"]!.timeout).toBe(5);
+    });
+  });
+
+  // #40 の核心。`measured` はテストを足しても本番コードを足しても増えるので、増分を
+  // 無条件に余裕にすると「未検査だった生き残りが、増えた母数の枠に収まって自動で
+  // 許容値になる」。gauntlet 自身で 7 件出た（run.ts 2 / mutation.ts 5。全部 0.24.3 の
+  // 新コードで、母数を増やした変更が作ったものではない）。
+  describe("余裕は触っていないファイルにだけ作る（#40）", () => {
+    const limits = { "a.ts": record(0, 592, 0) };
+    const actual = { "a.ts": record(2, 617, 0) };
+
+    // 触ったファイルの母数は自分で増やせる。言い訳を認めると、その PR が書いた弱い箇所の
+    // 生き残りが自分で作った枠に収まって黙って通る。
+    it("ソースが差分にあれば余裕を作らない", () => {
+      const outcome = ratchetByFile(limits, ["a.ts"], actual, new Set(["a.ts"]));
+      expect(outcome.regressed).toHaveLength(1);
+      expect(outcome.onSlack).toEqual([]);
+      expect(outcome.updated["a.ts"]).toEqual(record(0, 592, 0));
+    });
+
+    // #24 が守りたかったのはこちら。落とさない — が、許容値にも入れない。
+    it("触っていなければ通すが、生き残りと母数は凍らせる", () => {
+      const outcome = ratchetByFile(limits, ["a.ts"], actual, new Set());
+      expect(outcome.regressed).toEqual([]);
+      expect(outcome.onSlack).toEqual([{ file: "a.ts", allowed: 0, actual: 2, slack: 25 }]);
+      expect(outcome.updated["a.ts"]).toEqual(record(0, 592, 0));
+    });
+
+    // **凍らせるのは両辺を一緒に。** 母数だけ実測で置くと次の回の余裕が消えて、
+    // 同じコードのまま緑が赤に変わる（緑が同じ意味でなくなる）。
+    it("次の回も同じように通る", () => {
+      const once = ratchetByFile(limits, ["a.ts"], actual, new Set());
+      const twice = ratchetByFile(once.updated, ["a.ts"], actual, new Set());
+      expect(twice.regressed).toEqual([]);
+      expect(twice.onSlack).toEqual(once.onSlack);
+      expect(twice.updated["a.ts"]).toEqual(record(0, 592, 0));
+    });
+
+    // 余裕を持たない軸まで止めると、返済（テストから呼べる形にした回）が記録されない。
+    it("未計測の減少は凍らせない", () => {
+      const withUncovered = { "a.ts": { survived: 0, measured: 592, timeout: 0, noCoverage: 81 } };
+      const outcome = ratchetByFile(
+        withUncovered,
+        ["a.ts"],
+        { "a.ts": { survived: 2, measured: 617, timeout: 0, noCoverage: 77 } },
+        new Set(),
+      );
+      expect(outcome.updated["a.ts"]).toEqual({ survived: 0, measured: 592, timeout: 0, noCoverage: 77 });
+    });
+
+    // 殺せば普通のラチェットに戻る。凍結は「未払いのあいだだけ」。
+    it("生き残りを殺せば記録は実測で置き直す", () => {
+      const outcome = ratchetByFile(limits, ["a.ts"], { "a.ts": record(0, 617, 0) }, new Set());
+      expect(outcome.onSlack).toEqual([]);
+      expect(outcome.updated["a.ts"]).toEqual(record(0, 617, 0));
     });
   });
 
