@@ -113,10 +113,11 @@ export function shouldBlock(input: HookInput): boolean {
 }
 
 // 「編集できません」だけだと、直しにいく先が分からない。止まる条件（書き換える形）と
-// 正規の経路（読む・ステージする・違反そのものを直す）まで言う。
+// 正規の経路（読む・ステージする・違反そのものを直す・衝突は gauntlet に解決させる）まで言う。
 export const GUARD_MESSAGE =
   `${BASELINE_FILENAME} を書き換える操作は止めています。` +
   `これは許容する違反数の記録で、減らすのは gauntlet が自動で行います。` +
   `赤を消すには違反そのものを直してください。` +
   `読むのは通ります（Read ツール、git diff / log / show / status）。` +
-  `コミットは git add でも git add -A でも構いません。`;
+  `コミットは git add でも git add -A でも構いません。` +
+  `マージで衝突したときも手で直さず、npx gauntlet quick を一度実行してください（厳しい側で自動解決されます）。`;

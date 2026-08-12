@@ -154,6 +154,11 @@ describe("vitestRunnerPlugin", () => {
   it("対象リポジトリから解決する", () => {
     const resolved = vitestRunnerPlugin(process.cwd());
     expect(resolved).toContain("@stryker-mutator/vitest-runner");
+    // **対象リポジトリの中**まで固定する。名前の一致だけだと、解決の基点が
+    // 親ディレクトリへずれる形を検知できない — リポジトリの中に入れ子で置いた
+    // worktree では Node の解決が親の node_modules へ抜けて偶然通り、
+    // 置き場所で結果が変わる（このリポジトリの worktree で実測）。
+    expect(resolved).toContain(join(process.cwd(), "node_modules"));
     expect(isAbsolute(resolved)).toBe(true);
   });
 

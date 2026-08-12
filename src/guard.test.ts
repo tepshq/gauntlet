@@ -37,7 +37,8 @@ describe("GUARD_MESSAGE", () => {
         "これは許容する違反数の記録で、減らすのは gauntlet が自動で行います。" +
         "赤を消すには違反そのものを直してください。" +
         "読むのは通ります（Read ツール、git diff / log / show / status）。" +
-        "コミットは git add でも git add -A でも構いません。",
+        "コミットは git add でも git add -A でも構いません。" +
+        "マージで衝突したときも手で直さず、npx gauntlet quick を一度実行してください（厳しい側で自動解決されます）。",
     );
   });
 

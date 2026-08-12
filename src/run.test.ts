@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { diskStore, loadBaseline, memoryStore, saveBaseline } from "./baseline.ts";
 import { ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, settleConflictedBaseline, violatorReport, describeCrash, describeSurvivor, detailLines, formatResult, mutationScopeText, mutationTargets, oneLine, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -839,6 +839,98 @@ describe("canRecordBaseline", () => {
   it("記録が無い回は settleBaseline の例外に任せる", () => {
     withRepo((root) => {
       expect(canRecordBaseline(root, "full", null)).toBe(false);
+    });
+  });
+});
+
+// 複数ブランチが両方で記録を締めるとマージ衝突は必ず起きるが、guard が書き換えを
+// 止めているのでエージェントには出口が無い。解決は gauntlet 自身の仕事。
+describe("settleConflictedBaseline", () => {
+  function withDir(body: (root: string) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-conflict-"));
+    try {
+      body(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+  const conflicted = [
+    "{",
+    "<<<<<<< HEAD",
+    '  "crap": 1,',
+    "=======",
+    '  "crap": 2,',
+    ">>>>>>> feature",
+    '  "mutation": {}',
+    "}",
+  ].join("\n");
+
+  it("衝突を厳しい側で解決して書き戻し、ステージを案内する", () => {
+    withDir((root) => {
+      writeFileSync(join(root, "gauntlet.baseline.json"), conflicted);
+      const notes = settleConflictedBaseline(root);
+      expect(notes).toHaveLength(1);
+      // 何が起きたか（厳しい側で解決）と次の一手（ステージ）の両方が要る。
+      expect(notes[0]).toContain("厳しい側を取って解決しました");
+      expect(notes[0]).toContain("git add gauntlet.baseline.json");
+      // 書き戻した結果はマーカーが消え、普通に読める。
+      expect(loadBaseline(root)).toEqual({ crap: 1, mutation: {} });
+    });
+  });
+
+  it("衝突していない記録には触らない", () => {
+    withDir((root) => {
+      const text = '{"crap": 7, "mutation": {}}';
+      writeFileSync(join(root, "gauntlet.baseline.json"), text);
+      expect(settleConflictedBaseline(root)).toEqual([]);
+      expect(readFileSync(join(root, "gauntlet.baseline.json"), "utf8")).toBe(text);
+    });
+  });
+
+  it("記録が無ければ何もしない", () => {
+    withDir((root) => {
+      expect(settleConflictedBaseline(root)).toEqual([]);
+    });
+  });
+
+  // 解決できない形は従来どおり「読めない記録」として種置き（赤くなる）に任せる。
+  it("解決できない衝突は書き戻さない", () => {
+    withDir((root) => {
+      const text = "<<<<<<< HEAD\n{ not json\n=======\n{ also broken\n>>>>>>> f";
+      writeFileSync(join(root, "gauntlet.baseline.json"), text);
+      expect(settleConflictedBaseline(root)).toEqual([]);
+      expect(readFileSync(join(root, "gauntlet.baseline.json"), "utf8")).toBe(text);
+    });
+  });
+
+  // 手書きのマーカーではなく、**git が実際に書く衝突**を読めることを固定する。
+  // 2 ブランチが両方で記録を締めた形 — 複数 worktree 開発で必ず起きる衝突そのもの。
+  it("git merge が作った実物の衝突を厳しい側で解決する", () => {
+    withDir((root) => {
+      const git = (...args: string[]): void => {
+        execFileSync("git", args, { cwd: root, stdio: "ignore" });
+      };
+      const baseline = (crap: number, survived: number): string =>
+        JSON.stringify({ crap, mutation: { "a.ts": { survived } }, duplication: 300 }, null, 2);
+      git("init", "-q", "-b", "main");
+      git("config", "user.name", "t");
+      git("config", "user.email", "t@t");
+      writeFileSync(join(root, "gauntlet.baseline.json"), baseline(10, 5));
+      git("add", "-A");
+      git("commit", "-qm", "base");
+      git("checkout", "-qb", "feature");
+      writeFileSync(join(root, "gauntlet.baseline.json"), baseline(8, 5));
+      git("commit", "-qam", "feature が crap を締める");
+      git("checkout", "-q", "main");
+      writeFileSync(join(root, "gauntlet.baseline.json"), baseline(9, 3));
+      git("commit", "-qam", "main が a.ts を締める");
+      expect(() => git("merge", "feature")).toThrow(); // 衝突で exit 1
+      expect(settleConflictedBaseline(root)).toHaveLength(1);
+      expect(loadBaseline(root)).toEqual({
+        crap: 8, // feature 側
+        mutation: { "a.ts": { survived: 3, measured: null, timeout: null } }, // main 側
+        duplication: 300,
+      });
     });
   });
 });

@@ -371,6 +371,8 @@ Stryker が対象リポジトリの vitest を起動できるかだけを見る�
 `gauntlet.baseline.json` は許容する違反数の記録で、減らすのは gauntlet が自動で行う。
 編集と、書き換える形の Bash コマンド（リダイレクト・`sed -i`・`rm`・`git restore` 等）は
 `PreToolUse` フックで止まる。読む・`git add` は通る。赤を消すには違反そのものを直す。
+マージで衝突したときも手で直さない — `npx gauntlet quick` を一度実行すると
+厳しい側で自動解決されるので、あとは `git add` してコミットする。
 
 ## 更新する
 

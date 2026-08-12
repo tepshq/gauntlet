@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { BASELINE_FILENAME, loadBaseline, ratchet, ratchetByFile, saveBaseline } from "./baseline.ts";
+import { BASELINE_FILENAME, conflictSides, hasConflictMarkers, loadBaseline, mergeBaselines, ratchet, ratchetByFile, resolveConflictedBaseline, saveBaseline, tighterRecord } from "./baseline.ts";
 
 let root: string;
 
@@ -208,6 +208,217 @@ describe("ratchetByFile", () => {
     expect(ratchetByFile(allowed, ["a.ts"], { "a.ts": record(0, 10), "b.ts": record(99, 20) }).updated["b.ts"]).toEqual(
       record(5, 20),
     );
+  });
+});
+
+// 複数ブランチが両方で記録を締めると、マージ時の衝突は構造的に必ず起きる。
+// guard が書き換えを止めているので、解決は gauntlet 自身の仕事になる。
+describe("hasConflictMarkers", () => {
+  it("3 種のマーカーが揃っていれば衝突", () => {
+    expect(hasConflictMarkers('<<<<<<< HEAD\n"crap": 1,\n=======\n"crap": 2,\n>>>>>>> feature')).toBe(true);
+  });
+
+  it("普通の記録は衝突ではない", () => {
+    expect(hasConflictMarkers('{"crap": 7, "mutation": {}}')).toBe(false);
+  });
+
+  // 1 種だけの一致で解決を走らせると、手で千切られた断片まで「解決」してしまう。
+  it.each([
+    ["開始だけ", '<<<<<<< HEAD\n"crap": 1'],
+    ["区切りだけ", '=======\n"crap": 1'],
+    ["終了だけ", '"crap": 1\n>>>>>>> feature'],
+    ["行頭でない", ' <<<<<<< HEAD\n =======\n >>>>>>> feature'],
+    // 3 種それぞれの行頭判定を別々に確かめる。1 つの入力で全部字下げすると、
+    // && の短絡で最初の判定しか観測できない。
+    ["開始だけ字下げ", " <<<<<<< HEAD\na\n=======\nb\n>>>>>>> f"],
+    ["区切りだけ字下げ", "<<<<<<< HEAD\na\n =======\nb\n>>>>>>> f"],
+    ["終了だけ字下げ", "<<<<<<< HEAD\na\n=======\nb\n >>>>>>> f"],
+    // 区切りは行として完全一致。後ろに何か付いた行はマーカーではない。
+    ["区切りに続きがある", "<<<<<<< HEAD\na\n=======x\nb\n>>>>>>> f"],
+  ])("マーカーが揃っていなければ衝突ではない（%s）", (_label, text) => {
+    expect(hasConflictMarkers(text)).toBe(false);
+  });
+});
+
+describe("conflictSides", () => {
+  it("共有行は両側に、衝突区間はそれぞれの側に入る", () => {
+    const text = ["{", "<<<<<<< HEAD", '  "crap": 1,', "=======", '  "crap": 2,', ">>>>>>> feature", '  "mutation": {}', "}"].join("\n");
+    expect(conflictSides(text)).toEqual({
+      ours: ['{', '  "crap": 1,', '  "mutation": {}', "}"].join("\n"),
+      theirs: ['{', '  "crap": 2,', '  "mutation": {}', "}"].join("\n"),
+    });
+  });
+
+  // merge.conflictStyle = diff3 / zdiff3 は共通祖先の区間を挟む。どちらの側でもない。
+  it("diff3 の base 区間は捨てる", () => {
+    const text = ["<<<<<<< HEAD", "a", "||||||| merged common ancestors", "base", "=======", "b", ">>>>>>> feature"].join("\n");
+    expect(conflictSides(text)).toEqual({ ours: "a", theirs: "b" });
+  });
+
+  it("衝突区間が複数あっても読める", () => {
+    const text = ["<<<<<<< HEAD", "a1", "=======", "b1", ">>>>>>> f", "shared", "<<<<<<< HEAD", "a2", "=======", "b2", ">>>>>>> f"].join("\n");
+    expect(conflictSides(text)).toEqual({ ours: ["a1", "shared", "a2"].join("\n"), theirs: ["b1", "shared", "b2"].join("\n") });
+  });
+
+  // 千切られた断片を JSON.parse に回すより、「読めない」に落とす方が安全。
+  it.each([
+    ["終了マーカーが無い", "<<<<<<< HEAD\na\n=======\nb"],
+    ["開始の入れ子", "<<<<<<< HEAD\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> f"],
+    ["区切りが先に来る", "=======\nb\n>>>>>>> f"],
+    ["base 区間が衝突の外", "||||||| base\n<<<<<<< HEAD\na\n=======\nb\n>>>>>>> f"],
+  ])("マーカーの対応が崩れていれば null（%s）", (_label, text) => {
+    expect(conflictSides(text)).toBeNull();
+  });
+
+  // マーカーに似ているだけの行は内容。行頭からの完全な形だけをマーカーとして扱う。
+  it("マーカーに続きや字下げのある行は内容として両側に残る", () => {
+    const text = ["<<<<<<< HEAD", "a", "=======", "b", ">>>>>>> f", "=======x", " >>>>>>> f"].join("\n");
+    expect(conflictSides(text)).toEqual({
+      ours: ["a", "=======x", " >>>>>>> f"].join("\n"),
+      theirs: ["b", "=======x", " >>>>>>> f"].join("\n"),
+    });
+  });
+});
+
+describe("tighterRecord", () => {
+  const record = (survived: number, measured: number | null = null, timeout: number | null = null) => ({
+    survived,
+    measured,
+    timeout,
+  });
+
+  // 突き合わせが見るのは「殺せなかった数」= survived + timeout。
+  it("survived + timeout が小さい方を取る", () => {
+    expect(tighterRecord(record(3, 10, 0), record(2, 10, 0))).toEqual(record(2, 10, 0));
+    expect(tighterRecord(record(2, 10, 0), record(3, 10, 0))).toEqual(record(2, 10, 0));
+  });
+
+  // 両側それぞれの timeout が和に入ることを別々に確かめる（片側だけだと
+  // もう片方の加算の変異が観測できない）。
+  it("timeout も殺せなかった数に入れる", () => {
+    expect(tighterRecord(record(2, 10, 3), record(4, 10, 0))).toEqual(record(4, 10, 0));
+    expect(tighterRecord(record(4, 10, 0), record(2, 10, 3))).toEqual(record(4, 10, 0));
+  });
+
+  // measured が大きいほど、測定集合の拡大で生まれる余裕（slack）が小さい = 厳しい。
+  // 引数の順序に依らないことも固定する。
+  it("和が同じなら measured が大きい方を取る", () => {
+    expect(tighterRecord(record(2, 10, 0), record(2, 30, 0))).toEqual(record(2, 30, 0));
+    expect(tighterRecord(record(2, 30, 0), record(2, 10, 0))).toEqual(record(2, 30, 0));
+  });
+
+  // 完全な同点はどちらでも同じ値だが、返すのは ours 側と決めて固定する。
+  it("完全な同点は ours 側", () => {
+    const a = record(2, 10, 0);
+    expect(tighterRecord(a, record(2, 10, 0))).toBe(a);
+  });
+
+  // 旧形式（measured 無し）は slack を作れない = 一番厳しい。
+  it("和が同じなら measured 無しが勝つ", () => {
+    expect(tighterRecord(record(2, 10, 0), record(2))).toEqual(record(2));
+  });
+
+  // どちらの実測でもない値を合成しない。返るのは必ずどちらか丸ごと（同一の参照）。
+  it("欄を混ぜた第 3 の record を作らない", () => {
+    const a = record(2, 10, 1);
+    const b = record(4, 30, 0);
+    expect(tighterRecord(a, b)).toBe(a);
+  });
+});
+
+describe("mergeBaselines", () => {
+  const record = (survived: number) => ({ survived, measured: null, timeout: null });
+
+  it("crap は小さい方", () => {
+    expect(mergeBaselines({ crap: 5, mutation: {} }, { crap: 3, mutation: {} }).crap).toBe(3);
+  });
+
+  it("duplication は両方有れば小さい方", () => {
+    expect(mergeBaselines({ crap: 0, duplication: 200, mutation: {} }, { crap: 0, duplication: 100, mutation: {} }).duplication).toBe(100);
+  });
+
+  // 無い方は「まだゲートが無い」。有る方が常に厳しい。
+  it("duplication は片方だけでもその値を残す", () => {
+    expect(mergeBaselines({ crap: 0, mutation: {} }, { crap: 0, duplication: 100, mutation: {} }).duplication).toBe(100);
+    expect(mergeBaselines({ crap: 0, duplication: 100, mutation: {} }, { crap: 0, mutation: {} }).duplication).toBe(100);
+  });
+
+  it("duplication は両方無ければ欄ごと無し", () => {
+    expect(mergeBaselines({ crap: 0, mutation: {} }, { crap: 0, mutation: {} })).not.toHaveProperty("duplication");
+  });
+
+  // 片側にしか無い記録を落とすと、その負債が消える。
+  it("mutation はファイルの和集合", () => {
+    const merged = mergeBaselines(
+      { crap: 0, mutation: { "a.ts": record(1) } },
+      { crap: 0, mutation: { "b.ts": record(2) } },
+    );
+    expect(merged.mutation).toEqual({ "a.ts": record(1), "b.ts": record(2) });
+  });
+
+  it("両側に有るファイルは厳しい側", () => {
+    const merged = mergeBaselines(
+      { crap: 0, mutation: { "a.ts": record(5) } },
+      { crap: 0, mutation: { "a.ts": record(2) } },
+    );
+    expect(merged.mutation["a.ts"]).toEqual(record(2));
+  });
+});
+
+describe("resolveConflictedBaseline", () => {
+  const conflicted = [
+    "{",
+    "<<<<<<< HEAD",
+    '  "crap": 1,',
+    "=======",
+    '  "crap": 2,',
+    ">>>>>>> feature",
+    '  "mutation": {',
+    '    "a.ts": { "survived": 3 }',
+    "  }",
+    "}",
+  ].join("\n");
+
+  it("両側を読んで厳しい側でマージする", () => {
+    expect(resolveConflictedBaseline(conflicted)).toEqual({
+      crap: 1,
+      mutation: { "a.ts": { survived: 3, measured: null, timeout: null } },
+    });
+  });
+
+  // theirs 側が厳しい例も要る。ours 側が厳しい例だけだと、
+  // 「マージせず常に ours を返す」形とマージの区別がつかない。
+  it("theirs 側が厳しければそちらを取る", () => {
+    const text = ["{", "<<<<<<< HEAD", '  "crap": 2,', "=======", '  "crap": 1,', ">>>>>>> feature", '  "mutation": {}', "}"].join("\n");
+    expect(resolveConflictedBaseline(text)).toEqual({ crap: 1, mutation: {} });
+  });
+
+  // 衝突でないものに触ると、正常な読み込みまでこの経路に乗ってしまう。
+  it("マーカーが無ければ null", () => {
+    expect(resolveConflictedBaseline('{"crap": 7, "mutation": {}}')).toBeNull();
+  });
+
+  // 種置き（負債の記録が全部消える）に落とすより、どちらかの実測が残る方が近い。
+  it("片側だけ読めるなら読める側", () => {
+    const text = ["<<<<<<< HEAD", '{"crap": 4, "mutation": {}}', "=======", "{ not json", ">>>>>>> feature"].join("\n");
+    expect(resolveConflictedBaseline(text)).toEqual({ crap: 4, mutation: {} });
+  });
+
+  it("両側とも読めなければ null", () => {
+    const text = ["<<<<<<< HEAD", "{ not json", "=======", "{ also broken", ">>>>>>> feature"].join("\n");
+    expect(resolveConflictedBaseline(text)).toBeNull();
+  });
+
+  it("マーカーの対応が崩れていれば null", () => {
+    const text = ["<<<<<<< HEAD", '{"crap": 1, "mutation": {}}', "=======", '{"crap": 2, "mutation": {}}'].join("\n");
+    expect(resolveConflictedBaseline(text)).toBeNull();
+  });
+
+  // 3 種が揃っていても順序が崩れている形。マーカー検出は通り、再構成で落ちる —
+  // その経路（conflictSides が null）を resolveConflictedBaseline 越しに確かめる。
+  it("マーカーが揃っていても順序が崩れていれば null", () => {
+    const text = [">>>>>>> f", "<<<<<<< HEAD", '{"crap": 1, "mutation": {}}', "=======", '{"crap": 2, "mutation": {}}'].join("\n");
+    expect(resolveConflictedBaseline(text)).toBeNull();
   });
 });
 

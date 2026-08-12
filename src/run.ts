@@ -2,10 +2,10 @@
  * tier の実行。CLI から切り離してテスト可能にしてある。
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { type GauntletConfig, loadConfig } from "./config.ts";
-import { BASELINE_FILENAME, type Baseline, type BaselineStore, type FileRatchet, type MutationRecord, diskStore, loadBaseline, memoryStore, ratchetByFile, ratchetNumber } from "./baseline.ts";
+import { BASELINE_FILENAME, type Baseline, type BaselineStore, type FileRatchet, type MutationRecord, diskStore, loadBaseline, memoryStore, ratchetByFile, ratchetNumber, resolveConflictedBaseline, saveBaseline } from "./baseline.ts";
 import { type Captured, captureShell } from "./exec.ts";
 import { crapText, gateRepository, gateTouched, measurementFaults, repositoryViolators, touchedFunctions } from "./gate.ts";
 import { crap } from "./crap.ts";
@@ -84,6 +84,7 @@ export type Notify = (line: string) => void;
 
 export function runTier(root: string, tier: TierName, notify: Notify = () => {}): TierResult {
   const started = performance.now();
+  const conflictNotes = settleConflictedBaseline(root);
   // 記録は改善のたびに gauntlet 自身が書き換える。**書き換えたことを言わないと
   // コミットし忘れ、次の実行でまた同じ値が置き直される**（新規導入で実測）。
   // 前後を突き合わせるだけなので、各ゲートに手を入れずに済む。
@@ -140,8 +141,34 @@ export function runTier(root: string, tier: TierName, notify: Notify = () => {})
     status: tierStatus(checks),
     checks,
     durationMs: performance.now() - started,
-    notes: baselineNotes(store, before, persist),
+    notes: [...conflictNotes, ...baselineNotes(store, before, persist)],
   };
+}
+
+/**
+ * マージで衝突した記録を、gauntlet 自身が解決して書き戻す。
+ *
+ * 複数ブランチが両方で記録を締めると、マージ時の衝突は構造的に必ず起きる。
+ * guard が書き換えを止めているのでエージェントには出口が無く（Edit も
+ * `git checkout --theirs` も止まる）、放置すると parse 不能 → 記録なし → 種置きで
+ * **負債の記録が全部消える**という一番悪い経路に落ちる。両側とも実測として
+ * コミットされた値なので、厳しい側を機械的に取ればエージェントに値を選ばせずに済む。
+ *
+ * dirty なツリーへの書き込みだが「作業途中の実測を基準にしない」原則には反しない —
+ * 書くのは今の実測ではなく、コミット済みの 2 つの実測の厳しい側。
+ * 解決できない形（マーカーが千切れている等）はここでは何もせず、従来どおり
+ * 「読めない記録」として種置き（それは赤くなる）に任せる。
+ */
+export function settleConflictedBaseline(root: string): string[] {
+  const path = join(root, BASELINE_FILENAME);
+  if (!existsSync(path)) return [];
+  const resolved = resolveConflictedBaseline(readFileSync(path, "utf8"));
+  if (resolved === null) return [];
+  saveBaseline(root, resolved);
+  return [
+    `${BASELINE_FILENAME} のマージ衝突を、フィールドごとに厳しい側を取って解決しました。` +
+      `git add ${BASELINE_FILENAME} でステージしてください`,
+  ];
 }
 
 /**

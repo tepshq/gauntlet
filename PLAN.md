@@ -471,6 +471,32 @@ CLI に LLM を入れる案は flaky そのもの（走るたびに違う提案�
 - baseline の `lint` キーは `loadBaseline` が読まなくなったので **`full` が保存する
   時点で自動的に落ちた**（guard を回避せずに移行できる形）
 
+### 複数 worktree 並行開発: baseline のマージ衝突を gauntlet 自身が解決する（2026-08-12）
+
+「複数エージェント × 複数 worktree に耐えるか」の点検から。**プロセスの並行性は既に
+設計済みだった** — 一時ファイルは全部 mkdtemp、mutation の二重起動ロックは root 単位
+（worktree ごとに別）、git は cwd 起点。壊れるのは**複数ブランチが両方で記録を締めた後の
+マージ衝突**で、しかも二重に悪い形だった:
+
+- マーカー入りのファイルは JSON として読めず、「記録なし → 種置きで**負債の記録が全部消える**」に落ちる
+- guard が出口を全部塞いでいる（`Edit` も `sed -i` も `git checkout --theirs` も止まる）
+  ので、エージェントは自力で抜けられない
+
+quick / full の冒頭で衝突を検出し、フィールドごとに厳しい側（crap / duplication は小さい方、
+mutation はファイルの和集合 + `survived + timeout` が小さい record）で解決して書き戻す形に
+した（DESIGN §3）。git の merge driver は clone ごとの `git config` 配線が要るので不採用
+（`.githooks` を捨てたのと同じ理由）。実物の `git merge` が作る衝突は**部分衝突**（衝突しない
+行は git が自動マージし、マーカーは食い違う行だけを挟む）なので、その形をテストで固定した。
+
+**副産物: worktree 入れ子による場所依存の flaky を 1 件除去。** リポジトリ内
+（`.claude/worktrees/`）の worktree で `full` を回すと、`vitestRunnerPlugin` の
+`"package.json"` → `""` 変異が Node の親ディレクトリ遡りで**本体の node_modules に抜けて
+生き残る**（本体の checkout や CI では killed — 同じコードで置き場所により答えが変わる）。
+テストを「対象リポジトリの**中**で解決した」まで固定して場所非依存にした。
+
+全ゲート緑（742 テスト、full 45.9 秒）。承知の上で残すもの: リポジトリ全体の 1 つの数
+（crap / duplication）は並行ブランチをまたぐと緩む方向にずれる（DESIGN §7-10）。
+
 ### 自分のスコアを全量で測った（2026-08-12）
 
 これまで自分の mutation は**差分に入ったファイルしか**測っていなかった。初めて全 src

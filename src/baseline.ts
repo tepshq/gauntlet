@@ -72,16 +72,10 @@ function toRecord(value: unknown): MutationRecord | null {
   return null;
 }
 
-/**
- * まだ記録が無ければ null。
- *
- * 呼び出し側は最初の実測値でそこに種を置く。0 から始めると、既存リポジトリは
- * 導入した瞬間に赤で埋まって誰も入れられない。ラチェットは「今より悪くしない」
- * ための仕組みであって、導入初日に借金を返させるものではない。
- */
-export function loadBaseline(root: string): Baseline | null {
+/** 読める形なら Baseline に、そうでなければ null。読み込みと衝突解決が共有する。 */
+export function parseBaseline(text: string): Baseline | null {
   try {
-    const data = JSON.parse(readFileSync(join(root, BASELINE_FILENAME), "utf8")) as Partial<Baseline>;
+    const data = JSON.parse(text) as Partial<Baseline>;
     if (typeof data.crap !== "number") return null;
     const mutation: Record<string, MutationRecord> = {};
     for (const [file, value] of Object.entries(data.mutation ?? {})) {
@@ -94,6 +88,21 @@ export function loadBaseline(root: string): Baseline | null {
       ...(typeof data.duplication === "number" ? { duplication: data.duplication } : {}),
       mutation,
     };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * まだ記録が無ければ null。
+ *
+ * 呼び出し側は最初の実測値でそこに種を置く。0 から始めると、既存リポジトリは
+ * 導入した瞬間に赤で埋まって誰も入れられない。ラチェットは「今より悪くしない」
+ * ための仕組みであって、導入初日に借金を返させるものではない。
+ */
+export function loadBaseline(root: string): Baseline | null {
+  try {
+    return parseBaseline(readFileSync(join(root, BASELINE_FILENAME), "utf8"));
   } catch {
     return null;
   }
@@ -215,6 +224,125 @@ function fileRegression(
     timeoutBefore: limit.timeout,
     timeoutNow: actual.timeout,
   };
+}
+
+/**
+ * git の衝突マーカー。**行頭の 7 連続文字だけを見る。**
+ *
+ * 記録は gauntlet が書く JSON（インデント付き）なので、通常の内容が行頭から
+ * マーカーで始まることは無い。3 種が揃っているときだけ衝突とみなす —
+ * 1 種だけの一致で解決を走らせると、手で千切られた断片まで「解決」してしまう。
+ */
+export function hasConflictMarkers(text: string): boolean {
+  return /^<{7} /m.test(text) && /^={7}$/m.test(text) && /^>{7} /m.test(text);
+}
+
+/** マーカー行が区間をどう動かすか。`from` に居ないときの一致は対応の崩れ。 */
+type Region = "shared" | "ours" | "base" | "theirs";
+const MARKER_TRANSITIONS: readonly { marker: RegExp; from: readonly Region[]; to: Region }[] = [
+  { marker: /^<{7} /, from: ["shared"], to: "ours" },
+  // diff3 / zdiff3 の base 区間。ラベルは付くことも付かないこともある。
+  { marker: /^\|{7}( |$)/, from: ["ours"], to: "base" },
+  { marker: /^={7}$/, from: ["ours", "base"], to: "theirs" },
+  { marker: /^>{7} /, from: ["theirs"], to: "shared" },
+];
+
+/** その区間の行が入る側。base はどちらの側でもない（マージ前の共通祖先）。 */
+const REGION_SIDES: Record<Region, readonly ("ours" | "theirs")[]> = {
+  shared: ["ours", "theirs"],
+  ours: ["ours"],
+  base: [],
+  theirs: ["theirs"],
+};
+
+/**
+ * 衝突マーカーから両側の全文を再構成する。
+ *
+ * git は差分の行だけをマーカーで挟むので、外側の共有行は両側に入れる。
+ * マーカーの対応が崩れていれば null — 千切られた断片を JSON.parse に回すより、
+ * 「読めない」に落として種置き（それは赤くなる）に任せる方が安全。
+ */
+export function conflictSides(text: string): { ours: string; theirs: string } | null {
+  const sides = { ours: [] as string[], theirs: [] as string[] };
+  let region: Region = "shared";
+  for (const line of text.split("\n")) {
+    const transition = MARKER_TRANSITIONS.find((entry) => entry.marker.test(line));
+    if (transition === undefined) {
+      for (const side of REGION_SIDES[region]) sides[side].push(line);
+    } else if (transition.from.includes(region)) {
+      region = transition.to;
+    } else {
+      return null;
+    }
+  }
+  if (region !== "shared") return null;
+  return { ours: sides.ours.join("\n"), theirs: sides.theirs.join("\n") };
+}
+
+/**
+ * 2 つの記録の厳しい側。
+ *
+ * 突き合わせが見るのは「殺せなかった数」= survived + timeout なので、その和が
+ * 小さい方が厳しい。和が同じなら measured が大きい方 — 測定集合が広がった分だけ
+ * 増加を許す（slack）ので、measured が大きいほど将来の余裕が小さい。
+ * measured 無し（旧形式）は slack を作れない = 一番厳しいので、和が同じなら勝つ。
+ * 2 つの record の欄を混ぜて第 3 の record を合成することはしない —
+ * どちらの実測でもない値を記録に書かない。
+ */
+export function tighterRecord(a: MutationRecord, b: MutationRecord): MutationRecord {
+  const undetectedA = a.survived + (a.timeout ?? 0);
+  const undetectedB = b.survived + (b.timeout ?? 0);
+  if (undetectedA < undetectedB) return a;
+  if (undetectedB < undetectedA) return b;
+  return (a.measured ?? Infinity) >= (b.measured ?? Infinity) ? a : b;
+}
+
+/** 無い方は「まだゲートが無い」なので、有る方が常に厳しい。両方有れば小さい方。 */
+function tighterDuplication(a: number | undefined, b: number | undefined): number | undefined {
+  if (a === undefined) return b;
+  if (b === undefined) return a;
+  return Math.min(a, b);
+}
+
+/**
+ * 衝突した 2 つの記録を、フィールドごとに厳しい側でマージする。
+ *
+ * 両側とも「どこかのブランチで実測してコミットされた値」なので、厳しい側を
+ * 機械的に取ればエージェントに値を選ばせずに済む（gameable にならない）。
+ * 厳しすぎる方向にずれたら、それはラチェットが普段から出す要求
+ * （後からマージする側が差を埋める）と同じ形で現れる。
+ * mutation はファイルの和集合 — 片側にしか無い記録を落とすと、その負債が消える。
+ */
+export function mergeBaselines(ours: Baseline, theirs: Baseline): Baseline {
+  const mutation: Record<string, MutationRecord> = {};
+  for (const file of new Set([...Object.keys(ours.mutation), ...Object.keys(theirs.mutation)])) {
+    const a = ours.mutation[file];
+    const b = theirs.mutation[file];
+    mutation[file] = a === undefined ? b! : b === undefined ? a : tighterRecord(a, b);
+  }
+  const duplication = tighterDuplication(ours.duplication, theirs.duplication);
+  return {
+    crap: Math.min(ours.crap, theirs.crap),
+    ...(duplication === undefined ? {} : { duplication }),
+    mutation,
+  };
+}
+
+/**
+ * 衝突した記録の本文を解決する。衝突でない・読めないなら null（呼び出し側は何もしない）。
+ *
+ * 片側だけ読めるなら読める側 — 種置き（負債の記録が全部消える）に落とすより、
+ * どちらかの実測が残る方が近い。
+ */
+export function resolveConflictedBaseline(text: string): Baseline | null {
+  if (!hasConflictMarkers(text)) return null;
+  const sides = conflictSides(text);
+  if (sides === null) return null;
+  const parsed = [parseBaseline(sides.ours), parseBaseline(sides.theirs)].filter(
+    (side): side is Baseline => side !== null,
+  );
+  if (parsed.length === 0) return null;
+  return parsed.length === 1 ? parsed[0]! : mergeBaselines(parsed[0]!, parsed[1]!);
 }
 
 export function ratchetByFile(
