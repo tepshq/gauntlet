@@ -1,26 +1,39 @@
 {
   "crap": 0,
+  "duplication": 0,
   "mutation": {
     "src/baseline.ts": {
-      "survived": 1
+      "survived": 1,
+      "measured": 214,
+      "timeout": 0
     },
     "src/cli.ts": {
       "survived": 0
     },
     "src/config.ts": {
-      "survived": 16
+      "survived": 1,
+      "measured": 43,
+      "timeout": 0
     },
     "src/crap.ts": {
-      "survived": 0
+      "survived": 0,
+      "measured": 12,
+      "timeout": 0
     },
     "src/gate.ts": {
-      "survived": 0
+      "survived": 0,
+      "measured": 126,
+      "timeout": 0
     },
     "src/git.ts": {
-      "survived": 0
+      "survived": 0,
+      "measured": 103,
+      "timeout": 0
     },
     "src/guard.ts": {
-      "survived": 2
+      "survived": 0,
+      "measured": 69,
+      "timeout": 0
     },
     "src/index.ts": {
       "survived": 0
@@ -29,16 +42,22 @@
       "survived": 0
     },
     "src/report.ts": {
-      "survived": 0
+      "survived": 0,
+      "measured": 7,
+      "timeout": 0
     },
     "src/run.ts": {
-      "survived": 0
+      "survived": 0,
+      "measured": 545,
+      "timeout": 0
     },
     "src/tier.ts": {
       "survived": 0
     },
     "src/typescript/adapter.ts": {
-      "survived": 0
+      "survived": 0,
+      "measured": 57,
+      "timeout": 0
     },
     "src/typescript/ast.ts": {
       "survived": 8
@@ -50,10 +69,14 @@
       "survived": 10
     },
     "src/typescript/mutation.ts": {
-      "survived": 0
+      "survived": 0,
+      "measured": 151,
+      "timeout": 0
     },
     "src/typescript/runner.ts": {
-      "survived": 0
+      "survived": 0,
+      "measured": 109,
+      "timeout": 0
     },
     "src/exec.ts": {
       "survived": 3
@@ -68,8 +91,9 @@
       "survived": 1
     },
     "src/package-manager.ts": {
-      "survived": 1
+      "survived": 1,
+      "measured": 44,
+      "timeout": 0
     }
-  },
-  "duplication": 0
+  }
 }
