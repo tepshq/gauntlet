@@ -4,7 +4,7 @@
   "mutation": {
     "src/baseline.ts": {
       "survived": 2,
-      "measured": 244,
+      "measured": 272,
       "timeout": 0,
       "noCoverage": 0
     },
@@ -54,9 +54,9 @@
     },
     "src/run.ts": {
       "survived": 2,
-      "measured": 617,
+      "measured": 642,
       "timeout": 0,
-      "noCoverage": 77
+      "noCoverage": 74
     },
     "src/tier.ts": {
       "survived": 0
@@ -84,7 +84,7 @@
     },
     "src/typescript/mutation.ts": {
       "survived": 5,
-      "measured": 221,
+      "measured": 222,
       "timeout": 0,
       "noCoverage": 59
     },
