@@ -567,16 +567,20 @@ export function runMutation(
   files: readonly string[],
   projects: readonly string[],
 ): MutationOutcome {
-  const { captured, excluded } = launchStryker(root, files, projects, []);
   const path = join(root, REPORT_PATH);
+  // **走らせる前に前回のレポートを消す。** 「レポートが無ければ失敗」という検出は
+  // 前回の残骸が無いことが前提で、0.21.0 で「実行後に消さない」ようにした瞬間に
+  // その前提が壊れていた — Stryker が失敗しても古いレポートが existsSync を満たし、
+  // **前回の結果を黙って読んで記録まで更新する**（#27 の追試で実測。0.22.1 の残骸を
+  // 2 版にわたって読み続けていた）。消すのは次の実行の直前 — 前回の分は次に回すまで
+  // 残るので、#20 の「後から見る材料」は保たれる。
+  rmSync(path, { force: true });
+  const { captured, excluded } = launchStryker(root, files, projects, []);
   if (!existsSync(path)) {
     throw new RunnerError(
       `Stryker がレポートを出しませんでした:\n${lastReasons(captured.combined, 15)}`,
     );
   }
-  // **消さない。** どの変異が生き残ったかを後から見る唯一の材料で、
-  // 消すと確かめるには Stryker のフル実行（分単位）をやり直すしかない。
-  // `reports/` は init が .gitignore に足している。
   const report = JSON.parse(readFileSync(path, "utf8")) as MutationReport;
   return {
     survived: survivedFrom(report),
