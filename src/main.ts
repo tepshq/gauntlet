@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { GUARD_MESSAGE, gatesCommit, hookAction, shouldBlock } from "./guard.ts";
 import { INIT_USAGE, formatInit, helpRequested, init, parseInitOptions } from "./init.ts";
 import { describeCrash, doctor, listViolators, run } from "./run.ts";
+import { SEED_USAGE, parseSeedPattern, seedMutation } from "./seed.ts";
 import { EXIT_BLOCKED, EXIT_PASS, type TierName, exitCodeFor } from "./tier.ts";
 
 function guard(): number {
@@ -27,6 +28,26 @@ function initCommand(argv: readonly string[]): number {
   }
   // フラグ無し（parseInitOptions が null）は骨組みの整備だけ。既存の範囲に触らない。
   process.stderr.write(formatInit(init(process.cwd(), parseInitOptions(argv))));
+  return EXIT_PASS;
+}
+
+/**
+ * 記録の無いファイルに mutation の種を置く。**ゲートではないので判定しない。**
+ *
+ * 変異対象は差分から決まるので、clean な既定ブランチでは必ず 0 — 導入時に `full` を
+ * 回しても `mutation` は空のままで、記録は「最初にそのファイルに触れた PR」が自分の
+ * 新コードで作ることになる（#36）。範囲を渡して、main の状態を先に記録しておく。
+ *
+ * **範囲は必須。** 既定を「測る対象すべて」にすると、780 ファイルの実行が事故で始まる。
+ */
+function seedCommand(argv: readonly string[]): number {
+  const pattern = parseSeedPattern(argv);
+  if (pattern === null) {
+    process.stderr.write(`gauntlet: seed には範囲が要ります\n\n${SEED_USAGE}`);
+    return EXIT_BLOCKED;
+  }
+  const notify = (line: string): void => void process.stderr.write(`gauntlet seed: ${line}\n`);
+  process.stderr.write(`${seedMutation(process.cwd(), pattern, notify)}\n`);
   return EXIT_PASS;
 }
 
@@ -100,6 +121,10 @@ const USAGE = `gauntlet <command>
   full    全量検査。上に加えて全テスト・重複・ラチェット・mutation（CI から）
   list    baseline が許容している CRAP 違反と mutation の生き残りを全部並べる（ゲートではない）
   doctor  Stryker が vitest を起動できるか確かめる（導入時に mutation は走らないため）
+  seed    宣言した範囲を測って mutation の記録を置く（ゲートではない）
+          npx gauntlet seed --mutation='lib/**/*.ts'
+          差分に依らないので、既定ブランチの clean なツリーで一度回すと
+          「main の状態」が許容値になる。記録の無いファイルだけを測るので分割して回せる
   init    設定とフックを置く（範囲の決め方と CI は skill が案内する）
   hook       PreToolUse フックから。baseline の書き換えを止め、git commit なら quick を回す
              （guard / precommit は旧配線のための別名として残る）
@@ -148,6 +173,7 @@ const COMMANDS: Record<string, (argv: readonly string[]) => number> = {
   init: initCommand,
   doctor: doctorCommand,
   list: listCommand,
+  seed: seedCommand,
   quick: tierCommand("quick"),
   full: tierCommand("full"),
   run: renamed,
