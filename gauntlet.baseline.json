@@ -60,9 +60,9 @@
       "timeout": 0
     },
     "src/typescript/ast.ts": {
-      "survived": 5,
+      "survived": 2,
       "measured": 54,
-      "timeout": 5
+      "timeout": 6
     },
     "src/typescript/complexity.ts": {
       "survived": 3,
