@@ -4,9 +4,10 @@
   "mutation": {
     "src/baseline.ts": {
       "survived": 2,
-      "measured": 272,
+      "measured": 273,
       "timeout": 0,
-      "noCoverage": 0
+      "noCoverage": 0,
+      "unallowed": 0
     },
     "src/cli.ts": {
       "survived": 0
@@ -15,25 +16,29 @@
       "survived": 2,
       "measured": 48,
       "timeout": 0,
-      "noCoverage": 2
+      "noCoverage": 2,
+      "unallowed": 0
     },
     "src/crap.ts": {
       "survived": 0,
       "measured": 12,
       "timeout": 0,
-      "noCoverage": 0
+      "noCoverage": 0,
+      "unallowed": 0
     },
     "src/gate.ts": {
       "survived": 0,
       "measured": 127,
       "timeout": 0,
-      "noCoverage": 0
+      "noCoverage": 0,
+      "unallowed": 0
     },
     "src/git.ts": {
       "survived": 0,
       "measured": 126,
       "timeout": 0,
-      "noCoverage": 1
+      "noCoverage": 1,
+      "unallowed": 0
     },
     "src/guard.ts": {
       "survived": 0,
@@ -50,13 +55,15 @@
       "survived": 0,
       "measured": 7,
       "timeout": 0,
-      "noCoverage": 0
+      "noCoverage": 0,
+      "unallowed": 0
     },
     "src/run.ts": {
       "survived": 2,
-      "measured": 642,
+      "measured": 647,
       "timeout": 0,
-      "noCoverage": 74
+      "noCoverage": 74,
+      "unallowed": 0
     },
     "src/tier.ts": {
       "survived": 0
@@ -65,7 +72,8 @@
       "survived": 0,
       "measured": 57,
       "timeout": 0,
-      "noCoverage": 0
+      "noCoverage": 0,
+      "unallowed": 0
     },
     "src/typescript/ast.ts": {
       "survived": 2,
@@ -86,13 +94,15 @@
       "survived": 5,
       "measured": 222,
       "timeout": 0,
-      "noCoverage": 59
+      "noCoverage": 59,
+      "unallowed": 0
     },
     "src/typescript/runner.ts": {
       "survived": 0,
       "measured": 109,
       "timeout": 0,
-      "noCoverage": 24
+      "noCoverage": 24,
+      "unallowed": 0
     },
     "src/exec.ts": {
       "survived": 2,
@@ -117,6 +127,13 @@
       "measured": 44,
       "timeout": 0,
       "noCoverage": 0
+    },
+    "src/seed.ts": {
+      "survived": 1,
+      "measured": 61,
+      "timeout": 0,
+      "noCoverage": 7,
+      "unallowed": 0
     }
   }
 }
