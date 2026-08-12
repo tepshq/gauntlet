@@ -483,17 +483,17 @@ describe("withDetails", () => {
 });
 
 describe("mutationScopeText の除外表示", () => {
-  const none = { static: 0, declared: 0, unexplained: 0 };
+  const none = { static: 0, declared: 0 };
 
   // 意図的な除外の総数が static に吸収されると、誰も気づけない（#25）。
   it("static と宣言の内訳を分けて出す", () => {
-    expect(mutationScopeText(3, { static: 213, declared: 2, unexplained: 0 })).toBe(
+    expect(mutationScopeText(3, { static: 213, declared: 2 })).toBe(
       "変異対象 3 ファイル（静的な変異 213 件・宣言して外した変異 2 件は測っていません）",
     );
   });
 
   it("宣言だけなら宣言だけ言う", () => {
-    expect(mutationScopeText(3, { static: 0, declared: 2, unexplained: 0 })).toBe(
+    expect(mutationScopeText(3, { static: 0, declared: 2 })).toBe(
       "変異対象 3 ファイル（宣言して外した変異 2 件は測っていません）",
     );
   });
@@ -502,27 +502,46 @@ describe("mutationScopeText の除外表示", () => {
     expect(mutationScopeText(3, none)).toBe("変異対象 3 ファイル");
   });
 
-  // 理由必須は原則。落としはしないが、破れは件数で言う。
-  it("理由の無い disable は件数で言う", () => {
-    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 1 })).toBe(
-      "変異対象 3 ファイル（理由の無い Stryker disable が 1 件あります — 理由を書いてください）",
+  // 理由必須は原則。落としはしないが、破れは名指しで言う。件数だけだと、どの行の
+  // ことか分からないまま「1 件あります」と言われ続ける（#32 で名指しに変えた）。
+  it("理由の無い disable は名指しで言う", () => {
+    const disables = { unexplained: [{ file: "src/git.ts", line: 39, mutators: ["StringLiteral"], reason: "" }], ineffective: [] };
+    expect(mutationScopeText(3, none, 0, [], {}, disables)).toBe(
+      "変異対象 3 ファイル\n理由の無い Stryker disable が 1 件あります — 理由を書いてください:\n  src/git.ts:39  StringLiteral",
     );
+  });
+
+  // #32: next-line がずれて 1 件も外れていない状態は、生き残りの数が動かないので
+  // 正常と区別が付かない。名指ししない限り気づく手掛かりがゼロになる。
+  it("何も抑制していない disable を名指しで言う", () => {
+    const disables = {
+      unexplained: [],
+      ineffective: [{ file: "src/detectFurniture.ts", line: 161, mutators: ["OptionalChaining"], reason: "buf は undefined にならない" }],
+    };
+    expect(mutationScopeText(3, none, 0, [], {}, disables)).toBe(
+      "変異対象 3 ファイル\n何も抑制していない Stryker disable が 1 件あります — 変異のある行に付いていますか:\n" +
+        "  src/detectFurniture.ts:161  OptionalChaining",
+    );
+  });
+
+  it("宣言に問題が無ければ黙る", () => {
+    expect(mutationScopeText(3, none, 0, [], {}, { unexplained: [], ineffective: [] })).toBe("変異対象 3 ファイル");
   });
 
   // 黙って落とすと、緑が「弱いテストが無い」ではなく「そこは見ていない」を意味していることが
   // 伝わらない（--ignoreStatic の件数を出しているのと同じ理由）。
   it("外した mutator を並べる", () => {
-    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 0 }, 0, ["StringLiteral"])).toBe(
+    expect(mutationScopeText(3, { static: 0, declared: 0 }, 0, ["StringLiteral"])).toBe(
       "変異対象 3 ファイル（StringLiteral の変異は Stryker が置けないので測っていません）",
     );
   });
 
   it("外していなければ何も足さない", () => {
-    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 0 }, 0, [])).toBe("変異対象 3 ファイル");
+    expect(mutationScopeText(3, { static: 0, declared: 0 }, 0, [])).toBe("変異対象 3 ファイル");
   });
 
   it("複数なら並べる", () => {
-    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 0 }, 0, ["A", "B"])).toContain("A、B の変異は");
+    expect(mutationScopeText(3, { static: 0, declared: 0 }, 0, ["A", "B"])).toContain("A、B の変異は");
   });
 });
 
@@ -1639,31 +1658,31 @@ describe("coveredFiles", () => {
 
 describe("mutationScopeText", () => {
   it("対象のファイル数を出す", () => {
-    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 0 })).toBe("変異対象 3 ファイル");
+    expect(mutationScopeText(3, { static: 0, declared: 0 })).toBe("変異対象 3 ファイル");
   });
 
   // 測らなかった分を黙って落とすと、緑が「弱いテストが無い」ではなく
   // 「そこは見ていない」を意味していることが伝わらない。
   it("測らなかった件数があれば添える", () => {
-    expect(mutationScopeText(3, { static: 10, declared: 0, unexplained: 0 })).toBe("変異対象 3 ファイル（静的な変異 10 件は測っていません）");
+    expect(mutationScopeText(3, { static: 10, declared: 0 })).toBe("変異対象 3 ファイル（静的な変異 10 件は測っていません）");
   });
 
   // テストが触れないファイルは変異させても全部 NoCoverage（数えない）な上、
   // Stryker が「No tests were executed」で落ちる。外すが、外した数は言う。
   it("テストが触れないファイルを外した数を添える", () => {
-    expect(mutationScopeText(0, { static: 0, declared: 0, unexplained: 0 }, 1)).toBe(
+    expect(mutationScopeText(0, { static: 0, declared: 0 }, 1)).toBe(
       "変異対象 0 ファイル（テストが触れない 1 ファイルは対象外 — 網羅率 0 は CRAP が見る）",
     );
   });
 
   it("外した数と静的変異は並ぶ", () => {
-    expect(mutationScopeText(2, { static: 5, declared: 0, unexplained: 0 }, 1)).toBe(
+    expect(mutationScopeText(2, { static: 5, declared: 0 }, 1)).toBe(
       "変異対象 2 ファイル（テストが触れない 1 ファイルは対象外 — 網羅率 0 は CRAP が見る）（静的な変異 5 件は測っていません）",
     );
   });
 
   it("対象が無くても形は同じ", () => {
-    expect(mutationScopeText(0, { static: 0, declared: 0, unexplained: 0 })).toBe("変異対象 0 ファイル");
+    expect(mutationScopeText(0, { static: 0, declared: 0 })).toBe("変異対象 0 ファイル");
   });
 
   // #34: 打ち切りは測定に入り、突き合わせでは生き残りと同じ「殺せなかった数」になるのに、
@@ -1671,7 +1690,7 @@ describe("mutationScopeText", () => {
   // **「測っていません」の側に混ぜない** — 測ってはいる。
   it("打ち切りがあれば件数と扱いを言う", () => {
     const records = { "a.ts": { survived: 0, measured: 100, timeout: 24, noCoverage: 0 } };
-    expect(mutationScopeText(13, { static: 317, declared: 11, unexplained: 0 }, 1, [], records)).toBe(
+    expect(mutationScopeText(13, { static: 317, declared: 11 }, 1, [], records)).toBe(
       "変異対象 13 ファイル（テストが触れない 1 ファイルは対象外 — 網羅率 0 は CRAP が見る）" +
         "（打ち切り 24 件は殺せなかった数に入ります — テストでは減りません）" +
         "（静的な変異 317 件・宣言して外した変異 11 件は測っていません）",
@@ -1682,7 +1701,7 @@ describe("mutationScopeText", () => {
   // 存在に気づけない（報告では mutation.json を自分で読んで偶然見つかっている）。
   it("どのテストも通っていない変異があれば件数と扱いを言う", () => {
     const records = { "a.ts": { survived: 0, measured: 100, timeout: 0, noCoverage: 222 } };
-    expect(mutationScopeText(10, { static: 0, declared: 0, unexplained: 0 }, 0, [], records)).toBe(
+    expect(mutationScopeText(10, { static: 0, declared: 0 }, 0, [], records)).toBe(
       "変異対象 10 ファイル（どのテストも通っていない変異 222 件 — 記録して増やさないよう見ます）",
     );
   });
@@ -1690,7 +1709,7 @@ describe("mutationScopeText", () => {
   // 打ち切りと未計測は別の話。両方あれば両方出す（片方に吸収されると総数が誰にも分からない）。
   it("打ち切りと未計測は別の括弧で並ぶ", () => {
     const records = { "a.ts": { survived: 0, measured: 100, timeout: 5, noCoverage: 7 } };
-    expect(mutationScopeText(2, { static: 0, declared: 0, unexplained: 0 }, 0, [], records)).toBe(
+    expect(mutationScopeText(2, { static: 0, declared: 0 }, 0, [], records)).toBe(
       "変異対象 2 ファイル（打ち切り 5 件は殺せなかった数に入ります — テストでは減りません）" +
         "（どのテストも通っていない変異 7 件 — 記録して増やさないよう見ます）",
     );
@@ -1698,13 +1717,13 @@ describe("mutationScopeText", () => {
 
   it("どちらも無ければ黙る", () => {
     const records = { "a.ts": { survived: 0, measured: 100, timeout: 0, noCoverage: 0 } };
-    expect(mutationScopeText(3, { static: 0, declared: 0, unexplained: 0 }, 0, [], records)).toBe("変異対象 3 ファイル");
+    expect(mutationScopeText(3, { static: 0, declared: 0 }, 0, [], records)).toBe("変異対象 3 ファイル");
   });
 
   // 旧記録（0.24 より前）は未計測の欄を持たない。0 として数える以外に手が無い。
   it("欄を持たない記録は 0 として数える", () => {
     const records = { "a.ts": { survived: 1, measured: 10, timeout: null, noCoverage: null } };
-    expect(mutationScopeText(1, { static: 0, declared: 0, unexplained: 0 }, 0, [], records)).toBe("変異対象 1 ファイル");
+    expect(mutationScopeText(1, { static: 0, declared: 0 }, 0, [], records)).toBe("変異対象 1 ファイル");
   });
 });
 

@@ -34,9 +34,8 @@ const MAX_OUTPUT_BYTES = 512_000_000;
 function git(root: string, args: readonly string[]): string {
   const withConfig = ["-c", "core.quotePath=false", ...args];
   try {
-    // 子プロセスの起動引数と stdio の指定。壊すと git が動かないだけで、
-    // 区別できる振る舞いが無い。1 行に収めないと disable の射程から外れる。
-    // Stryker disable next-line ArrayDeclaration,StringLiteral,MethodExpression,ObjectLiteral
+    // 1 行に収めないと disable の射程から外れる。
+    // Stryker disable next-line ArrayDeclaration,StringLiteral,MethodExpression,ObjectLiteral: 子プロセスの起動引数と stdio の指定。壊すと git が動かないだけで、区別できる振る舞いが無い
     return execFileSync("git", withConfig, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: MAX_OUTPUT_BYTES }).trim();
   } catch (cause) {
     throw new GitError(`git ${args.join(" ")} が失敗しました: ${(cause as Error).message}`);

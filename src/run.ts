@@ -23,7 +23,7 @@ import {
 import { type DeadInclude, type IncludeReview, analyze, isTestFile, listSourceFiles, reviewIncludes, unmeasuredFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
 import { runDuplication } from "./typescript/duplication.ts";
-import { REPORT_PATH, type IgnoredBreakdown, type ReportedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
+import { REPORT_PATH, type DisableComment, type DisableReview, type IgnoredBreakdown, type ReportedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
 import { RunnerError, type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
 
@@ -804,12 +804,32 @@ function skippedText(ignored: IgnoredBreakdown): string {
   return unless(parts.length === 0, `${parts.join("・")}は測っていません`);
 }
 
-/** 理由必須は原則。落としはしないが、破れは件数で言う。 */
-function unexplainedText(ignored: IgnoredBreakdown): string {
-  return unless(
-    ignored.unexplained === 0,
-    `理由の無い Stryker disable が ${ignored.unexplained} 件あります — 理由を書いてください`,
-  );
+/** 宣言 1 つの在り処。`file:line  mutator` の形で、そのまま開ける。 */
+export function disableLocation(comment: DisableComment): string {
+  return `${comment.file}:${comment.line}  ${comment.mutators.join(",")}`;
+}
+
+/**
+ * 除外の宣言の点検。**件数では足りないので名指しする。**
+ *
+ * 理由必須は原則で、落としはしないが破れは言う（#25）。ただし件数だけだと、
+ * どの行のことか分からないまま「1 件あります」と言われ続ける。
+ *
+ * 「何も抑制していない宣言」は #32 で足した。`next-line` がずれて 1 件も外れていない
+ * 状態は、生き残りの数が動かないので**正常と区別が付かない** — 名指ししない限り
+ * 気づく手掛かりがゼロになる。
+ */
+function disableReviewText(disables: DisableReview): string {
+  const notes = [
+    ...(disables.unexplained.length === 0
+      ? []
+      : [withDetails(`理由の無い Stryker disable が ${disables.unexplained.length} 件あります — 理由を書いてください:`, disables.unexplained.map(disableLocation))]),
+    ...(disables.ineffective.length === 0
+      ? []
+      : [withDetails(`何も抑制していない Stryker disable が ${disables.ineffective.length} 件あります — 変異のある行に付いていますか:`, disables.ineffective.map(disableLocation))]),
+  ];
+  // scope は複数行になりうる（formatResult が段に入れる）。件数の行と一覧を分ける。
+  return notes.length === 0 ? "" : `\n${notes.join("\n")}`;
 }
 
 /** 上流が置けなかった mutator。これも測っていない分なので黙って落とさない。 */
@@ -833,14 +853,15 @@ export function mutationScopeText(
   // **記録そのものを受ける。** 件数を数値で 2 つ渡す形にすると、打ち切りと未計測を
   // 入れ替えても型が通る。記録から数えれば画面と記録が構造的に一致する（#34 / #31）。
   records: Record<string, MutationRecord> = {},
+  disables: DisableReview = { unexplained: [], ineffective: [] },
 ): string {
   const notes = [
     untestedText(untested),
     stoppedText(records),
     uncoveredText(records),
     skippedText(ignored),
-    unexplainedText(ignored),
     droppedText(excluded),
+    disableReviewText(disables),
   ];
   return `変異対象 ${targets} ファイル${notes.join("")}`;
 }
@@ -912,11 +933,11 @@ function mutationCheck(
   return timed("mutation", () => {
     requireMutationTools(root);
     if (targets.length === 0)
-      return { scope: mutationScopeText(0, { static: 0, declared: 0, unexplained: 0 }, untested), violations: [] };
+      return { scope: mutationScopeText(0, { static: 0, declared: 0 }, untested), violations: [] };
     // 一番長い段。件数が分かれば時間の見積もりが立つ。書き換えの予告も兼ねる —
     // `--inPlace` は実ファイルを書き換えるので、途中で止めると計装が残る（duct で実測）。
     notify(`mutation 変異対象 ${targets.length} ファイル。作業ツリーを一時的に書き換えます`);
-    const { survived, noCoverage, ignored, excluded, measured, timeout } = runMutation(
+    const { survived, noCoverage, ignored, disables, excluded, measured, timeout } = runMutation(
       root,
       targets,
       declaredProjects(config),
@@ -931,7 +952,7 @@ function mutationCheck(
     });
     return {
       // 測らなかった分を黙って落とさない。static な変異は `--ignoreStatic` で外している。
-      scope: mutationScopeText(targets.length, ignored, untested, excluded, records),
+      scope: mutationScopeText(targets.length, ignored, untested, excluded, records, disables),
       violations: gateByFile(store, "mutation", targets, records, (entry) =>
         mutationRegressionText(entry, survived, noCoverage),
       ),

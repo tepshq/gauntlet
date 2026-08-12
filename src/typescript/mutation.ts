@@ -120,30 +120,106 @@ export function measuredByFile(report: MutationReport): Record<string, number> {
  * するので、数を分けないと**意図的な除外が「静的な変異」の件数に吸収されて見えなくなる**
  * （#25。「見えていれば人が気づける」を軸に disable 方式を選んだのに、総数だけが
  * 見えない形になっていた）。区別は `statusReason` — static は Stryker の固定文言、
- * disable はコメントの理由文が入る。理由の無い disable は空になるので、それも数える。
+ * disable はコメントの理由文が入る。
+ *
+ * **理由のあるなしはここでは分からない。** 理由を書かなかった disable にも Stryker は
+ * `Ignored using a comment` という既定文を入れる（9.6.1 で実測）ので、報告からは
+ * 「理由を書いた」ものと区別が付かない。理由の検査はソース側（`reviewDisables`）が担う。
  */
 export interface IgnoredBreakdown {
   /** モジュール読み込みに影響するため測れない変異（`--ignoreStatic`）。 */
   static: number;
-  /** `// Stryker disable` で理由つきで外した変異。 */
+  /** `// Stryker disable` で外した変異。 */
   declared: number;
-  /** `// Stryker disable` だが理由が書かれていない変異。原則（理由必須）の破れ。 */
-  unexplained: number;
 }
 
 export function ignoredBreakdown(report: MutationReport): IgnoredBreakdown {
-  const breakdown = { static: 0, declared: 0, unexplained: 0 };
+  const breakdown = { static: 0, declared: 0 };
   for (const entry of Object.values(report.files)) {
     for (const mutant of entry.mutants) {
       if (mutant.status !== "Ignored") continue;
       // Stryker disable next-line StringLiteral: ここの既定値は "Static mutant" で
       // 始まらない文字列なら何でも同じ（判定は次の行の既定値が担う）。
       if ((mutant.statusReason ?? "").startsWith("Static mutant")) breakdown.static += 1;
-      else if ((mutant.statusReason ?? "").trim() === "") breakdown.unexplained += 1;
       else breakdown.declared += 1;
     }
   }
   return breakdown;
+}
+
+/** ソースに書かれた除外の宣言 1 つ。 */
+export interface DisableComment {
+  file: string;
+  /** コメント自身の行（1 始まり）。名指しに使うだけで、抑制先の判定には使わない。 */
+  line: number;
+  /** 外す mutator の名前。`all` はそのまま入る。 */
+  mutators: string[];
+  /** `:` の後ろ。書かれていなければ空。 */
+  reason: string;
+}
+
+/**
+ * 除外の宣言 1 行。**`next-line` が実際にどの行を指すかは解釈しない。**
+ *
+ * Stryker 側の仕様（複数行コメントを挟んでも効く等）を写し取ると、上流が変えたときに
+ * 黙ってずれる。gauntlet は「宣言があること」と「その理由文で外れた変異があること」だけを
+ * 見る（`reviewDisables`）。理由文は `statusReason` にそのまま入るので、行の意味を
+ * 知らなくても突き合わせられる。
+ */
+const DISABLE_COMMENT = /^\s*\/\/\s*Stryker\s+disable\s+(?:next-line\s+)?([A-Za-z][A-Za-z,]*)\s*(?::\s*(.*))?$/;
+
+/** ソースから除外の宣言を拾う。**変異させたファイルだけを渡す**（測っていない宣言は判定できない）。 */
+export function disableComments(root: string, files: readonly string[]): DisableComment[] {
+  return files.flatMap((file) =>
+    readFileSync(join(root, file), "utf8")
+      .split("\n")
+      .flatMap((text, index) => {
+        const match = DISABLE_COMMENT.exec(text);
+        if (match === null) return [];
+        return [{ file, line: index + 1, mutators: match[1]!.split(","), reason: (match[2] ?? "").trim() }];
+      }),
+  );
+}
+
+/** その宣言の理由で外れた変異が 1 つでもあるか。mutator まで見る（`all` は何にでも当たる）。 */
+function suppressedAny(comment: DisableComment, report: MutationReport): boolean {
+  return (report.files[comment.file]?.mutants ?? []).some(
+    (mutant) =>
+      mutant.status === "Ignored" &&
+      mutant.statusReason === comment.reason &&
+      (comment.mutators.includes("all") || comment.mutators.includes(mutant.mutatorName)),
+  );
+}
+
+/** ソース側から見た除外の宣言の点検結果。どちらも落とさないが名指しで言う。 */
+export interface DisableReview {
+  /** 理由が書かれていない宣言。原則（理由必須）の破れ。 */
+  unexplained: DisableComment[];
+  /** 1 件も抑制しなかった宣言。宣言したつもりで外れていない。 */
+  ineffective: DisableComment[];
+}
+
+/**
+ * 宣言したのに効いていない除外を見つける。
+ *
+ * `// Stryker disable next-line X: 理由` は**その行に対象の変異が無ければ黙って無視される**
+ * — 宣言したつもりで 1 件も外れず、手掛かりがゼロになる（#25 の運用中に踏まれた。
+ * `next-line` が関数の宣言行を指していて、変異のある `return` 行に届いていなかった）。
+ * baseline を締める前に書くと、その 1 件は最初から許容値に含まれるので**数が動かないこと
+ * 自体が正常に見える**。
+ *
+ * **突き合わせは理由文で行う。** 行の意味は Stryker の仕様なので触らない。理由の無い
+ * 宣言は突き合わせられない（Stryker が既定文を入れるので全部同じ文字列になる）が、
+ * そちらは「理由が無い」として別に名指しする — 理由を書けば効いているかも分かる。
+ * 同じファイルに同じ理由・同じ mutator の宣言が 2 つあると片方の効き目で両方通る
+ * （その形は実害が小さいので許す）。
+ */
+export function reviewDisables(comments: readonly DisableComment[], report: MutationReport): DisableReview {
+  const explained = comments.filter((comment) => comment.reason !== "");
+  return {
+    unexplained: comments.filter((comment) => comment.reason === ""),
+    ineffective: explained.filter((comment) => !suppressedAny(comment, report)),
+  };
 }
 
 /**
@@ -367,6 +443,8 @@ export interface MutationOutcome {
   noCoverage: ReportedMutant[];
   /** `--ignoreStatic` で測らなかった数。 */
   ignored: IgnoredBreakdown;
+  /** ソースに書かれた除外の宣言の点検結果（理由なし・効いていない）。 */
+  disables: DisableReview;
   /** 上流が置けなくて外した mutator。これも測っていない分。 */
   excluded: string[];
   /** ファイルごとの「測った変異」の数。記録に入り、増加の理由の切り分けに使う。 */
@@ -616,6 +694,7 @@ export function runMutation(
     survived: survivedFrom(report),
     noCoverage: noCoverageFrom(report),
     ignored: ignoredBreakdown(report),
+    disables: reviewDisables(disableComments(root, files), report),
     excluded,
     measured: measuredByFile(report),
     timeout: timeoutByFile(report),

@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } fr
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { REPORT_PATH, type MutationReport, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredBreakdown, noCoverageFrom, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, NO_TESTS_TO_MUTATE, dryRunFailure, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
+import { REPORT_PATH, type MutationReport, disableComments, reviewDisables, fileModes, lockHolder, lockPath, findRepoVitestConfig, ignoredBreakdown, noCoverageFrom, restoreModes, strykerConfig, strykerFiles, strykerVitestWrapper, NO_TESTS_TO_MUTATE, dryRunFailure, requireMutationTools, survivedFrom, unplaceableMutators, vitestRunnerPlugin } from "./mutation.ts";
 import { RunnerError, lastLines } from "./runner.ts";
 
 // レポートが出ていないときは Stryker の出力が唯一の手がかりになる。
@@ -124,26 +124,27 @@ describe("ignoredBreakdown", () => {
     location: { start: { line: 1 } },
   });
 
-  it("static と宣言と理由なしを分けて数える", () => {
+  it("static と宣言を分けて数える", () => {
     const report: MutationReport = {
       files: {
         "a.ts": {
           mutants: [
             ignored('Static mutant (and "ignoreStatic" was enabled)'),
             ignored("後段の存在確認が同じ結果を返すため"),
-            ignored(),
             { mutatorName: "X", status: "Killed", location: { start: { line: 2 } } },
           ],
         },
       },
     };
-    expect(ignoredBreakdown(report)).toEqual({ static: 1, declared: 1, unexplained: 1 });
+    expect(ignoredBreakdown(report)).toEqual({ static: 1, declared: 1 });
   });
 
-  // 空白だけの理由は「書いた」ことにならない。
-  it("空白だけの理由は理由なしと数える", () => {
-    const report: MutationReport = { files: { "a.ts": { mutants: [ignored("  ")] } } };
-    expect(ignoredBreakdown(report)).toEqual({ static: 0, declared: 0, unexplained: 1 });
+  // **理由のあるなしは報告からは分からない。** 理由を書かなかった disable にも
+  // Stryker は "Ignored using a comment" を入れる（9.6.1 で実測）。だからここでは
+  // 宣言として数え、理由の検査はソースを読む reviewDisables が担う（#32）。
+  it("Stryker の既定文も宣言として数える", () => {
+    const report: MutationReport = { files: { "a.ts": { mutants: [ignored("Ignored using a comment")] } } };
+    expect(ignoredBreakdown(report)).toEqual({ static: 0, declared: 1 });
   });
 
   it("ファイルを跨いで合計する", () => {
@@ -158,11 +159,105 @@ describe("ignoredBreakdown", () => {
     const report: MutationReport = {
       files: { "a.ts": { mutants: [{ mutatorName: "X", status: "Ignored", statusReason: "static っぽい話", location: { start: { line: 1 } } }] } },
     };
-    expect(ignoredBreakdown(report)).toEqual({ static: 0, declared: 1, unexplained: 0 });
+    expect(ignoredBreakdown(report)).toEqual({ static: 0, declared: 1 });
   });
 
   it("何も無ければ全部 0", () => {
-    expect(ignoredBreakdown({ files: {} })).toEqual({ static: 0, declared: 0, unexplained: 0 });
+    expect(ignoredBreakdown({ files: {} })).toEqual({ static: 0, declared: 0 });
+  });
+});
+
+// #32: 宣言したのに 1 件も外れていない disable は、生き残りの数が動かないので
+// 正常と区別が付かない。ソース側の宣言と報告側の理由文を突き合わせて見つける。
+describe("disableComments", () => {
+  function withSource(text: string, body: (root: string, file: string) => void): void {
+    const root = mkdtempSync(join(tmpdir(), "gauntlet-disable-"));
+    try {
+      writeFileSync(join(root, "a.ts"), text);
+      body(root, "a.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("next-line 付きの宣言を拾う", () => {
+    withSource("const a = 1;\n// Stryker disable next-line StringLiteral: 理由の文\nconst b = 2;\n", (root, file) => {
+      expect(disableComments(root, [file])).toEqual([
+        { file: "a.ts", line: 2, mutators: ["StringLiteral"], reason: "理由の文" },
+      ]);
+    });
+  });
+
+  // 区間形式（next-line 無し）も宣言。拾わないと点検の外に落ちる。
+  it("next-line の無い宣言も拾う", () => {
+    withSource("  // Stryker disable ConditionalExpression: 理由\n", (root, file) => {
+      expect(disableComments(root, [file])[0]!.mutators).toEqual(["ConditionalExpression"]);
+    });
+  });
+
+  it("複数の mutator を分ける", () => {
+    withSource("// Stryker disable next-line ArrayDeclaration,StringLiteral: 理由\n", (root, file) => {
+      expect(disableComments(root, [file])[0]!.mutators).toEqual(["ArrayDeclaration", "StringLiteral"]);
+    });
+  });
+
+  // 理由の無い宣言は Stryker が既定文を入れるので報告からは見分けが付かない。
+  // ソース側だけが「書かれていない」を知っている。
+  it("理由が無ければ空で返す", () => {
+    withSource("// Stryker disable next-line all\n", (root, file) => {
+      expect(disableComments(root, [file])[0]).toEqual({ file: "a.ts", line: 1, mutators: ["all"], reason: "" });
+    });
+  });
+
+  // restore は抑制ではない。拾うと「効いていない宣言」として毎回名指ししてしまう。
+  it("restore は宣言ではない", () => {
+    withSource("// Stryker restore all\n", (root, file) => {
+      expect(disableComments(root, [file])).toEqual([]);
+    });
+  });
+
+  // 散文の中に出てくる語を拾うと、説明を書いただけで警告が出る。
+  it("散文は拾わない", () => {
+    withSource("// Stryker disable next-line が指すのは宣言行\n", (root, file) => {
+      expect(disableComments(root, [file])).toEqual([]);
+    });
+  });
+});
+
+describe("reviewDisables", () => {
+  const comment = (reason: string, mutators = ["StringLiteral"]) => ({ file: "a.ts", line: 5, mutators, reason });
+  const ignoredWith = (statusReason: string, mutatorName = "StringLiteral"): MutationReport => ({
+    files: { "a.ts": { mutants: [{ mutatorName, status: "Ignored", statusReason, location: { start: { line: 6 } } }] } },
+  });
+
+  it("理由で外れた変異があれば効いている", () => {
+    expect(reviewDisables([comment("理由の文")], ignoredWith("理由の文")).ineffective).toEqual([]);
+  });
+
+  // 報告された症状そのもの。next-line が宣言行を指していて変異のある行に届いていない。
+  it("その理由で外れた変異が無ければ効いていない", () => {
+    expect(reviewDisables([comment("理由の文")], ignoredWith("別の理由")).ineffective).toHaveLength(1);
+  });
+
+  // mutator まで見る。名前が違えば、その宣言が外したものではない。
+  it("mutator が違えば効いていない", () => {
+    expect(reviewDisables([comment("理由", ["OptionalChaining"])], ignoredWith("理由")).ineffective).toHaveLength(1);
+  });
+
+  it("all はどの mutator にも当たる", () => {
+    expect(reviewDisables([comment("理由", ["all"])], ignoredWith("理由", "ObjectLiteral")).ineffective).toEqual([]);
+  });
+
+  // 理由の無い宣言は突き合わせられない（Stryker が全部同じ既定文にする）。
+  // 「理由が無い」として別に名指しし、効き目の判定はしない。
+  it("理由の無い宣言は効き目を判定せず理由なしとして出す", () => {
+    const review = reviewDisables([comment("")], { files: {} });
+    expect(review.unexplained).toHaveLength(1);
+    expect(review.ineffective).toEqual([]);
+  });
+
+  it("報告にそのファイルが無ければ効いていない", () => {
+    expect(reviewDisables([comment("理由")], { files: {} }).ineffective).toHaveLength(1);
   });
 });
 
