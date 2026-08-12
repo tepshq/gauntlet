@@ -146,13 +146,16 @@ npx skills add tepshq/gauntlet -a claude-code
 してあるのはそのためです（`tsconfig.json` の `include` は当てになりません —
 生成物・設定ファイル・e2e が混ざります）。
 
-**更新も同じ skill が持っています。** gauntlet を上げるときも `/gauntlet-setup` を実行すれば、
-パッケージの版上げ・`init` の叩き直し・skill 自身の追随・確認まで通します。手で打つ場合、
-skill の追随は**同じ `add` をもう一度**です。
+**更新も同じ skill が持っています。** ただし順序があります — **先に skill を最新にしてから
+`/gauntlet-setup`** です。新しい版が要求する後始末は新しい skill にしか書かれていないので、
+古い手順書のまま上げると、それを知らないまま緑に見えます。
 
 ```bash
 npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
 ```
+
+そのあと `/gauntlet-setup` を実行すれば、パッケージの版上げ・`init` の叩き直し・版ごとの
+後始末・確認まで通します。
 
 `npx skills update` は使わないでください。実体を `.agents/skills/`（多数の agent が
 共有する置き場）へ移して `.claude/skills/` を symlink にするため、**コミット済みの

@@ -377,12 +377,21 @@ Stryker が対象リポジトリの vitest を起動できるかだけを見る�
 すでに入っているリポジトリを新しい版に追随させる手順。範囲は変わらないので、
 確認を挟まず上から通す。
 
+**最初にこの skill 自身を最新にして、この節を読み直す。**
+
 ```
 npx gauntlet --version              # 上げる前の版。控えておく（下の「版ごとの後始末」の引き金）
+npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
+```
+
+新しい版が要求する後始末は**新しい skill にしか書かれていない**。古い手順書のまま上げると、
+記録の形式が変わったことも配線が変わったことも知らないまま緑に見える。読み直した先が
+ここと同じなら、そのまま続けてよい。
+
+```
 V=$(npm view @teps/gauntlet version)
 npm i -D "@teps/gauntlet@$V"        # 上げるのはこれだけ。PM の判定と pnpm の 24 時間ルールは 1 と同じ
 npx gauntlet init                   # フラグ無し
-npx skills add tepshq/gauntlet -a claude-code -s gauntlet-setup -y
 npx gauntlet quick
 ```
 
