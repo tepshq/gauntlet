@@ -107,6 +107,8 @@ export function ignoredBreakdown(report: MutationReport): IgnoredBreakdown {
   for (const entry of Object.values(report.files)) {
     for (const mutant of entry.mutants) {
       if (mutant.status !== "Ignored") continue;
+      // Stryker disable next-line StringLiteral: ここの既定値は "Static mutant" で
+      // 始まらない文字列なら何でも同じ（判定は次の行の既定値が担う）。
       if ((mutant.statusReason ?? "").startsWith("Static mutant")) breakdown.static += 1;
       else if ((mutant.statusReason ?? "").trim() === "") breakdown.unexplained += 1;
       else breakdown.declared += 1;
