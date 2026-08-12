@@ -1,29 +1,75 @@
 {
-  "crap": 1,
-  "duplication": 0,
+  "crap": 0,
   "mutation": {
-    "src/baseline.ts": 1,
-    "src/cli.ts": 0,
-    "src/config.ts": 16,
-    "src/crap.ts": 0,
-    "src/gate.ts": 0,
-    "src/git.ts": 0,
-    "src/guard.ts": 2,
-    "src/index.ts": 0,
-    "src/init.ts": 0,
-    "src/report.ts": 0,
-    "src/run.ts": 0,
-    "src/tier.ts": 0,
-    "src/typescript/adapter.ts": 0,
-    "src/typescript/ast.ts": 8,
-    "src/typescript/complexity.ts": 10,
-    "src/typescript/coverage.ts": 10,
-    "src/typescript/mutation.ts": 0,
-    "src/typescript/runner.ts": 0,
-    "src/exec.ts": 3,
-    "src/main.ts": 0,
-    "src/node-version.ts": 0,
-    "src/typescript/duplication.ts": 1,
-    "src/package-manager.ts": 1
-  }
+    "src/baseline.ts": {
+      "survived": 1
+    },
+    "src/cli.ts": {
+      "survived": 0
+    },
+    "src/config.ts": {
+      "survived": 16
+    },
+    "src/crap.ts": {
+      "survived": 0
+    },
+    "src/gate.ts": {
+      "survived": 0
+    },
+    "src/git.ts": {
+      "survived": 0
+    },
+    "src/guard.ts": {
+      "survived": 2
+    },
+    "src/index.ts": {
+      "survived": 0
+    },
+    "src/init.ts": {
+      "survived": 0
+    },
+    "src/report.ts": {
+      "survived": 0
+    },
+    "src/run.ts": {
+      "survived": 0
+    },
+    "src/tier.ts": {
+      "survived": 0
+    },
+    "src/typescript/adapter.ts": {
+      "survived": 0
+    },
+    "src/typescript/ast.ts": {
+      "survived": 8
+    },
+    "src/typescript/complexity.ts": {
+      "survived": 10
+    },
+    "src/typescript/coverage.ts": {
+      "survived": 10
+    },
+    "src/typescript/mutation.ts": {
+      "survived": 0
+    },
+    "src/typescript/runner.ts": {
+      "survived": 0
+    },
+    "src/exec.ts": {
+      "survived": 3
+    },
+    "src/main.ts": {
+      "survived": 0
+    },
+    "src/node-version.ts": {
+      "survived": 0
+    },
+    "src/typescript/duplication.ts": {
+      "survived": 1
+    },
+    "src/package-manager.ts": {
+      "survived": 1
+    }
+  },
+  "duplication": 0
 }
