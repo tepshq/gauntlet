@@ -21,7 +21,7 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
-import { type Captured, capture } from "../exec.ts";
+import { type Captured, capture, captureStreaming } from "../exec.ts";
 import { detectPackageManager, installDevCommand } from "../package-manager.ts";
 import { RunnerError, lastReasons } from "./runner.ts";
 import { executableFiles } from "../git.ts";
@@ -319,7 +319,10 @@ export function strykerConfig(
     dryRunTimeoutMinutes: 60,
     tempDirName: tempDir,
     ignoreStatic: true,
-    reporters: ["json"],
+    // **json だけにしない。** 進行が出ないと、CI の job 上限で打ち切られた回に
+    // 「どこまで測れたか / あと何分要るか / 止まっているのか」が何も残らない（#38）。
+    // `progress-append-only` は行を書き換えず追記するので CI のログに残る。
+    reporters: ["json", "progress-append-only"],
     // 既定の `["@stryker-mutator/*"]` は Stryker 自身の隣を readdir して探す。
     // pnpm の分離レイアウトでは vitest-runner は別の場所にあり、原理的に見つからない
     // （npm / yarn のフラットな node_modules 前提の実装）。実体の絶対パスを渡す。
@@ -503,9 +506,7 @@ export function dryRunMutation(
   files: readonly string[],
   projects: readonly string[],
 ): string[] {
-  const { captured, excluded } = launchStryker(root, files, projects, [
-    "--dryRunOnly",
-  ]);
+  const { captured, excluded } = launchStryker(root, files, projects, ["--dryRunOnly"], capture);
   const failure = dryRunFailure(captured);
   if (failure !== null) throw new RunnerError(failure);
   return excluded;
@@ -626,6 +627,10 @@ function launchStryker(
   files: readonly string[],
   projects: readonly string[],
   extra: readonly string[],
+  // **口は呼び出し側が渡す。** 流すのは長い段だけ（dry run は終了コードで判定していて、
+  // 流す口の終了コードは tee のものになる）。ここで分岐すると、テストの届かない
+  // プラミングに未計測の変異が増える（#31 のラチェットに自分で止められた）。
+  run: (bin: string, args: readonly string[], cwd: string) => Captured,
 ): StrykerRun {
   const bin = strykerBin(root);
   const runner = vitestRunnerPlugin(root);
@@ -648,7 +653,7 @@ function launchStryker(
           excluded,
         );
         launch.forEach((file) => writeFileSync(file.path, file.content));
-        const captured = capture(bin, ["run", launch[0]!.path, ...extra], root);
+        const captured = run(bin, ["run", launch[0]!.path, ...extra], root);
         cleanLeftovers(root);
         return captured;
       } finally {
@@ -683,7 +688,7 @@ export function runMutation(
   // 2 版にわたって読み続けていた）。消すのは次の実行の直前 — 前回の分は次に回すまで
   // 残るので、#20 の「後から見る材料」は保たれる。
   rmSync(path, { force: true });
-  const { captured, excluded } = launchStryker(root, files, projects, []);
+  const { captured, excluded } = launchStryker(root, files, projects, [], captureStreaming);
   if (!existsSync(path)) {
     throw new RunnerError(
       `Stryker がレポートを出しませんでした:\n${lastReasons(captured.combined, 15)}`,

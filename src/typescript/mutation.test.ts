@@ -425,7 +425,9 @@ describe("strykerConfig", () => {
       dryRunTimeoutMinutes: 60,
       tempDirName: "/tmp/out",
       ignoreStatic: true,
-      reporters: ["json"],
+      // 進行が出ないと、打ち切られた回のログに何も残らない（#38）。
+      // append-only は行を書き換えないので CI のログに積み上がる。
+      reporters: ["json", "progress-append-only"],
       plugins: ["/p/vitest-runner/index.js"],
       mutate: ["a.ts", "b.ts"],
       vitest: { configFile: "/conf/vitest.config.mjs" },

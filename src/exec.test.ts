@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capture, captureShell } from "./exec.ts";
+import { capture, captureShell, captureStreaming } from "./exec.ts";
 
 describe("captureShell", () => {
   // teps の型チェックは `tsc -p a.json --noEmit && tsc --noEmit` の 2 パス。
@@ -85,5 +85,44 @@ describe("capture", () => {
 
   it("コマンド自体が無くても落とさない", () => {
     expect(capture("definitely-not-a-command", [], process.cwd()).stdout).toBe("");
+  });
+});
+
+// #38: 分単位の段で出力を全部バッファすると、打ち切られた回のログに何も残らない。
+// 流しながら捕まえる口。**終了コードは tee のもの**なので、使う側は本文で判定する。
+describe("captureStreaming", () => {
+  it("出力を捕まえる", () => {
+    expect(captureStreaming(process.execPath, ["-e", "console.log('進行 1')"], process.cwd()).combined).toContain(
+      "進行 1",
+    );
+  });
+
+  // 標準エラーも同じ流れに入れる（Stryker は失敗の理由をそちらに出すことがある）。
+  it("標準エラーも同じ本文に入る", () => {
+    expect(captureStreaming(process.execPath, ["-e", "console.error('原因')"], process.cwd()).combined).toContain(
+      "原因",
+    );
+  });
+
+  // 落ちた回こそ本文が要る。捕まえ損ねると失敗の理由が消える（0.23.3 で踏んだ形）。
+  it("落ちても書けた分は返す", () => {
+    const captured = captureStreaming(
+      process.execPath,
+      ["-e", "console.log('ここまで'); process.exit(3)"],
+      process.cwd(),
+    );
+    expect(captured.combined).toContain("ここまで");
+  });
+
+  // 終了コードは tee のものになる。ここを頼ると「落ちたのに 0」になるので、
+  // 使う側（runMutation）は本文とレポートの有無で判定している。
+  it("終了コードは当てにならない（常に 0）", () => {
+    expect(captureStreaming(process.execPath, ["-e", "process.exit(3)"], process.cwd()).code).toBe(0);
+  });
+
+  // 引数はシェルを経由しても分割されない（パスに空白が入る対象リポジトリがある）。
+  it("空白を含む引数をそのまま渡す", () => {
+    const captured = captureStreaming(process.execPath, ["-e", "console.log(process.argv[1])", "a b"], process.cwd());
+    expect(captured.combined.trim()).toBe("a b");
   });
 });
