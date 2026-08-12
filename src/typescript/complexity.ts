@@ -40,13 +40,19 @@ function identifierName(value: unknown): string | null {
   return null;
 }
 
+/** key の種類ごとの名前の取り方。下の `NAME_FROM_PARENT` と同じ形に揃えてある。 */
+const NAME_FROM_KEY: Record<string, (key: Node) => string> = {
+  Identifier: (key) => String(key["name"]),
+  Literal: (key) => String(key["value"]),
+  // `#` を落とすと public な同名メソッドと区別がつかない。名前は名指しのためにある。
+  PrivateIdentifier: (key) => `#${String(key["name"])}`,
+};
+
 /** `{ key: fn }` や `class { key(){} }` の key。計算プロパティは名前として扱わない。 */
 function propertyKeyName(parent: Node): string | null {
   if (parent["computed"] === true) return null;
   const key = parent["key"] as Node | undefined;
-  if (key?.type === "Identifier") return String(key["name"]);
-  if (key?.type === "Literal") return String(key["value"]);
-  return null;
+  return key === undefined ? null : (NAME_FROM_KEY[key.type]?.(key) ?? null);
 }
 
 const NAME_FROM_PARENT: Record<string, (parent: Node) => string | null> = {
