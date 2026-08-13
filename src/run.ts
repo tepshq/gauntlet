@@ -22,7 +22,7 @@ import {
 } from "./tier.ts";
 import { type DeadInclude, type IncludeReview, analyze, isTestFile, listSourceFiles, reviewIncludes, unmeasuredFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
-import { type DuplicationResult, runDuplication } from "./typescript/duplication.ts";
+import { type DuplicateClone, type DuplicationResult, runDuplication } from "./typescript/duplication.ts";
 import { REPORT_PATH, type DisableComment, type DisableReview, type IgnoredBreakdown, type ReportedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
 import { RunnerError, type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
@@ -1040,8 +1040,15 @@ function mutationCheck(
  * ファイル単位にしないのは、クローンがファイルの対に跨るため — どちらの件数に
  * 数えるかという割り付けの判断を増やさずに済む。絶対閾値も持たない（既存リポジトリを
  * 導入初日に赤で埋めない）。「増やさない」だけを課し、減れば自動で締まる。
+ *
+ * **後退したら、いま出ている対を全部添える。** 増えた分だけを名指しはしない —
+ * jscpd は差分を知らないので特定に総当たりが要る一方、**その文を読んでいる人は自分が
+ * いま何を書いたかを知っている**ので、並べれば新しい対は見分けが付く（#41 の反論）。
+ * `list` に置くだけでは足りない: 入口は増えても入口に向かう動機は増えず、
+ * このイシュー自体が「総数が緑で出ていたのに誰も見に行かなかった」話だった。
+ * **ゲートが赤い瞬間だけは、向かう必要がない。**
  */
-export function duplicationViolations(store: BaselineStore, actual: number): Violation[] {
+export function duplicationViolations(store: BaselineStore, actual: number, clones: readonly DuplicateClone[]): Violation[] {
   const baseline = store.load();
   const allowed = baseline?.duplication;
   // 0.11.0 より前の baseline にはこの欄が無い。種を置いた回は通さない（crap と同じ理由）。
@@ -1051,7 +1058,7 @@ export function duplicationViolations(store: BaselineStore, actual: number): Vio
   }
   const outcome = ratchetNumber(allowed, actual);
   if (outcome.kind === "regressed") {
-    return [{ message: `重複が ${outcome.allowed} → ${outcome.actual} トークンに増えました` }];
+    return [{ message: withDetails(`重複が ${outcome.allowed} → ${outcome.actual} トークンに増えました`, cloneLines(clones)) }];
   }
   if (outcome.kind === "improved") store.save({ ...EMPTY_BASELINE, ...baseline, duplication: outcome.to });
   return [];
@@ -1063,10 +1070,10 @@ function duplicationCheck(store: BaselineStore, root: string, config: GauntletCo
     // 参加しうるファイル数」で、渡した数ではない（duct で 794 → 760）。同じ実行の
     // crap 行と食い違って「範囲が黙って狭いのでは」と誤診させた。
     const files = listSourceFiles(root, config.source);
-    const { duplicatedTokens } = runDuplication(root, files);
+    const { duplicatedTokens, clones } = runDuplication(root, files);
     return {
       scope: `重複 ${duplicatedTokens} トークン / 対象 ${files.length} ファイル`,
-      violations: duplicationViolations(store, duplicatedTokens),
+      violations: duplicationViolations(store, duplicatedTokens, clones),
     };
   });
 }
@@ -1158,9 +1165,19 @@ export function doctor(root: string): string[] {
 export function formatClones(result: DuplicationResult, scope: number, allowed: number | null): string {
   const record = allowed === null ? `${BASELINE_FILENAME} はまだありません` : `${BASELINE_FILENAME} の許容 ${allowed}`;
   const head = `\n重複 ${result.duplicatedTokens} トークン（${result.clones.length} か所）/ 対象 ${scope} ファイル（${record}）`;
-  const worstFirst = [...result.clones].sort((a, b) => b.tokens - a.tokens);
-  if (worstFirst.length === 0) return head;
-  return [`${head}:`, ...worstFirst.map((clone) => `  ${String(clone.tokens).padStart(4)}  ${clone.files[0]} ↔ ${clone.files[1]}`)].join("\n");
+  const lines = cloneLines(result.clones);
+  if (lines.length === 0) return head;
+  return [`${head}:`, ...lines.map((line) => `  ${line}`)].join("\n");
+}
+
+/**
+ * 重複 1 か所ずつの行。**一覧（`list`）とゲートの後退の文で同じ形を使う**
+ * （`crapText` が両方で使われているのと同じ役割）。
+ */
+export function cloneLines(clones: readonly DuplicateClone[]): string[] {
+  return [...clones]
+    .sort((a, b) => b.tokens - a.tokens)
+    .map((clone) => `${String(clone.tokens).padStart(4)}  ${clone.files[0]} ↔ ${clone.files[1]}`);
 }
 
 /**
