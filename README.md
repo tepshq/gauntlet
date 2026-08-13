@@ -143,8 +143,8 @@ AAA の骨格が似るのは自然です。`exclude` に書く必要はありま
 
 
 記録されるのは**数**だけ（mutation はファイルごとの生き残り・母数・打ち切り・
-どのテストも通っていない変異の数）なので、「どの関数か・どの変異か」は `list` で見ます
-（ゲートではないので通ります）。
+どのテストも通っていない変異の数）なので、「どの関数か・どこが重複しているか・どの変異か」は
+`list` で見ます（ゲートではないので通ります）。
 
 ```bash
 npx gauntlet list
@@ -160,6 +160,18 @@ CRAP 違反 35 件 / 測る対象 411 関数（50 ファイル）（gauntlet.bas
 
 悪い順に全部並ぶので、上から手を付けられます（h3 では未参照のまま残っていた関数が
 2 つと、網羅率 0 の公開 API が 1 つ、この一覧から見つかりました）。
+
+重複はファイルの対で出ます。総数だけだと「何トークンあるか」は分かっても「どこにあるか」に
+辿り着けず、実質だれも中身を見ません（別のパイロットでは 338 トークンが一度も動かないまま
+緑で、同じ並行処理ヘルパーが 4 ファイルに複製されていました。以下はそのときの実測です）:
+
+```
+重複 338 トークン（4 か所）/ 対象 26 ファイル（gauntlet.baseline.json の許容 338）:
+   124  src/analyze.ts ↔ src/measureTextCoverage.ts
+    97  src/crawl.ts ↔ src/download.ts
+    65  src/genPanel.ts ↔ src/genPhoto.ts
+    52  src/makeInterview.ts ↔ src/validateStyle.ts
+```
 
 ## 導入
 
@@ -350,7 +362,7 @@ projects: [
 ```bash
 npx gauntlet quick
 npx gauntlet full
-npx gauntlet list     # ゲートではない。許容している CRAP 違反と mutation の生き残りを全部並べる
+npx gauntlet list     # ゲートではない。許容している CRAP 違反・重複の在り処・mutation の生き残りを全部並べる
 npx gauntlet doctor   # Stryker が vitest を起動できるか（導入時に mutation は走らないため）
 ```
 

@@ -22,7 +22,7 @@ import {
 } from "./tier.ts";
 import { type DeadInclude, type IncludeReview, analyze, isTestFile, listSourceFiles, reviewIncludes, unmeasuredFiles } from "./typescript/adapter.ts";
 import type { IstanbulCoverage } from "./typescript/coverage.ts";
-import { runDuplication } from "./typescript/duplication.ts";
+import { type DuplicationResult, runDuplication } from "./typescript/duplication.ts";
 import { REPORT_PATH, type DisableComment, type DisableReview, type IgnoredBreakdown, type ReportedMutant, dryRunMutation, requireMutationTools, runMutation } from "./typescript/mutation.ts";
 import { RunnerError, type TestFailure, type TestOutcome, runTests } from "./typescript/runner.ts";
 
@@ -1147,6 +1147,35 @@ export function doctor(root: string): string[] {
 }
 
 /**
+ * 重複の内訳。**多い順にファイルの対で並べる。**
+ *
+ * 行番号までは出さない。ファイル対とトークン数まで分かれば開いて読めるので、
+ * そこで足りている（#41 の報告者も同じ判断）。列を増やすと一覧が折り返す。
+ *
+ * 0 か所でも見出しは出す。**節ごと消すと「測っていない」と区別が付かない** —
+ * #41 は総数が見えていてなお「重複は無い」と読まれた事例で、無言はそれより弱い。
+ */
+export function formatClones(result: DuplicationResult, scope: number, allowed: number | null): string {
+  const record = allowed === null ? `${BASELINE_FILENAME} はまだありません` : `${BASELINE_FILENAME} の許容 ${allowed}`;
+  const head = `\n重複 ${result.duplicatedTokens} トークン（${result.clones.length} か所）/ 対象 ${scope} ファイル（${record}）`;
+  const worstFirst = [...result.clones].sort((a, b) => b.tokens - a.tokens);
+  if (worstFirst.length === 0) return head;
+  return [`${head}:`, ...worstFirst.map((clone) => `  ${String(clone.tokens).padStart(4)}  ${clone.files[0]} ↔ ${clone.files[1]}`)].join("\n");
+}
+
+/**
+ * 重複の一覧。**jscpd は回す。**
+ *
+ * mutation と違い、記録は総数しか持たない（ratchet が持つのは数 1 つ）ので、
+ * どこかは測り直すしかない。Stryker と違って実測 101ms（24 ファイル）で、
+ * `list` が既に払っている全テスト + coverage に対して誤差なので、性格は変わらない。
+ */
+export function duplicationDebt(root: string, files: readonly string[], allowed: number | null): string {
+  // 対象数は渡した数を出す。jscpd の `sources` ではない（`duplicationCheck` と同じ理由）。
+  return formatClones(runDuplication(root, files), files.length, allowed);
+}
+
+/**
  * 記録している mutation の生き残り。**Stryker は回さない。**
  *
  * 数はもう記録の中にあるので、出すのはただの読み出し。どの変異かまでは
@@ -1202,22 +1231,39 @@ export function violatorReport(
 }
 
 /**
- * baseline が今許容している CRAP 違反と mutation の生き残りを全部並べる。**ゲートではない。**
+ * 一覧に添える許容値。**記録がまだ無い軸は `0` ではなく「無い」。**
+ *
+ * 0 と読ませると、何も記録していない状態が「0 に締まっている」に見える。
+ * （`listViolators` から出してあるのは、軸が 2 つになって CRAP 12 になったため。
+ * 網羅率 0% の殻に分岐を置けないという、このリポジトリ自身のゲートの結果。）
+ */
+export function allowedCounts(baseline: Baseline | null): { crap: number | null; duplication: number | null } {
+  return { crap: baseline?.crap ?? null, duplication: baseline?.duplication ?? null };
+}
+
+/**
+ * ratchet が今許容している借金を、CRAP・重複・mutation の 3 軸で全部並べる。**ゲートではない。**
  *
  * ratchet は数しか記録しないので、`{ "crap": 35 }` から「どの 35 件か」に辿れなかった
  * （h3 の導入報告。手で coverage を取り直して未参照コードと網羅率 0 の公開 API を
- * 見つけている）。赤を減らす作業に取りかかるには、この一覧が要る。
- * 判断は `violatorReport` と `mutationDebt` にある。ここはプロセスとファイルを触るだけの殻。
+ * 見つけている）。赤を減らす作業に取りかかるには、この一覧が要る。重複が総数どまりだった
+ * 間に同じことが起きている（#41。4 ファイルに複製された並行処理ヘルパーに、行範囲からの
+ * 手作業の突き合わせで辿り着いた）。
+ * 判断は `violatorReport` と `duplicationDebt` と `mutationDebt` にある。
+ * ここはプロセスとファイルを触るだけの殻。
  */
 export function listViolators(root: string): string {
   const config = loadConfig(root);
   const outcome = runTests(root, null, declaredProjects(config), [], config.source.include);
   const baseline = loadBaseline(root);
+  const allowed = allowedCounts(baseline);
   const crap = violatorReport(
     analyze(root, config, outcome.coverage),
     outcome,
-    baseline?.crap ?? null,
+    allowed.crap,
     reviewIncludes(root, config.source).dead,
   );
-  return `${crap}${mutationDebt(root, baseline)}`;
+  // 並びは `full` のチェック順（crap → duplication → mutation）に合わせる。
+  const duplication = duplicationDebt(root, listSourceFiles(root, config.source), allowed.duplication);
+  return `${crap}${duplication}${mutationDebt(root, baseline)}`;
 }

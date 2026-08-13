@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { diskStore, loadBaseline, memoryStore, saveBaseline } from "./baseline.ts";
+import { type Baseline, diskStore, loadBaseline, memoryStore, saveBaseline } from "./baseline.ts";
 import { type GauntletConfig, ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, mutationScope, declaredProjects, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, settleConflictedBaseline, violatorReport, describeCrash, describeMutant, detailLines, formatResult, mutationRegressionText, mutationScopeText, mutationTargets, mutationViolations, noCoverageText, slackPassNote, slackPassText, noCoverageTotal, oneLine, timeoutTotal, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, duplicationDebt, formatClones, allowedCounts, mutationScope, declaredProjects, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, settleConflictedBaseline, violatorReport, describeCrash, describeMutant, detailLines, formatResult, mutationRegressionText, mutationScopeText, mutationTargets, mutationViolations, noCoverageText, slackPassNote, slackPassText, noCoverageTotal, oneLine, timeoutTotal, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -1298,6 +1298,77 @@ describe("mutationViolations", () => {
 
   it("後退が無ければ違反も無い", () => {
     expect(mutationViolations([], [], [], new Set())).toEqual([]);
+  });
+});
+
+describe("allowedCounts", () => {
+  it("記録から両方の許容値を読む", () => {
+    expect(allowedCounts({ crap: 35, duplication: 338, mutation: {} })).toEqual({ crap: 35, duplication: 338 });
+  });
+
+  // 0 と読ませると、何も記録していない状態が「0 に締まっている」に見える。
+  it("記録が無ければどちらも無い", () => {
+    expect(allowedCounts(null)).toEqual({ crap: null, duplication: null });
+  });
+
+  // 0.11.0 より前の baseline には duplication の欄が無い（`duplicationViolations` と同じ形）。
+  it("欄を持たない記録では、その軸だけ無い", () => {
+    expect(allowedCounts({ crap: 35, mutation: {} } as Baseline)).toEqual({ crap: 35, duplication: null });
+  });
+});
+
+describe("formatClones", () => {
+  const clone = (first: string, second: string, tokens: number) => ({ files: [first, second] as const, tokens });
+
+  // #41 が求めた形。**多い順**でないと、まず読むべき 1 か所が下に沈む。
+  it("多い順にファイルの対とトークン数で並べる", () => {
+    const result = { duplicatedTokens: 221, sources: 26, clones: [clone("src/c.ts", "src/d.ts", 97), clone("src/a.ts", "src/b.ts", 124)] };
+    expect(formatClones(result, 26, 221)).toBe(
+      "\n重複 221 トークン（2 か所）/ 対象 26 ファイル（gauntlet.baseline.json の許容 221）:\n" +
+        "   124  src/a.ts ↔ src/b.ts\n" +
+        "    97  src/c.ts ↔ src/d.ts",
+    );
+  });
+
+  // 節ごと消すと「重複が無い」と「測っていない」の区別が付かない。#41 は
+  // 総数が見えていてなお前者と読まれた事例で、無言はそれより弱い。
+  it("0 か所でも見出しは出す", () => {
+    expect(formatClones({ duplicatedTokens: 0, sources: 24, clones: [] }, 24, 0)).toBe(
+      "\n重複 0 トークン（0 か所）/ 対象 24 ファイル（gauntlet.baseline.json の許容 0）",
+    );
+  });
+
+  // 導入前は許容値が無い。「許容 0」と読ませると、まだ何も記録していない状態が
+  // 「0 に締まっている」に見える。
+  it("記録がまだ無ければそう言う", () => {
+    expect(formatClones({ duplicatedTokens: 5, sources: 2, clones: [] }, 2, null)).toContain(
+      "（gauntlet.baseline.json はまだありません）",
+    );
+  });
+
+  // 対象数は渡した数。jscpd の `sources` は「クローンに参加しうるファイル数」で、
+  // 同じ実行の crap 行と食い違う（`duplicationCheck` と同じ理由）。
+  it("対象数は jscpd の sources ではなく渡した数", () => {
+    expect(formatClones({ duplicatedTokens: 0, sources: 23, clones: [] }, 24, 0)).toContain("対象 24 ファイル");
+  });
+});
+
+describe("duplicationDebt", () => {
+  let root = "";
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "gauntlet-dupdebt-"));
+    mkdirSync(join(root, "src"));
+    const body = Array.from({ length: 20 }, (_unused, i) => `  const v${i} = f${i}(a${i}, b${i}) + g${i}(c${i}, d${i}) * s${i};`).join("\n");
+    for (const name of ["alpha", "beta"]) {
+      writeFileSync(join(root, "src", `${name}.ts`), `export function ${name}(a: number): number {\n${body}\n  return a;\n}\n`);
+    }
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("jscpd を回して重複の在り処を出す", () => {
+    const debt = duplicationDebt(root, ["src/alpha.ts", "src/beta.ts"], 392);
+    expect(debt).toContain("（1 か所）/ 対象 2 ファイル（gauntlet.baseline.json の許容 392）:");
+    expect(debt).toContain("src/alpha.ts ↔ src/beta.ts");
   });
 });
 
