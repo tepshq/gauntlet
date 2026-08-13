@@ -185,10 +185,18 @@ export interface WrittenFile {
   note: string;
 }
 
-function write(root: string, path: string, contents: string, note: string): WrittenFile {
+/**
+ * 内容が変わるときだけ書き、同一なら触らず「変更なし」と言う。
+ *
+ * settings.json は存在の有無だけで「更新」と言っていた（#47）— 内容が 1 バイトも
+ * 違わなくても書き直すので mtime が動き、本当に配線が変わった回と出力で区別できない。
+ * 「同一なら書かない」の判断はここ 1 箇所に置く。呼び出し元の note は変わった回の文言だけ持つ。
+ */
+function write(root: string, path: string, before: string | null, after: string, note: string): WrittenFile {
+  if (before === after) return { path, note: "変更なし" };
   const full = join(root, path);
   mkdirSync(dirname(full), { recursive: true });
-  writeFileSync(full, contents);
+  writeFileSync(full, after);
   return { path, note };
 }
 
@@ -199,8 +207,8 @@ function madeOrUpdated(before: unknown): string {
 
 /** .gitignore は足りない行だけ足す。何行足したかを言うと、読み手が確かめられる。 */
 function gitignoreNote(before: string | null, after: string): string {
+  // 同一（変更なし）の判定は write() が持つ。ここにも持つと同じ性質を守る仕組みが 2 つになる。
   if (before === null) return "作成";
-  if (before === after) return "変更なし";
   return `更新（${after.split("\n").length - before.split("\n").length} 行追加）`;
 }
 
@@ -254,7 +262,7 @@ function configFile(root: string, options: InitOptions | null): WrittenFile {
   if (options === null && raw !== null) return { path: CONFIG_FILENAME, note: "変更なし" };
   const existing = existingConfig(root);
   const note = existing?.commands === undefined ? madeOrUpdated(raw) : "更新（commands は残しました）";
-  return write(root, CONFIG_FILENAME, `${JSON.stringify(configFor(options ?? INIT_DEFAULTS, existing), null, 2)}\n`, note);
+  return write(root, CONFIG_FILENAME, raw, `${JSON.stringify(configFor(options ?? INIT_DEFAULTS, existing), null, 2)}\n`, note);
 }
 
 /**
@@ -275,8 +283,8 @@ export function init(root: string, options: InitOptions | null = null): InitResu
   return {
     files: [
       config,
-      write(root, ".claude/settings.json", settingsAfter, settings === null ? "作成" : "更新（既存の設定は残しました）"),
-      write(root, ".gitignore", merged, gitignoreNote(gitignore, merged)),
+      write(root, ".claude/settings.json", settings, settingsAfter, settings === null ? "作成" : "更新（既存の設定は残しました）"),
+      write(root, ".gitignore", gitignore, merged, gitignoreNote(gitignore, merged)),
     ],
     // 範囲を指定して呼ばれたなら、もう決まっている。案内が要るのは
     // 「骨組みだけ置いて、範囲がまだ既定値」の状態。
