@@ -43,3 +43,8 @@ gauntlet は自分自身の最初のユーザーで、閾値も ratchet も自�
 CRAP ≤ 8 の一次情報は dogfooding で出た: 集中開発（0.18〜0.24）で絶対閾値に 8 回止められ、
 全て関数分割か純関数の抽出で解決した（DESIGN §7-4）。閾値を緩める理由はまだ出ていない。
 厳しすぎて実装が歪むと判断したら、閾値ではなく dogfooding の方を外してよい。
+
+**main へは push できない。** ruleset で塞いである（PR 必須・`gauntlet` が
+required status check・bypass なし）。変更はブランチ → PR → CI 緑 → マージ。
+push の回の `full` は事後の通知で、ゲートとして働けるのは PR の回だけだから（PLAN の
+「main を ruleset で守る」）。
