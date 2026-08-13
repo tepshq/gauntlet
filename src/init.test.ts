@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -118,13 +118,42 @@ describe("init", () => {
     expect(init(root).files.map((file) => file.note)).toEqual(["作成", "作成", "作成"]);
   });
 
-  it("二度目は何をしたかを言い分ける", () => {
+  // settings.json は存在の有無だけで「更新」と言っていた（#47）。内容が同一の回に
+  //「更新」と出ると、本当に配線が変わった回（0.23.4 → 0.25.0 のフック形の変更など）と
+  // 出力で区別できない。
+  it("何も変わらない二度目は全部 変更なし と言う", () => {
     init(root);
-    expect(init(root).files.map((file) => file.note)).toEqual([
-      "変更なし",
-      "更新（既存の設定は残しました）",
-      "変更なし",
-    ]);
+    expect(init(root).files.map((file) => file.note)).toEqual(["変更なし", "変更なし", "変更なし"]);
+  });
+
+  // 「変更なし」は言葉どおり触らない。書き直すと mtime が動き、watcher や
+  // インクリメンタルビルドが無駄に反応する。
+  it("内容が同一なら settings.json を書き直さない", () => {
+    init(root);
+    const past = new Date("2020-01-01T00:00:00Z");
+    utimesSync(join(root, ".claude/settings.json"), past, past);
+    init(root);
+    expect(statSync(join(root, ".claude/settings.json")).mtime).toEqual(past);
+  });
+
+  // 出し分けの「更新」側。旧配線からの移行では実際に内容が変わるので、そこは更新と言う。
+  it("settings.json が実際に変わる回は 更新 と言う", () => {
+    mkdirSync(join(root, ".claude"), { recursive: true });
+    writeFileSync(
+      join(root, ".claude/settings.json"),
+      JSON.stringify({
+        hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "npx gauntlet quick" }] }] },
+      }),
+    );
+    const file = init(root).files.find((entry) => entry.path === ".claude/settings.json");
+    expect(file!.note).toBe("更新（既存の設定は残しました）");
+  });
+
+  // config も同じ性質で守る。同じ範囲を渡し直した回は「更新」ではない。
+  it("同じ範囲を指定し直した二度目の config は 変更なし と言う", () => {
+    const options = { defaultBranch: "main", include: ["lib/**/*.ts"], exclude: [], testProjects: [] };
+    init(root, options);
+    expect(init(root, options).files[0]).toEqual({ path: "gauntlet.config.json", note: "変更なし" });
   });
 
   // 新しいフックを取り込むために叩き直した人が、測る範囲を既定値に戻された
