@@ -1708,7 +1708,7 @@ describe("duplicationViolations", () => {
   it("欄が無ければ種を置いて落とす", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 5, mutation: {} });
-      expect(duplicationViolations(diskStore(root), 1090)).toEqual([BASELINE_SEEDED]);
+      expect(duplicationViolations(diskStore(root), 1090, [])).toEqual([BASELINE_SEEDED]);
       expect(loadBaseline(root)).toEqual({ crap: 5, mutation: {}, duplication: 1090 });
     });
   });
@@ -1716,7 +1716,7 @@ describe("duplicationViolations", () => {
   // baseline ファイル自体が無いリポジトリでも落ちずに種を置く。
   it("記録ファイルそのものが無くても種を置いて落とす", () => {
     withRoot((root) => {
-      expect(duplicationViolations(diskStore(root), 42)).toEqual([BASELINE_SEEDED]);
+      expect(duplicationViolations(diskStore(root), 42, [])).toEqual([BASELINE_SEEDED]);
       expect(loadBaseline(root)?.duplication).toBe(42);
     });
   });
@@ -1724,10 +1724,43 @@ describe("duplicationViolations", () => {
   it("増えていたら落とし、記録は変えない", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
-      expect(duplicationViolations(diskStore(root), 150)).toEqual([
+      expect(duplicationViolations(diskStore(root), 150, [])).toEqual([
         { message: "重複が 100 → 150 トークンに増えました" },
       ]);
       expect(loadBaseline(root)?.duplication).toBe(100);
+    });
+  });
+
+  // #41 の反論。`list` は別コマンドで、走らせるかは本人の判断に掛かっている
+  // — **ゲートが赤い瞬間だけは、向かう必要がない**。増えた分の分離はしない
+  // （読んでいる人は自分が何を書いたかを知っているので、並べれば見分けが付く）。
+  it("増えていたら、いま出ている対をその場に添える", () => {
+    withRoot((root) => {
+      saveBaseline(root, { crap: 0, mutation: {}, duplication: 0 });
+      const clones = [
+        { files: ["src/crawl.ts", "src/download.ts"] as const, tokens: 97 },
+        { files: ["src/analyze.ts", "src/measureTextCoverage.ts"] as const, tokens: 124 },
+      ];
+      expect(duplicationViolations(diskStore(root), 221, clones)).toEqual([
+        {
+          message:
+            "重複が 0 → 221 トークンに増えました\n" +
+            "   124  src/analyze.ts ↔ src/measureTextCoverage.ts\n" +
+            "    97  src/crawl.ts ↔ src/download.ts",
+        },
+      ]);
+    });
+  });
+
+  // 全部並べると本当の原因が量に埋もれる。切った分は件数で言う（`withDetails`）。
+  it("多すぎる対は切って、切った件数を言う", () => {
+    withRoot((root) => {
+      saveBaseline(root, { crap: 0, mutation: {}, duplication: 0 });
+      const clones = Array.from({ length: 12 }, (_unused, i) => ({ files: [`src/a${i}.ts`, `src/b${i}.ts`] as const, tokens: 60 + i }));
+      const message = duplicationViolations(diskStore(root), 800, clones)[0]!.message;
+      expect(message).toContain("    71  src/a11.ts ↔ src/b11.ts");
+      expect(message).toContain("…他 2 件");
+      expect(message).not.toContain("src/a0.ts");
     });
   });
 
@@ -1735,7 +1768,7 @@ describe("duplicationViolations", () => {
   it("減っていたら通し、記録を下げる", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
-      expect(duplicationViolations(diskStore(root), 60)).toEqual([]);
+      expect(duplicationViolations(diskStore(root), 60, [])).toEqual([]);
       expect(loadBaseline(root)?.duplication).toBe(60);
     });
   });
@@ -1743,7 +1776,7 @@ describe("duplicationViolations", () => {
   it("同じなら通し、記録も変わらない", () => {
     withRoot((root) => {
       saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
-      expect(duplicationViolations(diskStore(root), 100)).toEqual([]);
+      expect(duplicationViolations(diskStore(root), 100, [])).toEqual([]);
       expect(loadBaseline(root)?.duplication).toBe(100);
     });
   });
@@ -1752,7 +1785,7 @@ describe("duplicationViolations", () => {
   // 混ざると、crap ゲートが 1 度も書いていない「最も厳しい値」がディスクに残る。
   it("種を置くとき crap の欄は作らない", () => {
     withRoot((root) => {
-      duplicationViolations(diskStore(root), 29482);
+      duplicationViolations(diskStore(root), 29482, []);
       expect(loadBaseline(root)).toEqual({ duplication: 29482, mutation: {} });
     });
   });
@@ -1803,7 +1836,7 @@ describe("計測を中断したゲートと種置きの相互作用", () => {
   it("中断した回に完走した duplication が種を置いても、crap の欄は空のまま", () => {
     withRoot((root) => {
       expect(abortedCrap(root)).toContain("網羅率を測っていないファイル");
-      expect(duplicationViolations(diskStore(root), 29482)).toEqual([BASELINE_SEEDED]);
+      expect(duplicationViolations(diskStore(root), 29482, [])).toEqual([BASELINE_SEEDED]);
       expect(loadBaseline(root)).not.toHaveProperty("crap");
     });
   });
@@ -1813,7 +1846,7 @@ describe("計測を中断したゲートと種置きの相互作用", () => {
   it("不整合を解消した次の回は、後退ではなく種置きになる", () => {
     withRoot((root) => {
       abortedCrap(root);
-      duplicationViolations(diskStore(root), 29482);
+      duplicationViolations(diskStore(root), 29482, []);
       expect(applyRatchet(diskStore(root), report, new Map())).toEqual([BASELINE_SEEDED]);
       expect(loadBaseline(root)).toEqual({ crap: 1, duplication: 29482, mutation: {} });
     });

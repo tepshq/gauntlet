@@ -145,11 +145,23 @@ describe("runDuplication", () => {
 
   // jscpd のレポートは毎回 tmp に出す。後始末を落とすと `full` を回すたびに溜まる
   // （消えるのは CI の使い捨てコンテナだけで、手元には残り続ける）。
+  //
+  // **共有の tmp を数えない。** 最初はそこで数えていて、`run.test.ts` の jscpd 実行と
+  // 競って 14 回に 1 回落ちた（vitest はファイルを並列に走らせる）。走るたびに答えが
+  // 変わるテストは、数回の食い違いで無視されるようになる。TMPDIR を自分専用に向けて、
+  // **自分が作ったものだけを見る**（vitest はファイルごとに別プロセスなので env は競らない）。
   it("一時ディレクトリを残さない", () => {
-    const left = (): number => readdirSync(tmpdir()).filter((name) => name.startsWith("gauntlet-jscpd-")).length;
-    const before = left();
-    runDuplication(link, ["src/alpha.ts", "src/beta.ts"]);
-    expect(left()).toBe(before);
+    const sandbox = mkdtempSync(join(tmpdir(), "gauntlet-tmproot-"));
+    const saved = process.env["TMPDIR"];
+    process.env["TMPDIR"] = sandbox;
+    try {
+      runDuplication(link, ["src/alpha.ts", "src/beta.ts"]);
+    } finally {
+      if (saved === undefined) delete process.env["TMPDIR"];
+      else process.env["TMPDIR"] = saved;
+    }
+    expect(readdirSync(sandbox)).toEqual([]);
+    rmSync(sandbox, { recursive: true, force: true });
   });
 });
 

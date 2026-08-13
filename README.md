@@ -96,6 +96,16 @@ const names = entries.filter((d) => d.isDirectory())
 **増やさないこと**だけを要求します（絶対閾値なし・`full` のみ・減れば自動で締まる）。
 jscpd は gauntlet が同梱するので、対象リポジトリに入れるものはありません。
 
+落ちるときは、**いま重複している対をその場に並べます**。数だけ言われても場所に辿り着けず、
+`list` を走らせるかは本人の判断に掛かっているためです（多いときは 10 件で切って残りを件数で言います）。
+
+```
+✗ duplication (89ms)  重複 221 トークン / 対象 26 ファイル
+    重複が 0 → 221 トークンに増えました
+       124  src/analyze.ts ↔ src/measureTextCoverage.ts
+        97  src/crawl.ts ↔ src/download.ts
+```
+
 **網羅率の対象は gauntlet の宣言で決まります。** vitest の `coverage.include` は
 gauntlet が上書きします。ただし `coverage.exclude` は上書きできないので、そこで消された
 ファイルが測る範囲に入っていると**テストを書いても網羅率が上がりません**。`full` はそれを
