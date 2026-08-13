@@ -475,8 +475,7 @@ export const BASELINE_SEEDED: Violation = { message: "許容値の記録を作�
 
 export const BASELINE_NOT_COMMITTED: Violation = {
   message:
-    `${BASELINE_FILENAME} を作りました。git add -A などでコミットしてください` +
-    "（ファイル名を含む Bash コマンドは guard が止めます）。" +
+    `${BASELINE_FILENAME} を作りました。git add -A でも名指しでもよいのでコミットしてください。` +
     "履歴に無いと毎回いまの状態が許容値として置き直され、ラチェットが噛みません",
 };
 
