@@ -60,9 +60,9 @@
     },
     "src/run.ts": {
       "survived": 2,
-      "measured": 647,
+      "measured": 676,
       "timeout": 0,
-      "noCoverage": 74,
+      "noCoverage": 72,
       "unallowed": 0
     },
     "src/tier.ts": {
@@ -107,7 +107,9 @@
     "src/exec.ts": {
       "survived": 2,
       "measured": 30,
-      "timeout": 0
+      "timeout": 0,
+      "noCoverage": 1,
+      "unallowed": 8
     },
     "src/main.ts": {
       "survived": 0,
@@ -119,8 +121,10 @@
     },
     "src/typescript/duplication.ts": {
       "survived": 0,
-      "measured": 23,
-      "timeout": 0
+      "measured": 74,
+      "timeout": 0,
+      "noCoverage": 2,
+      "unallowed": 0
     },
     "src/package-manager.ts": {
       "survived": 1,
