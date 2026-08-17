@@ -146,15 +146,15 @@ describe("repositoryViolators", () => {
 
 describe("gateRepository", () => {
   it("違反数が許容値以下なら落とさない", () => {
-    expect(gateRepository(reportOf([BAD, GOOD]), { crap: 1, mutation: {} })).toEqual({ kind: "ok" });
+    expect(gateRepository(reportOf([BAD, GOOD]), { crap: 1 })).toEqual({ kind: "ok" });
   });
 
   it("許容値を超えたら落とす", () => {
-    expect(gateRepository(reportOf([BAD]), { crap: 0, mutation: {} })).toEqual({ kind: "regressed", allowed: 0, actual: 1 });
+    expect(gateRepository(reportOf([BAD]), { crap: 0 })).toEqual({ kind: "regressed", allowed: 0, actual: 1 });
   });
 
   it("減っていたら改善として返す", () => {
-    expect(gateRepository(reportOf([GOOD]), { crap: 3, mutation: {} })).toEqual({ kind: "improved", from: 3, to: 0 });
+    expect(gateRepository(reportOf([GOOD]), { crap: 3 })).toEqual({ kind: "improved", from: 3, to: 0 });
   });
 
   // 0 から始めると、既存リポジトリは導入した瞬間に赤で埋まって誰も入れられない。
@@ -166,7 +166,7 @@ describe("gateRepository", () => {
   // duplication だけが種を置いた）。0 として突き合わせると、次に完走した回が
   // 「0 → 2 に増えました」で落ち、guard が記録を守るので以後ずっと赤になる。
   it("crap の欄が無い記録も、まだ測っていないとして種にする", () => {
-    expect(gateRepository(reportOf([BAD, BAD, GOOD]), { duplication: 29482, mutation: {} })).toEqual({
+    expect(gateRepository(reportOf([BAD, BAD, GOOD]), { duplication: 29482 })).toEqual({
       kind: "seeded",
       to: 2,
     });
@@ -174,7 +174,7 @@ describe("gateRepository", () => {
 
   // 「無い」と 0 は違う。0 は測って違反ゼロだった記録なので、そのまま最も厳しく噛む。
   it("許容 0 は種置きではなく突き合わせ", () => {
-    expect(gateRepository(reportOf([BAD]), { crap: 0, duplication: 0, mutation: {} })).toEqual({
+    expect(gateRepository(reportOf([BAD]), { crap: 0, duplication: 0 })).toEqual({
       kind: "regressed",
       allowed: 0,
       actual: 1,

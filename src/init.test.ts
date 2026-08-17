@@ -35,19 +35,19 @@ describe("mergeGitignore", () => {
   // `coverage` はディレクトリにも当たるので `coverage/` を含む。h3 には元から
   // `coverage` があり、そこへ `coverage/` を足していた（動作は同じでも二度書きに見える）。
   it("末尾の / 違いは同じ行として扱う", () => {
-    expect(mergeGitignore("coverage\nreports\n.stryker-tmp\n*.tsbuildinfo\n")).toBe(
-      "coverage\nreports\n.stryker-tmp\n*.tsbuildinfo\n",
+    expect(mergeGitignore("coverage\nreports\n*.tsbuildinfo\n")).toBe(
+      "coverage\nreports\n*.tsbuildinfo\n",
     );
   });
 
   // 逆向き（既存が広い方）も同じ。足りないものだけを足す。
   it("足りないものだけ足す", () => {
     expect(mergeGitignore("coverage/\n")).toBe(
-      "coverage/\n\n# gauntlet の出力\nreports/\n.stryker-tmp/\n*.tsbuildinfo\n",
+      "coverage/\n\n# gauntlet の出力\nreports/\n*.tsbuildinfo\n",
     );
   });
   // *.tsbuildinfo は既定の型チェック（tsc --noEmit --incremental）の検査キャッシュ。
-  const ADDED = "# gauntlet の出力\ncoverage/\nreports/\n.stryker-tmp/\n*.tsbuildinfo\n";
+  const ADDED = "# gauntlet の出力\ncoverage/\nreports/\n*.tsbuildinfo\n";
 
   it("何も無ければ全部足す", () => {
     expect(mergeGitignore(null)).toBe(ADDED);
@@ -67,17 +67,17 @@ describe("mergeGitignore", () => {
   });
 
   it("全部揃っていれば一字も変えない", () => {
-    const existing = "coverage/\nreports/\n.stryker-tmp/\n*.tsbuildinfo\n";
+    const existing = "coverage/\nreports/\n*.tsbuildinfo\n";
     expect(mergeGitignore(existing)).toBe(existing);
   });
 
   it("足りないものだけ足す", () => {
-    expect(mergeGitignore("coverage/\n")).toBe("coverage/\n\n# gauntlet の出力\nreports/\n.stryker-tmp/\n*.tsbuildinfo\n");
+    expect(mergeGitignore("coverage/\n")).toBe("coverage/\n\n# gauntlet の出力\nreports/\n*.tsbuildinfo\n");
   });
 
   // 既存の .gitignore は字下げされていることがある。
   it("前後の空白を無視して既存判定する", () => {
-    const existing = "  coverage/  \nreports/\n.stryker-tmp/\n*.tsbuildinfo\n";
+    const existing = "  coverage/  \nreports/\n*.tsbuildinfo\n";
     expect(mergeGitignore(existing)).toBe(existing);
   });
 });
@@ -196,12 +196,12 @@ describe("init", () => {
     expect(init(root, INIT_DEFAULTS).needsSetup).toBe(false);
   });
 
-  // 行数まで固定する。数字を見ないと、引き算が足し算に化けても気づかない
-  //（mutation で実際に生き残った）。空行 + 見出し + 4 エントリで 6 行。
+  // 行数まで固定する。数字を見ないと、引き算が足し算に化けても気づかない。
+  // 空行 + 見出し + 3 エントリで 5 行。
   it("足りない行だけ足した .gitignore は足した行数を言う", () => {
     writeFileSync(join(root, ".gitignore"), "node_modules/\n");
     const gitignore = init(root).files.find((file) => file.path === ".gitignore");
-    expect(gitignore!.note).toBe("更新（6 行追加）");
+    expect(gitignore!.note).toBe("更新（5 行追加）");
   });
 
   // CI が要るもの（サービスコンテナ・マイグレーション・Node のバージョン・認証）は
@@ -370,7 +370,7 @@ describe("init", () => {
   it("既にある .gitignore を残して足す", () => {
     writeFileSync(join(root, ".gitignore"), "node_modules/\n");
     init(root);
-    expect(read(".gitignore")).toBe("node_modules/\n\n# gauntlet の出力\ncoverage/\nreports/\n.stryker-tmp/\n*.tsbuildinfo\n");
+    expect(read(".gitignore")).toBe("node_modules/\n\n# gauntlet の出力\ncoverage/\nreports/\n*.tsbuildinfo\n");
   });
 
   // CI の雛形は skill が持つ。ここが欠けると導入した CI が動かない。

@@ -42,8 +42,6 @@ export function coverageInstallCommand(pm: PackageManager, vitestVersion: string
 /** node_modules に**実際に入っている** vitest の版。`^` 解決後の値が要る。 */
 export function installedVitestVersion(root: string): string | null {
   try {
-    // Stryker disable next-line StringLiteral: encoding を外しても Buffer が
-    // JSON.parse に渡って同じ結果になるため、区別できる振る舞いが無い。
     const pkg = readFileSync(join(root, "node_modules", "vitest", "package.json"), "utf8");
     return (JSON.parse(pkg) as { version?: string }).version ?? null;
   } catch {
@@ -132,24 +130,6 @@ export function lastLines(text: string, count: number): string {
   return text.split("\n").slice(-count).join("\n").trim();
 }
 
-/**
- * 末尾を取る前にスタックの行を落とす。
- *
- * 道具は理由を出したあとに長いスタックを吐くので、そのまま末尾 N 行を取ると
- * **窓に入るのがスタックだけ**になる（h3 で Stryker の失敗が 13 行すべて `at` になった）。
- */
-export function lastReasons(text: string, count: number): string {
-  const lines = text.split("\n").filter((line) => !/^\s+at\s/.test(line));
-  // WARN が大量に出る実行では、末尾 N 行が警告とその添付で埋まり、**致命傷が窓の外に
-  // 押し出される**（#27 では 920 ファイル分の前処理警告が本当のエラーを隠した）。
-  // ERROR 行があれば、最後の ERROR から先を優先して見せる。
-  const lastError = lines.map((line, index) => (line.includes("ERROR ") ? index : -1)).reduce((a, b) => Math.max(a, b), -1);
-  // ERROR が見つかったら**そこから先頭 count 行**。末尾を取ると、ERROR の後ろに続く
-  // 警告の洪水でまた埋まる。見つからなければ従来どおり末尾。
-  if (lastError === -1) return lastLines(lines.join("\n"), count);
-  return lines.slice(lastError, lastError + count).join("\n").trim();
-}
-
 /** vitest は絶対パスで報告する。差分や baseline と同じリポジトリ相対に揃える。 */
 function relativeName(root: string, path: string): string {
   return (isAbsolute(path) ? relative(root, path) : path).split("\\").join("/");
@@ -164,8 +144,6 @@ function relativeName(root: string, path: string): string {
  */
 function fileFailures(result: VitestFileResult, root: string): TestFailure[] {
   const file = relativeName(root, result.name);
-  // Stryker disable next-line ArrayDeclaration: 既定値に何を入れても
-  // 直後の filter が status を見て落とすので、区別できる振る舞いが無い。
   const failed = (result.assertionResults ?? []).filter((assertion) => assertion.status === "failed");
   if (failed.length === 0) return [{ file, test: null, message: result.message ?? "" }];
   return failed.map((assertion) => ({
@@ -181,8 +159,6 @@ export function toOutcome(report: VitestJsonReport, root: string): Omit<TestOutc
     passed: report.success && report.numFailedTests === 0,
     total: report.numTotalTests,
     failed: report.numFailedTests,
-    // Stryker disable next-line ArrayDeclaration: 既定値に何を入れても
-    // 直後の filter が status を見て落とすので、区別できる振る舞いが無い。
     failures: (report.testResults ?? [])
       .filter((result) => result.status === "failed")
       .flatMap((result) => fileFailures(result, root)),
@@ -194,7 +170,7 @@ export function toOutcome(report: VitestJsonReport, root: string): Omit<TestOutc
  *
  * **正の選択。** gauntlet に「外部サービスを要するテスト」という概念は無い —
  * 開発者が「これが gauntlet の世界のテスト」と宣言し、宣言に無い project は
- * 実行も coverage も mutation もされない。空なら全部走らせる（project を
+ * 実行も coverage も測られない。空なら全部走らせる（project を
  * 使っていないリポジトリはこちら）。
  *
  * **glob の `--exclude` ではなく project 名なのは、`--exclude` が vitest の
@@ -205,7 +181,6 @@ export function vitestArgs(
   base: string | null,
   outDir: string,
   projects: readonly string[],
-  files: readonly string[] = [],
   include: readonly string[] = [],
 ): string[] {
   const args = ["vitest", "run", "--coverage", "--coverage.provider=v8", "--coverage.reporter=json"];
@@ -221,8 +196,6 @@ export function vitestArgs(
   // timeout の理由を `STACK_TRACE_ERROR` に差し替えることがあり、機械可読な側だけでは
   // 「落ちた」以外が伝わらない（h3 で実測）。--outputFile は json 側にだけ効く。
   args.push("--reporter=json", "--reporter=default", `--outputFile=${join(outDir, "result.json")}`);
-  // 位置引数はテストファイルの絞り込み。フラグの後ろに置く。
-  args.push(...files);
   return args;
 }
 
@@ -232,25 +205,18 @@ export function vitestArgs(
  * `base` を渡すとその起点以降の変更に関係するテストだけを走らせる。
  * `--changed` は変更ファイルを import する全テストをモジュールグラフから選ぶので、
  * 変更ファイルの coverage はこれで完全になる。
- *
- * `files` を渡すとそのテストファイルだけを走らせる。どのソースを覆っているかを
- * 知るために使う（`mutationScope`）。`base` とは併用しない。
- * 渡したテストが全部宣言外の project で選択が 0 件になっても、特別扱いは要らない
- * — vitest は `success: false` を返すが、呼び出し元は coverage しか読まず、
- * coverage は空に潰れる（duct の vitest 3.2.7 で実測）。
  */
 export function runTests(
   root: string,
   base: string | null,
   projects: readonly string[],
-  files: readonly string[] = [],
   include: readonly string[] = [],
 ): TestOutcome {
   requireCoverageProvider(root);
   const outDir = mkdtempSync(join(tmpdir(), "gauntlet-"));
   try {
     // exit code は握り潰す。閾値違反とテスト失敗が区別できないため。
-    const { combined } = capture("npx", vitestArgs(base, outDir, projects, files, include), root);
+    const { combined } = capture("npx", vitestArgs(base, outDir, projects, include), root);
     const report = readJson<VitestJsonReport>(join(outDir, "result.json"), "vitest の実行結果", combined);
     const outcome = toOutcome(report, root);
 

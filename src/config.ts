@@ -38,9 +38,8 @@ function loadValidator(): (data: unknown) => ErrorObject[] | null {
   const ajv = new Ajv({
     // 1 件目で切ると、エージェントが config を直す往復がその分だけ増える。
     allErrors: true,
-    // Stryker disable next-line BooleanLiteral: 現行スキーマは strict でも同じ結果を返す
-    // （実測で確認）。将来 strict が弾く構文が入ったときに、ajv の例外ではなく
-    // ConfigError で落とし続けるための保険なので、今は結果に差が出ない。
+    // 将来 strict が弾く構文が入ったときに、ajv の例外ではなく ConfigError で
+    // 落とし続けるための保険（現行スキーマは strict でも同じ結果を返す。実測で確認）。
     strict: false,
   });
   const validate = ajv.compile(schema);

@@ -82,7 +82,7 @@ describe("help", () => {
   });
 
   // 受け付けるのに使い方に載っていないコマンドがあると、存在に気づけない。
-  it.each(["quick", "full", "list", "doctor", "init", "hook"])("使い方に %s が載っている", (command) => {
+  it.each(["quick", "full", "list", "init", "hook"])("使い方に %s が載っている", (command) => {
     expect(capture(() => runCli(["help"])).err).toContain(command);
   });
 

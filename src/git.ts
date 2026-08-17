@@ -34,8 +34,6 @@ const MAX_OUTPUT_BYTES = 512_000_000;
 function git(root: string, args: readonly string[]): string {
   const withConfig = ["-c", "core.quotePath=false", ...args];
   try {
-    // 1 行に収めないと disable の射程から外れる。
-    // Stryker disable next-line ArrayDeclaration,StringLiteral,MethodExpression,ObjectLiteral: 子プロセスの起動引数と stdio の指定。壊すと git が動かないだけで、区別できる振る舞いが無い
     return execFileSync("git", withConfig, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: MAX_OUTPUT_BYTES }).trim();
   } catch (cause) {
     throw new GitError(`git ${args.join(" ")} が失敗しました: ${(cause as Error).message}`);
@@ -150,13 +148,6 @@ export function repoSourceSet(root: string): Set<string> {
 }
 
 /**
- * git が実行ビット付き（100755）として持っているファイル。
- *
- * Stryker の `--inPlace` は**プロジェクト全体**を退避して戻すので、変異対象だけ
- * mode を控えても足りない（h3 では `bin/h3.mjs` が 755 → 644 に落ちた）。
- * 何を触るかを gauntlet が知らなくても、git が持っている一覧なら過不足なく戻せる。
- */
-/**
  * 作業ツリーがコミット済みの状態と一致しているか。
  *
  * 許容値の記録を**作業途中の値で**締めないための判定。分割の途中は数字が上下する
@@ -164,16 +155,8 @@ export function repoSourceSet(root: string): Set<string> {
  * 負ける（実際に 77 → 80 で落ちた）。clean なツリー = コミット済みの実測だけを記録する。
  */
 export function workingTreeClean(root: string): boolean {
-  // Stryker disable next-line MethodExpression: clean のとき porcelain は完全な空文字を
-  // 返すので trim は保険。外しても観測できる振る舞いは変わらない。
+  // clean のとき porcelain は完全な空文字を返すので trim は保険。
   return git(root, ["status", "--porcelain"]).trim() === "";
-}
-
-export function executableFiles(root: string): Set<string> {
-  const entries = lines(git(root, ["ls-files", "-s"]))
-    .filter((line) => line.startsWith("100755"))
-    .map((line) => line.slice(line.indexOf("\t") + 1));
-  return new Set(entries);
 }
 
 export function changedLines(root: string, base: string): Map<string, Set<number>> {

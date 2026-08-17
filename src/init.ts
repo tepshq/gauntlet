@@ -56,8 +56,6 @@ function configFor(options: InitOptions, existing: GauntletConfig | null): Gaunt
 /** 既存 config。読めなければ null（壊れていても init は進む — 書き直せば直るので）。 */
 function existingConfig(root: string): GauntletConfig | null {
   const raw = readIfPresent(root, CONFIG_FILENAME);
-  // Stryker disable next-line ConditionalExpression: 早期 return を外しても
-  // JSON.parse(null) は "null" を読んで null を返すので、結果が変わらない。
   if (raw === null) return null;
   try {
     return JSON.parse(raw) as GauntletConfig;
@@ -106,11 +104,11 @@ const HOOKS = {
 /**
  * gauntlet と、それが呼ぶ道具が残す作業ファイル。
  *
- * `coverage/` と `.stryker-tmp/` は実行のたびに作られる。放っておくと
+ * `coverage/` と `reports/` は実行のたびに作られる。放っておくと
  * 導入した全リポジトリで未追跡のゴミになるので、こちらで面倒を見る。
  * `*.tsbuildinfo` は既定の型チェック（`tsc --noEmit --incremental`）の検査キャッシュ。
  */
-const IGNORED = ["coverage/", "reports/", ".stryker-tmp/", "*.tsbuildinfo"];
+const IGNORED = ["coverage/", "reports/", "*.tsbuildinfo"];
 
 /**
  * 既にある行は足さない。既存の .gitignore を並べ替えたり消したりもしない。
@@ -214,8 +212,6 @@ function gitignoreNote(before: string | null, after: string): string {
 
 function readIfPresent(root: string, path: string): string | null {
   try {
-    // Stryker disable next-line StringLiteral: encoding を外しても Buffer が
-    // JSON.parse に渡って同じ結果になるため、区別できる振る舞いが無い。
     return readFileSync(join(root, path), "utf8");
   } catch {
     return null;

@@ -1,7 +1,8 @@
 # gauntlet
 
 エージェントが書いたコードを、人間がコードを読まずに機械的な制約で縛る、チーム共用の品質ゲート。
-coverage・CRAP・mutation testing・重複（+ 対象リポジトリの型チェック）を `quick`（差分に閉じた検査。エージェントの `git commit` を PreToolUse フックで止める）と `full`（全量 + ラチェット + mutation。CI）の 2 tier で回す。
+coverage・CRAP・重複（+ 対象リポジトリの型チェック）を `quick`（差分に閉じた検査。エージェントの `git commit` を PreToolUse フックで止める）と `full`（全量 + ラチェット。CI）の 2 tier で回す。
+mutation testing は 0.9〜0.26 で運用したが、実行時間を理由に 0.27.0 でスコープから外した（DESIGN §2。戻す形は将来課題）。
 
 ## 設計を貫く 2 つの語
 

@@ -1,14 +1,12 @@
 /**
  * 外部コマンドの実行。
  *
- * gauntlet が呼ぶ道具（vitest / eslint / Stryker）は、違反が 1 件でもあれば
+ * gauntlet が呼ぶ道具（vitest / jscpd）は、違反が 1 件でもあれば
  * 非ゼロで終わる。exit code では「道具が落ちた」と「違反があった」を区別できないので、
  * ここでは落とさず出力を返し、判定は呼び出し側が出力そのものに対して行う。
  */
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export interface Captured {
@@ -37,40 +35,6 @@ function toCaptured(run: () => string): Captured {
 
 export function capture(bin: string, args: readonly string[], cwd: string): Captured {
   return toCaptured(() => execFileSync(bin, args, { cwd, encoding: "utf8", stdio: "pipe" }));
-}
-
-/**
- * 出力を**流しながら**捕まえる。分単位かかるコマンド（mutation）のためのもの。
- *
- * `capture` は出力を全部バッファするので、**途中で打ち切られた回には何も残らない** —
- * CI の job 上限で 58 分走って cancel されたとき、ログに残っていたのは gauntlet 自身の
- * 3 行だけで、「どこまで測れたか / あと何分足せばよいか / 止まっているのか」の
- * どれも分からなかった（#38）。
- *
- * `tee` で一時ファイルに写しながら標準出力へ素通しする。Node の同期実行に
- * 「流しつつ捕まえる」口が無いので、シェルに任せるのがいちばん薄い
- * （`captureShell` で既に `sh` に依存している）。**dash（Ubuntu の `/bin/sh`）で実測。**
- * 書き出し先を `/dev/stderr` にしないのは、Linux では呼び出し側が `2> log` している回に
- * `tee` がそのファイルを開き直して先頭から潰しうるため。
- *
- * **終了コードは `tee` のもの**（つまり常に 0）。この口を使う側は出力そのもので
- * 判定すること — mutation はレポートの有無と本文で判定しているので影響しない。
- * 終了コードで判断する dry run（`doctor`）は `capture` のまま。
- */
-export function captureStreaming(bin: string, args: readonly string[], cwd: string): Captured {
-  const dir = mkdtempSync(join(tmpdir(), "gauntlet-stream-"));
-  const logPath = join(dir, "output.log");
-  try {
-    execFileSync("sh", ["-c", '"$@" 2>&1 | tee "$GAUNTLET_LOG"', "sh", bin, ...args], {
-      cwd,
-      stdio: ["ignore", "inherit", "inherit"],
-      env: { ...process.env, GAUNTLET_LOG: logPath },
-    });
-    const combined = readFileSync(logPath, "utf8");
-    return { stdout: combined, combined, code: 0 };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 }
 
 /**

@@ -2,7 +2,7 @@
  * 重複（コピペ）の測定。jscpd を叩いて、リポジトリ全体の重複トークン数を 1 つ返す。
  *
  * **jscpd は gauntlet が同梱してバージョンを固定する。** 対象リポジトリごとに版が
- * ずれると、同じコードで数字が変わる（flaky）。eslint や Stryker と違って対象側の
+ * ずれると、同じコードで数字が変わる（flaky）。eslint と違って対象側の
  * 何にも合わせる必要が無いので、同梱できる。
  *
  * **単位はトークン。** 行だと整形（改行位置の変更）だけで数字が動く。
@@ -113,7 +113,7 @@ export function parseDuplication(text: string, detail: string): DuplicationResul
  *
  * `--absolute` の名前は realpath 解決済みで返る。root 自体が symlink の下にあると
  * （macOS の `mkdtemp` は `/var/…` を返し、jscpd は `/private/var/…` を返す）
- * `relative(root, name)` が `../../../…` に化ける。baseline や mutation の一覧と
+ * `relative(root, name)` が `../../../…` に化ける。baseline の一覧と
  * 同じ表記に揃わないと、一覧から開けない。
  */
 export function relativizeClones(base: string, clones: readonly DuplicateClone[]): DuplicateClone[] {
@@ -137,8 +137,7 @@ function jscpdBin(): string {
 
 /** 対象が 1 つ以上あることは呼び出し側が保証する。 */
 export function runDuplication(root: string, files: readonly string[]): DuplicationResult {
-  // Stryker disable next-line StringLiteral: 接頭辞は残骸を人が見分けるためだけのもの。
-  // 空にしても動く（中身は同じ）ので、区別できる結果を持たない変異。
+  // 接頭辞は残骸を人が見分けるためのもの。
   const outDir = mkdtempSync(join(tmpdir(), "gauntlet-jscpd-"));
   try {
     const { combined } = capture("node", [jscpdBin(), ...jscpdArgs(files, outDir)], root);
@@ -147,8 +146,6 @@ export function runDuplication(root: string, files: readonly string[]): Duplicat
       // ファイル名は別の行に置く。同じ行に並べると、下の disable が
       // （行単位なので）**ファイル名の変異まで一緒に外してしまう**。
       const reportPath = join(outDir, "jscpd-report.json");
-      // Stryker disable next-line StringLiteral: 符号化を落とすと Buffer が返るが、
-      // `JSON.parse` も `lastLines` も文字列化して同じ答えを出す（実測）。
       text = readFileSync(reportPath, "utf8");
     } catch {
       throw new RunnerError(`jscpd がレポートを出しませんでした:\n${lastLines(combined, 15)}`);

@@ -15,18 +15,17 @@
  */
 export type TierName = "quick" | "full";
 
-export type CheckName = "typecheck" | "tests" | "crap" | "duplication" | "mutation";
+export type CheckName = "typecheck" | "tests" | "crap" | "duplication";
 
 /**
  * 各 tier が走らせるチェック。
  *
  * `quick` は「壊していないか」、`full` は「壊していないか + 危なくないか」。
- * mutation はエージェントが自分のテストで自分を採点する構造の穴を塞ぐため、
- * `full` にのみ置く（`quick` の予算に収まらない）。
+ * mutation は 0.27.0 でスコープから外した（分〜時間単位の実行時間。DESIGN §mutation）。
  */
 export const TIER_CHECKS: Record<TierName, readonly CheckName[]> = {
   quick: ["typecheck", "tests", "crap"],
-  full: ["typecheck", "tests", "crap", "duplication", "mutation"],
+  full: ["typecheck", "tests", "crap", "duplication"],
 };
 
 export interface Violation {

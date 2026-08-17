@@ -3,10 +3,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { type Baseline, diskStore, loadBaseline, memoryStore, saveBaseline } from "./baseline.ts";
+import { diskStore, loadBaseline, memoryStore, saveBaseline } from "./baseline.ts";
 import { type GauntletConfig, ConfigError } from "./config.ts";
 import { REPORT_SCHEMA_VERSION, type AdapterReport, type FunctionReport } from "./report.ts";
-import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, mutationRecords, regressionText, baselineNotes, condenseFailure, countByFile, coveredFiles, duplicationViolations, duplicationDebt, formatClones, allowedCounts, mutationScope, declaredProjects, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, mutationDebt, ratchetNote, lacksReason, needsTestsMessage, scopeText, settleConflictedBaseline, violatorReport, describeCrash, describeMutant, detailLines, formatResult, mutationRegressionText, mutationScopeText, mutationTargets, mutationViolations, noCoverageText, slackPassNote, slackPassText, noCoverageTotal, oneLine, timeoutTotal, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
+import { applyRatchet, BASELINE_NOT_COMMITTED, BASELINE_SEEDED, baselineStoreFor, canRecordBaseline, baselineNotes, condenseFailure, duplicationViolations, duplicationDebt, formatClones, allowedCounts, declaredProjects, CRAP_NEEDS_TESTS, crapCheckViolations, crapScope, crapViolations, failureReport, formatViolators, ratchetNote, lacksReason, needsTestsMessage, scopeText, settleConflictedBaseline, violatorReport, describeCrash, detailLines, formatResult, ratchetViolation, testViolation, testViolations, testsCheck, typecheckViolations, withDetails, DEFAULT_TYPECHECK } from "./run.ts";
 import { RunnerError } from "./typescript/runner.ts";
 import type { CheckResult, TierResult } from "./tier.ts";
 
@@ -49,7 +49,7 @@ describe("applyRatchet", () => {
   it("記録が無ければ種を置いて落とす", () => {
     withRoot((root) => {
       expect(applyRatchet(diskStore(root), violating(3, root), new Map())).toEqual([BASELINE_SEEDED]);
-      expect(loadBaseline(root)).toEqual({ crap: 3, mutation: {} });
+      expect(loadBaseline(root)).toEqual({ crap: 3 });
     });
   });
 
@@ -77,37 +77,28 @@ describe("applyRatchet", () => {
     });
   });
 
-  // ファイルに書き出す時点で全ゲート分の枠が無いと、次のゲートが記録を失う。
-  it("種を置くとき全ゲート分の枠を書く", () => {
-    withRoot((root) => {
-      applyRatchet(diskStore(root), violating(1, root), new Map());
-      const written = JSON.parse(readFileSync(join(root, "gauntlet.baseline.json"), "utf8")) as object;
-      expect(Object.keys(written).sort()).toEqual(["crap", "mutation"]);
-    });
-  });
-
   it("増えていたら落とし、記録は変えない", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 1, mutation: {} });
+      saveBaseline(root, { crap: 1 });
       expect(applyRatchet(diskStore(root), violating(4, root), new Map())[0]!.message).toContain("1 → 4");
-      expect(loadBaseline(root)).toEqual({ crap: 1, mutation: {} });
+      expect(loadBaseline(root)).toEqual({ crap: 1 });
     });
   });
 
   // 記録し損ねると許容値が緩いまま残り、後で同じだけ悪化させても通る。
   it("減っていたら通し、記録を下げる", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 5, mutation: {} });
+      saveBaseline(root, { crap: 5 });
       expect(applyRatchet(diskStore(root), violating(2, root), new Map())).toEqual([]);
-      expect(loadBaseline(root)).toEqual({ crap: 2, mutation: {} });
+      expect(loadBaseline(root)).toEqual({ crap: 2 });
     });
   });
 
   it("同じなら通し、記録も変わらない", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 2, mutation: {} });
+      saveBaseline(root, { crap: 2 });
       expect(applyRatchet(diskStore(root), violating(2, root), new Map())).toEqual([]);
-      expect(loadBaseline(root)).toEqual({ crap: 2, mutation: {} });
+      expect(loadBaseline(root)).toEqual({ crap: 2 });
     });
   });
 });
@@ -142,88 +133,6 @@ describe("ratchetViolation", () => {
     expect(ratchetViolation(reportOf([bad(10)]), new Map([["a.ts", new Set([10])]]), outcome)).toEqual({
       message: "リポジトリ全体の違反が 1 → 2 に増えました。増えた分は上の触った関数の違反です",
     });
-  });
-});
-
-describe("countByFile", () => {
-  it("ファイルごとに数える", () => {
-    expect(countByFile([{ file: "a.ts" }, { file: "b.ts" }, { file: "a.ts" }])).toEqual({ "a.ts": 2, "b.ts": 1 });
-  });
-
-  // 生き残りが 0 のファイルは記録側で 0 として扱う。ここには現れない。
-  it("何も無ければ空", () => {
-    expect(countByFile([])).toEqual({});
-  });
-
-  it("1 件なら 1", () => {
-    expect(countByFile([{ file: "a.ts" }])).toEqual({ "a.ts": 1 });
-  });
-});
-
-describe("mutationScope", () => {
-  const never = (): string[] => {
-    throw new Error("呼ばれてはいけない");
-  };
-
-  // 変更されたテストが無ければ、覆っているソースを調べる実行そのものが要らない。
-  // ここで余分に走らせると、設定ファイルだけの差分でも全テストが走る。
-  it("変更されたテストが無ければ調べに行かない", () => {
-    expect(mutationScope(["a.ts", "package.json"], never)).toEqual(["a.ts", "package.json"]);
-  });
-
-  it("何も変わっていなければ空", () => {
-    expect(mutationScope([], never)).toEqual([]);
-  });
-
-  // assert を消しただけの差分でも、そのテストが覆うソースが対象に入らないと素通りできる。
-  it("変更されたテストが覆うソースを足す", () => {
-    expect(mutationScope(["a.test.ts"], () => ["a.ts", "b.ts"])).toEqual(["a.test.ts", "a.ts", "b.ts"]);
-  });
-
-  it("調べに行くのは変更されたテストだけ", () => {
-    const asked: string[][] = [];
-    mutationScope(["a.ts", "b.test.ts"], (tests) => {
-      asked.push(tests);
-      return [];
-    });
-    expect(asked).toEqual([["b.test.ts"]]);
-  });
-
-  it("重複は畳む", () => {
-    expect(mutationScope(["a.ts", "a.test.ts"], () => ["a.ts"])).toEqual(["a.ts", "a.test.ts"]);
-  });
-});
-
-describe("mutationTargets", () => {
-  // 差分には設定ファイルも混ざる。vitest.config.ts を変異させても意味が無い。
-  it("測る範囲の外は落とす", () => {
-    expect(mutationTargets(["a.ts", "vitest.config.ts"], ["a.ts"])).toEqual(["a.ts"]);
-  });
-
-  it("測る範囲にあるものは残す", () => {
-    expect(mutationTargets(["a.ts", "b.tsx"], ["a.ts", "b.tsx", "c.ts"])).toEqual(["a.ts", "b.tsx"]);
-  });
-
-  // 範囲側にしか無いファイルは、この差分に関係が無い。
-  it("差分に出ていないものは足さない", () => {
-    expect(mutationTargets(["a.ts"], ["a.ts", "b.ts"])).toEqual(["a.ts"]);
-  });
-
-  it("順序を固定する", () => {
-    expect(mutationTargets(["b.ts", "a.ts"], ["a.ts", "b.ts"])).toEqual(["a.ts", "b.ts"]);
-  });
-
-  // テストファイルは source.exclude で範囲から外れる。init が既定で書く。
-  it("測る範囲が空なら何も変異させない", () => {
-    expect(mutationTargets(["a.ts", "a.test.ts"], [])).toEqual([]);
-  });
-
-  it("重複は畳む", () => {
-    expect(mutationTargets(["a.ts", "a.ts"], ["a.ts"])).toEqual(["a.ts"]);
-  });
-
-  it("何も無ければ空", () => {
-    expect(mutationTargets([], [])).toEqual([]);
   });
 });
 
@@ -484,110 +393,11 @@ describe("withDetails", () => {
   });
 });
 
-describe("mutationScopeText の除外表示", () => {
-  const none = { static: 0, declared: 0 };
-
-  // 意図的な除外の総数が static に吸収されると、誰も気づけない（#25）。
-  it("static と宣言の内訳を分けて出す", () => {
-    expect(mutationScopeText(3, { static: 213, declared: 2 })).toBe(
-      "変異対象 3 ファイル（静的な変異 213 件・宣言して外した変異 2 件は測っていません）",
-    );
-  });
-
-  it("宣言だけなら宣言だけ言う", () => {
-    expect(mutationScopeText(3, { static: 0, declared: 2 })).toBe(
-      "変異対象 3 ファイル（宣言して外した変異 2 件は測っていません）",
-    );
-  });
-
-  it("両方 0 なら黙る", () => {
-    expect(mutationScopeText(3, none)).toBe("変異対象 3 ファイル");
-  });
-
-  // 理由必須は原則。落としはしないが、破れは名指しで言う。件数だけだと、どの行の
-  // ことか分からないまま「1 件あります」と言われ続ける（#32 で名指しに変えた）。
-  it("理由の無い disable は名指しで言う", () => {
-    const disables = { unexplained: [{ file: "src/git.ts", line: 39, mutators: ["StringLiteral"], reason: "" }], ineffective: [] };
-    expect(mutationScopeText(3, none, 0, [], {}, disables)).toBe(
-      "変異対象 3 ファイル\n理由の無い Stryker disable が 1 件あります — 理由を書いてください:\n  src/git.ts:39  StringLiteral",
-    );
-  });
-
-  // #32: next-line がずれて 1 件も外れていない状態は、生き残りの数が動かないので
-  // 正常と区別が付かない。名指ししない限り気づく手掛かりがゼロになる。
-  // **助言の中身も固定する。** 「変異のある行に付いていますか」は誤誘導だった —
-  // `} catch {` の行には変異があるのに、Stryker は node の先頭コメントしか読まない。
-  it("何も抑制していない disable を名指しで言う", () => {
-    const disables = {
-      unexplained: [],
-      ineffective: [{ file: "src/detectFurniture.ts", line: 161, mutators: ["OptionalChaining"], reason: "buf は undefined にならない" }],
-    };
-    expect(mutationScopeText(3, none, 0, [], {}, disables)).toBe(
-      "変異対象 3 ファイル\n何も抑制していない Stryker disable が 1 件あります — " +
-        "宣言が式や文の先頭に付いていますか（`}` の手前や連鎖呼び出しの途中は Stryker が読みません）:\n" +
-        "  src/detectFurniture.ts:161  OptionalChaining",
-    );
-  });
-
-  it("宣言に問題が無ければ黙る", () => {
-    expect(mutationScopeText(3, none, 0, [], {}, { unexplained: [], ineffective: [] })).toBe("変異対象 3 ファイル");
-  });
-
-  // 黙って落とすと、緑が「弱いテストが無い」ではなく「そこは見ていない」を意味していることが
-  // 伝わらない（--ignoreStatic の件数を出しているのと同じ理由）。
-  it("外した mutator を並べる", () => {
-    expect(mutationScopeText(3, { static: 0, declared: 0 }, 0, ["StringLiteral"])).toBe(
-      "変異対象 3 ファイル（StringLiteral の変異は Stryker が置けないので測っていません）",
-    );
-  });
-
-  it("外していなければ何も足さない", () => {
-    expect(mutationScopeText(3, { static: 0, declared: 0 }, 0, [])).toBe("変異対象 3 ファイル");
-  });
-
-  it("複数なら並べる", () => {
-    expect(mutationScopeText(3, { static: 0, declared: 0 }, 0, ["A", "B"])).toContain("A、B の変異は");
-  });
-});
-
-describe("oneLine", () => {
-  it("複数行を空白 1 つで繋ぐ", () => {
-    expect(oneLine("a\n  b\nc", 60)).toBe("a b c");
-  });
-
-  it("上限を超えたら切って印をつける", () => {
-    expect(oneLine("abcdef", 3)).toBe("abc…");
-  });
-
-  it("上限ちょうどは切らない", () => {
-    expect(oneLine("abc", 3)).toBe("abc");
-  });
-});
-
-describe("describeMutant", () => {
-  // 位置と種類と変異後のコードが揃えば、Stryker の再実行（分単位）なしで直せる。
-  it("行・mutator・変異後のコードを一行に", () => {
-    expect(describeMutant({ file: "a.ts", line: 47, mutator: "EqualityOperator", replacement: "<=" })).toBe(
-      "L47 EqualityOperator  → <=",
-    );
-  });
-
-  it("変異後のコードが無ければ行と mutator だけ", () => {
-    expect(describeMutant({ file: "a.ts", line: 3, mutator: "BlockStatement", replacement: null })).toBe(
-      "L3 BlockStatement",
-    );
-  });
-
-  it("複数行の置換は 1 行に潰す", () => {
-    expect(describeMutant({ file: "a.ts", line: 1, mutator: "M", replacement: "{\n}" })).toBe("L1 M  → { }");
-  });
-});
-
 describe("describeCrash", () => {
   // 既知のエラー（設定・git・道具）はメッセージが説明そのもの。スタックは雑音になる。
   it("既知のエラーはメッセージだけ", () => {
     expect(describeCrash(new ConfigError("--tier が必要です"))).toBe("--tier が必要です");
-    expect(describeCrash(new RunnerError("Stryker が入っていません"))).toBe("Stryker が入っていません");
+    expect(describeCrash(new RunnerError("vitest が入っていません"))).toBe("vitest が入っていません");
   });
 
   // 未知のエラーは gauntlet 自身のバグ。メッセージだけだと読み手は直しようがない。
@@ -613,9 +423,9 @@ describe("formatResult", () => {
 
   // 「対象 0 件で緑」と「見て問題なし」は、違反が無いという結果だけでは区別できない。
   it("通ったチェックも、何を見たかを添えて出す", () => {
-    const scoped: CheckResult = { ...check("mutation", "pass"), scope: "変異対象 0 ファイル" };
+    const scoped: CheckResult = { ...check("duplication", "pass"), scope: "重複 0 トークン / 対象 3 ファイル" };
     expect(formatResult(result([scoped]))).toBe(
-      ["gauntlet quick: fail (34ms)", "  ✓ mutation (12ms)  変異対象 0 ファイル"].join("\n"),
+      ["gauntlet quick: fail (34ms)", "  ✓ duplication (12ms)  重複 0 トークン / 対象 3 ファイル"].join("\n"),
     );
   });
 
@@ -749,7 +559,7 @@ describe("scopeText", () => {
 // 記録は改善のたびに gauntlet 自身が書き換える。言わないとコミットし忘れ、
 // 次の実行でまた同じ値が置き直される（新規導入で実測）。
 describe("ratchetNote", () => {
-  const base = { crap: 80, mutation: {}, duplication: 100 };
+  const base = { crap: 80, duplication: 100 };
 
   it("締まった中身を言い、コミットを促す", () => {
     expect(ratchetNote(base, { ...base, crap: 79 })).toEqual([
@@ -760,64 +570,16 @@ describe("ratchetNote", () => {
   // 前の回に crap が計測を中断していると、欄そのものが無い（0 ではない）。
   // 「0 → 772」と言うと、実際には起きていない後退を報告することになる。
   it("crap の欄が無かった記録は「記録なし」から言う", () => {
-    expect(ratchetNote({ mutation: {}, duplication: 100 }, { crap: 772, mutation: {}, duplication: 100 })).toEqual([
+    expect(ratchetNote({ duplication: 100 }, { crap: 772, duplication: 100 })).toEqual([
       "許容値を締めました（CRAP 違反 記録なし → 772）。git add -A などでコミットしてください",
     ]);
   });
 
   it("複数の欄が動けば並べる", () => {
-    expect(
-      ratchetNote(base, { crap: 79, mutation: { "a.ts": { survived: 1, measured: 9, timeout: 0, noCoverage: null, unallowed: null } }, duplication: 90 }),
-    ).toEqual([
-      "許容値を締めました（CRAP 違反 80 → 79 / 重複 100 → 90 トークン / " +
-        "mutation を新しく記録: a.ts（生き残り 1 件））。" +
+    expect(ratchetNote(base, { crap: 79, duplication: 90 })).toEqual([
+      "許容値を締めました（CRAP 違反 80 → 79 / 重複 100 → 90 トークン）。" +
         "git add -A などでコミットしてください",
     ]);
-  });
-
-  // 動いていないファイルまで数えると、締まった量を大きく見せてしまう。
-  it("mutation は動いたファイルだけ数える", () => {
-    const record = (survived: number) => ({ survived, measured: 10, timeout: 0, noCoverage: null, unallowed: null });
-    const before = { crap: 0, mutation: { "a.ts": record(3), "b.ts": record(5) }, duplication: 0 };
-    const after = { crap: 0, mutation: { "a.ts": record(3), "b.ts": record(1) }, duplication: 0 };
-    expect(ratchetNote(before, after)[0]).toContain("mutation 1 ファイル");
-  });
-
-  // 生き残り 0 の新規記録まで名指しすると、対象になっただけのファイルが並んで埋もれる。
-  it("生き残り 0 の新規記録は名指ししない", () => {
-    const before = { crap: 0, mutation: {}, duplication: 0 };
-    const after = { crap: 0, mutation: { "src/clean.ts": { survived: 0, measured: 9, timeout: 0, noCoverage: null, unallowed: null } }, duplication: 0 };
-    const note = ratchetNote(before, after)[0]!;
-    expect(note).not.toContain("新しく記録");
-    expect(note).toContain("mutation 1 ファイル");
-  });
-
-  // 初回観測がそのまま許容値になるので、コードを別ファイルに移すと生き残りが黙って
-  // 消える。新しい記録は名指しして、人がレビューで気づける形にする。文言を丸ごと
-  // 固定する — 名指しの行が空文字に化けても件数の行が残ると、緑のまま気づけない。
-  it("新しく記録したファイルは名指しする", () => {
-    const before = { crap: 0, mutation: {}, duplication: 0 };
-    const after = { crap: 0, mutation: { "src/refs.ts": { survived: 4, measured: 18, timeout: 0, noCoverage: null, unallowed: null } }, duplication: 0 };
-    expect(ratchetNote(before, after)).toEqual([
-      "許容値を締めました（mutation を新しく記録: src/refs.ts（生き残り 4 件））。git add -A などでコミットしてください",
-    ]);
-  });
-
-  // 既存ファイルの記録が動いた（undefined でない）場合は「新しく記録」ではない。
-  // ここが常に偽に変異すると、移動で消える借金の可視化が丸ごと消える。
-  it("既存ファイルの変化は名指しではなく件数で言う", () => {
-    const before = { crap: 0, mutation: { "a.ts": { survived: 9, measured: 20, timeout: 0, noCoverage: null, unallowed: null } }, duplication: 0 };
-    const after = { crap: 0, mutation: { "a.ts": { survived: 4, measured: 20, timeout: 0, noCoverage: null, unallowed: null } }, duplication: 0 };
-    expect(ratchetNote(before, after)).toEqual([
-      "許容値を締めました（mutation 1 ファイル）。git add -A などでコミットしてください",
-    ]);
-  });
-
-  // after 側に無いファイル（before だけにある）が seeded の判定に入っても落ちないこと。
-  it("before だけにあるファイルが混ざっても落ちない", () => {
-    const before = { crap: 0, mutation: { "gone.ts": { survived: 2, measured: 5, timeout: 0, noCoverage: null, unallowed: null } }, duplication: 0 };
-    const after = { crap: 0, mutation: {}, duplication: 0 };
-    expect(() => ratchetNote(before, after)).not.toThrow();
   });
 
   it("読めなくなった記録では黙る", () => {
@@ -834,7 +596,6 @@ describe("ratchetNote", () => {
   });
 });
 
-// 生き残りの数は記録の中にあるので、出すのはただの読み出し（Stryker は回さない）。
 // 作業途中の値で締めると、途中の一番良かった瞬間が基準になり、続きの編集が
 // 自分の未完成状態に負ける（77 → 80 で実際に落ちた）。
 // 書いた後に status を見ると、その書き込み自体がツリーを汚して常に false になる。
@@ -856,7 +617,7 @@ describe("canRecordBaseline", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }
-  const base = { crap: 5, mutation: {}, duplication: 10 };
+  const base = { crap: 5, duplication: 10 };
 
   it("full かつ clean かつ記録ありなら残せる", () => {
     withRepo((root) => {
@@ -903,7 +664,7 @@ describe("settleConflictedBaseline", () => {
     "=======",
     '  "crap": 2,',
     ">>>>>>> feature",
-    '  "mutation": {}',
+    '  "duplication": 30',
     "}",
   ].join("\n");
 
@@ -916,13 +677,13 @@ describe("settleConflictedBaseline", () => {
       expect(notes[0]).toContain("厳しい側を取って解決しました");
       expect(notes[0]).toContain("git add gauntlet.baseline.json");
       // 書き戻した結果はマーカーが消え、普通に読める。
-      expect(loadBaseline(root)).toEqual({ crap: 1, mutation: {} });
+      expect(loadBaseline(root)).toEqual({ crap: 1, duplication: 30 });
     });
   });
 
   it("衝突していない記録には触らない", () => {
     withDir((root) => {
-      const text = '{"crap": 7, "mutation": {}}';
+      const text = '{"crap": 7, "duplication": 30}';
       writeFileSync(join(root, "gauntlet.baseline.json"), text);
       expect(settleConflictedBaseline(root)).toEqual([]);
       expect(readFileSync(join(root, "gauntlet.baseline.json"), "utf8")).toBe(text);
@@ -952,26 +713,25 @@ describe("settleConflictedBaseline", () => {
       const git = (...args: string[]): void => {
         execFileSync("git", args, { cwd: root, stdio: "ignore" });
       };
-      const baseline = (crap: number, survived: number): string =>
-        JSON.stringify({ crap, mutation: { "a.ts": { survived } }, duplication: 300 }, null, 2);
+      const baseline = (crap: number, duplication: number): string =>
+        JSON.stringify({ crap, duplication }, null, 2);
       git("init", "-q", "-b", "main");
       git("config", "user.name", "t");
       git("config", "user.email", "t@t");
-      writeFileSync(join(root, "gauntlet.baseline.json"), baseline(10, 5));
+      writeFileSync(join(root, "gauntlet.baseline.json"), baseline(10, 300));
       git("add", "-A");
       git("commit", "-qm", "base");
       git("checkout", "-qb", "feature");
-      writeFileSync(join(root, "gauntlet.baseline.json"), baseline(8, 5));
+      writeFileSync(join(root, "gauntlet.baseline.json"), baseline(8, 300));
       git("commit", "-qam", "feature が crap を締める");
       git("checkout", "-q", "main");
-      writeFileSync(join(root, "gauntlet.baseline.json"), baseline(9, 3));
-      git("commit", "-qam", "main が a.ts を締める");
+      writeFileSync(join(root, "gauntlet.baseline.json"), baseline(9, 200));
+      git("commit", "-qam", "main が重複を締める");
       expect(() => git("merge", "feature")).toThrow(); // 衝突で exit 1
       expect(settleConflictedBaseline(root)).toHaveLength(1);
       expect(loadBaseline(root)).toEqual({
         crap: 8, // feature 側
-        mutation: { "a.ts": { survived: 3, measured: null, timeout: null, noCoverage: null, unallowed: null } }, // main 側
-        duplication: 300,
+        duplication: 200, // main 側
       });
     });
   });
@@ -996,7 +756,7 @@ describe("baselineStoreFor", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }
-  const base = { crap: 5, mutation: {}, duplication: 10 };
+  const base = { crap: 5, duplication: 10 };
 
   it("full かつ clean はディスクに書く", () => {
     withRepo((root) => {
@@ -1036,8 +796,8 @@ describe("baselineStoreFor", () => {
 });
 
 describe("baselineNotes", () => {
-  const before = { crap: 5, mutation: {}, duplication: 10 };
-  const tightened = { crap: 3, mutation: {}, duplication: 10 };
+  const before = { crap: 5, duplication: 10 };
+  const tightened = { crap: 3, duplication: 10 };
 
   it("書ける実行なら、締まったことを知らせる", () => {
     const store = memoryStore(tightened);
@@ -1058,7 +818,7 @@ describe("baselineNotes", () => {
 
   // 複数の変化は区切りで並ぶ。区切りが消えると 2 つの変化が 1 つに読める。
   it("複数の変化を区切って並べる", () => {
-    const store = memoryStore({ crap: 3, mutation: {}, duplication: 7 });
+    const store = memoryStore({ crap: 3, duplication: 7 });
     expect(baselineNotes(store, before, false)[0]).toContain("CRAP 違反 5 → 3 / 重複 10 → 7 トークン");
   });
 
@@ -1072,22 +832,13 @@ describe("baselineNotes", () => {
 
   // duplication だけが動いた回も知らせの対象。
   it("duplication だけの変化も見る", () => {
-    const store = memoryStore({ crap: 5, mutation: {}, duplication: 7 });
+    const store = memoryStore({ crap: 5, duplication: 7 });
     expect(baselineNotes(store, before, false)).toHaveLength(1);
-  });
-
-  // mutation のキー順は保存のたびに揃うとは限らない（対象の順で書かれる）。
-  it("mutation のキー順が違うだけなら動いていない", () => {
-    const record = { survived: 1, measured: 5, timeout: 0, noCoverage: null, unallowed: null };
-    const store = memoryStore({ crap: 5, mutation: { "b.ts": record, "a.ts": record }, duplication: 10 });
-    expect(baselineNotes(store, { crap: 5, mutation: { "a.ts": record, "b.ts": record }, duplication: 10 }, false)).toEqual(
-      [],
-    );
   });
 
   // duplication の無い記録と 0 の記録は別物。潰すと「欄が消えた」ことに気づけない。
   it("duplication が消えたら動いたと見なす", () => {
-    const store = memoryStore({ crap: 5, mutation: {} });
+    const store = memoryStore({ crap: 5 });
     expect(baselineNotes(store, before, false)).toHaveLength(1);
   });
 
@@ -1109,201 +860,9 @@ describe("baselineNotes", () => {
   });
 });
 
-describe("mutationRecords", () => {
-  const counts = (over: Partial<Parameters<typeof mutationRecords>[1]> = {}) => ({
-    survived: {},
-    measured: {},
-    timeout: {},
-    noCoverage: {},
-    ...over,
-  });
-
-  it("実測を記録の形に揃える", () => {
-    const actual = mutationRecords(
-      ["a.ts"],
-      counts({ survived: { "a.ts": 2 }, measured: { "a.ts": 30 }, timeout: { "a.ts": 1 }, noCoverage: { "a.ts": 7 } }),
-    );
-        // **許容外は 0 で始める。** 決まるのは突き合わせ側（`recordFor`）で、ここは実測。
-    // null にすると「旧記録」と区別が付かず、殺した回に前の件数が残る。
-    expect(actual).toEqual({ "a.ts": { survived: 2, measured: 30, timeout: 1, noCoverage: 7, unallowed: 0 } });
-  });
-
-  // 報告に無い = 知らない。0/0/0 を「実測」として作ると負債の記録が消える（#27）。
-  it("報告に無い対象は記録を作らない", () => {
-    expect(mutationRecords(["a.ts"], counts())).toEqual({});
-  });
-
-  // 全部が NoCoverage / Ignored のファイル（measured 0）も「知らない」扱い。
-  it("measured が 0 の対象は記録を作らない", () => {
-    expect(mutationRecords(["a.ts"], counts({ measured: { "a.ts": 0 } }))).toEqual({});
-  });
-
-  // 測って全部殺した（報告にあり、生き残り 0）は 0 を記録してよい成果。
-  it("全部殺したファイルは 0 と記録する", () => {
-    expect(mutationRecords(["a.ts"], counts({ measured: { "a.ts": 12 } }))).toEqual({
-      "a.ts": { survived: 0, measured: 12, timeout: 0, noCoverage: 0, unallowed: 0 },
-    });
-  });
-
-  // #31: 測れた回の 0 は「未計測の変異は無かった」という実測。null（未計測）ではない。
-  it("測れた回は未計測 0 も実測として記録する", () => {
-    const actual = mutationRecords(["a.ts"], counts({ measured: { "a.ts": 5 } }));
-    expect(actual["a.ts"]!.noCoverage).toBe(0);
-  });
-});
-
-describe("regressionText", () => {
-  // **見出しの数は突き合わせた数（殺せなかった変異 = 生き残り + 打ち切り）。**
-  // ここに生き残りを出していたせいで「0 → 0 に増えました」が出ていた（#39）。
-  it("突き合わせた数を見出しにし、内訳を添える", () => {
-    expect(
-      regressionText({ kind: "undetected", file: "a.ts", allowed: 39, actual: 43, survivedBefore: 39, survivedNow: 42, measuredBefore: 210, measuredNow: 210, timeoutBefore: 0, timeoutNow: 1 }),
-    ).toBe("殺せなかった変異が 39 → 43 に増えました（生き残り 39 → 42、打ち切り 0 → 1、測った変異 210 → 210）  a.ts");
-  });
-
-  // 報告された症状そのもの。生き残り 0 のファイルで打ち切りだけが動くと、
-  // 従来は「テストを通り抜ける変異が 0 → 0 に増えました」になっていた。
-  it("打ち切りだけが増えた回は、そう言って直せないことまで言う", () => {
-    expect(
-      regressionText({ kind: "undetected", file: "src/crawl.ts", allowed: 4, actual: 5, survivedBefore: 0, survivedNow: 0, measuredBefore: 91, measuredNow: 91, timeoutBefore: 4, timeoutNow: 5 }),
-    ).toBe(
-      "殺せなかった変異が 4 → 5 に増えました（生き残り 0 → 0、打ち切り 4 → 5、測った変異 91 → 91）  src/crawl.ts\n" +
-        "  増えたのは打ち切りだけです。テストでは減りません（打ち切りは実行速度に左右され、同じコードでも揺れます）",
-    );
-  });
-
-  // 生き残りが減っていても和が増えていれば落ちる。その回も「テストでは減らせない」側。
-  it("生き残りが減って和が増えた回も打ち切りの話として言う", () => {
-    const text = regressionText({ kind: "undetected", file: "a.ts", allowed: 5, actual: 6, survivedBefore: 3, survivedNow: 2, measuredBefore: 50, measuredNow: 50, timeoutBefore: 2, timeoutNow: 4 });
-    expect(text).toContain("殺せなかった変異が 5 → 6 に増えました（生き残り 3 → 2、打ち切り 2 → 4");
-    expect(text).toContain("テストでは減りません");
-  });
-
-  // 旧記録には測った数が無い。「記録なし」と言えば、厳格比較が原因だと読み手が分かる。
-  it("旧記録なら記録が無いことを言う", () => {
-    expect(
-      regressionText({ kind: "undetected", file: "a.ts", allowed: 2, actual: 3, survivedBefore: 2, survivedNow: 3, measuredBefore: null, measuredNow: 12, timeoutBefore: null, timeoutNow: 0 }),
-    ).toBe("殺せなかった変異が 2 → 3 に増えました（生き残り 2 → 3、打ち切り 記録なし → 0、測った変異 記録なし → 12）  a.ts");
-  });
-});
-
-// #31: 生き残りと同じ文にはできない。assert を強める話ではなく、テストから呼べる形に
-// する話。文言を丸ごと固定する — 直し方の行が消えても件数の行は残るので、部分一致だと
-// 「何をすればいいか」が黙って落ちても気づけない。
-describe("noCoverageText", () => {
-  it("件数と直し方を言う", () => {
-    expect(noCoverageText({ kind: "noCoverage", file: "src/crawl.ts", allowed: 19, actual: 25 })).toBe(
-      "どのテストも通っていない変異が 19 → 25 に増えました  src/crawl.ts\n" +
-        "  テストから呼べる形にすると測れます（export して引数と出力先を注入する）",
-    );
-  });
-});
-
-describe("mutationRegressionText", () => {
-  const mutant = (file: string, line: number, mutator: string) => ({ file, line, mutator, replacement: "false" });
-  const survived = [mutant("a.ts", 10, "BooleanLiteral"), mutant("b.ts", 20, "StringLiteral")];
-  const uncovered = [mutant("a.ts", 150, "ArithmeticOperator"), mutant("b.ts", 99, "BlockStatement")];
-
-  // 軸ごとに添える一覧が変わる。生き残りの一覧を未計測の後退に付けると、
-  // 「この行を殺せ」と読めてしまう（実際に直すのは呼べる形にすること）。
-  it("生き残りの後退には生き残った変異を添える", () => {
-    const entry = { kind: "undetected", file: "a.ts", allowed: 1, actual: 2, survivedBefore: 1, survivedNow: 2, measuredBefore: 10, measuredNow: 10, timeoutBefore: 0, timeoutNow: 0 } as const;
-    const text = mutationRegressionText(entry, survived, uncovered);
-    expect(text).toContain("L10 BooleanLiteral");
-    expect(text).not.toContain("L150");
-  });
-
-  it("未計測の後退には測れていない変異を添える", () => {
-    const entry = { kind: "noCoverage", file: "a.ts", allowed: 1, actual: 2 } as const;
-    const text = mutationRegressionText(entry, survived, uncovered);
-    expect(text).toContain("L150 ArithmeticOperator");
-    expect(text).not.toContain("L10 ");
-  });
-
-  // 他のファイルの変異まで並べると、どのファイルの話か分からなくなる。
-  it("そのファイルの変異だけを添える", () => {
-    const entry = { kind: "noCoverage", file: "a.ts", allowed: 1, actual: 2 } as const;
-    expect(mutationRegressionText(entry, survived, uncovered)).not.toContain("L99");
-  });
-
-  // 「自分の差分のせいではない」に到達できないと、直しようのない赤を追いかけることになる
-  // （#37 / #39）。文が消えても一覧は出るので、名指しの検査だけでは気づけない。
-  it("差分に無いファイルなら、そう言う", () => {
-    const entry = { kind: "noCoverage", file: "a.ts", allowed: 1, actual: 2 } as const;
-    expect(mutationRegressionText(entry, survived, uncovered, new Set())).toContain(
-      "\n  このファイルは差分にありません（変更したテストが覆っているので対象に入りました）。実行ごとに揺れることがあります",
-    );
-  });
-
-  it("差分にあるファイルには言わない", () => {
-    const entry = { kind: "noCoverage", file: "a.ts", allowed: 1, actual: 2 } as const;
-    expect(mutationRegressionText(entry, survived, uncovered, new Set(["a.ts"]))).not.toContain("差分にありません");
-  });
-});
-
-// #40。落とさないので、**言わなければ存在しないのと同じ**になる。gauntlet 自身で
-// 7 件が記録に入ったとき、出力に出たのは `mutation 2 ファイル` の 1 語だけだった。
-describe("slackPassText", () => {
-  const mutant = (file: string, line: number, mutator: string) => ({ file, line, mutator, replacement: "false" });
-  const survived = [mutant("a.ts", 809, "StringLiteral"), mutant("b.ts", 20, "BooleanLiteral")];
-  // 許容値を 0 にすると「超えた分」と「実測」が同じ数になり、引き算の間違いを検知できない。
-  const pass = { file: "a.ts", allowed: 1, actual: 3, over: 2, slack: 25 } as const;
-
-  // 超えた件数・許容値・通した理由の 3 つが無いと、読み手は「なぜ緑なのか」に辿り着けない。
-  it("何件が許容値の外にあり、なぜ通ったかを言う", () => {
-    expect(slackPassText(pass, survived)).toContain(
-      "許容値に入っていない生き残りが 2 件あります（許容 1 / 実測 3。測った変異が 25 件増えたぶんで通しています）  a.ts",
-    );
-  });
-
-  // 記録が動いていないことを言わないと、「もう許容値に入った」と読める。
-  it("記録を動かしていないことと、直し方を言う", () => {
-    expect(slackPassText(pass, survived)).toContain(
-      "記録は動かしていません。殺すか、理由を書いた Stryker disable で外してください",
-    );
-  });
-
-  it("そのファイルの生き残りだけを名指しする", () => {
-    const text = slackPassText(pass, survived);
-    expect(text).toContain("L809 StringLiteral");
-    expect(text).not.toContain("L20 ");
-  });
-
-  describe("slackPassNote", () => {
-    // 余裕で通したファイルが無い回に空行が入ると、scope の括弧書きから段落が離れる。
-    it("無ければ何も足さない", () => {
-      expect(slackPassNote([], survived)).toBe("");
-    });
-
-    // scope の末尾にそのまま繋がるので、1 件目の前にも改行が要る。**全文で固定する** —
-    // 「含む」で見ると、区切りに余計な文字が入っても通ってしまう。
-    it("1 件ごとに改行で区切って並べる", () => {
-      const second = { file: "b.ts", allowed: 0, actual: 1, over: 1, slack: 4 } as const;
-      expect(slackPassNote([pass, second], survived)).toBe(
-        `\n${slackPassText(pass, survived)}\n${slackPassText(second, survived)}`,
-      );
-    });
-  });
-});
-
-describe("mutationViolations", () => {
-  const entry = { kind: "noCoverage", file: "a.ts", allowed: 1, actual: 2 } as const;
-
-  // 落ちたファイルを違反に載せないと、報告がファイル単位で並ばない。
-  it("後退 1 件を、文とファイルを持つ違反にする", () => {
-    expect(mutationViolations([entry], [], [], new Set(["a.ts"]))).toEqual([
-      { message: noCoverageText(entry), file: "a.ts" },
-    ]);
-  });
-
-  it("後退が無ければ違反も無い", () => {
-    expect(mutationViolations([], [], [], new Set())).toEqual([]);
-  });
-});
-
 describe("allowedCounts", () => {
   it("記録から両方の許容値を読む", () => {
-    expect(allowedCounts({ crap: 35, duplication: 338, mutation: {} })).toEqual({ crap: 35, duplication: 338 });
+    expect(allowedCounts({ crap: 35, duplication: 338 })).toEqual({ crap: 35, duplication: 338 });
   });
 
   // 0 と読ませると、何も記録していない状態が「0 に締まっている」に見える。
@@ -1313,7 +872,7 @@ describe("allowedCounts", () => {
 
   // 0.11.0 より前の baseline には duplication の欄が無い（`duplicationViolations` と同じ形）。
   it("欄を持たない記録では、その軸だけ無い", () => {
-    expect(allowedCounts({ crap: 35, mutation: {} } as Baseline)).toEqual({ crap: 35, duplication: null });
+    expect(allowedCounts({ crap: 35 })).toEqual({ crap: 35, duplication: null });
   });
 });
 
@@ -1369,81 +928,6 @@ describe("duplicationDebt", () => {
     const debt = duplicationDebt(root, ["src/alpha.ts", "src/beta.ts"], 392);
     expect(debt).toContain("（1 か所）/ 対象 2 ファイル（gauntlet.baseline.json の許容 392）:");
     expect(debt).toContain("src/alpha.ts ↔ src/beta.ts");
-  });
-});
-
-describe("mutationDebt", () => {
-  let root = "";
-  beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), "gauntlet-debt-"));
-    writeFileSync(join(root, "a.ts"), "");
-    writeFileSync(join(root, "b.ts"), "");
-  });
-  afterEach(() => rmSync(root, { recursive: true, force: true }));
-
-  // 0.18.0 で消した lint.ts の記録が自分の baseline に残っていた。並べると
-  // 存在しないファイルを探しに行かせる。
-  it("もう無いファイルは並べない", () => {
-    expect(mutationDebt(root, { crap: 0, mutation: { "gone.ts": { survived: 9, measured: null, timeout: 0, noCoverage: null, unallowed: null } }, duplication: 0 })).toBe("");
-  });
-
-  it("多い順に並べ、どこを見れば分かるかまで言う", () => {
-    const debt = mutationDebt(root, {
-      crap: 0,
-      mutation: { "a.ts": { survived: 2, measured: null, timeout: 0, noCoverage: null, unallowed: null }, "b.ts": { survived: 13, measured: 60, timeout: 0, noCoverage: null, unallowed: null } },
-      duplication: 0,
-    });
-    expect(debt).toBe(
-      "\n記録している mutation の生き残り 15 件（2 ファイル）:\n" +
-        "    13  b.ts\n" +
-        "     2  a.ts\n" +
-        "  どの変異かは、そのファイルを差分に入れて full を回すと reports/mutation/mutation.json に出ます",
-    );
-  });
-
-  // #40 の追試。凍らせた借金は `survived` に入らないので、この節が無いと
-  // **`full` を回した瞬間の出力を見逃したら次の `full` まで消える**。
-  it("許容値に入っていない生き残りを別の節で並べる", () => {
-    const debt = mutationDebt(root, {
-      crap: 0,
-      mutation: { "a.ts": { survived: 0, measured: 617, timeout: 0, noCoverage: 74, unallowed: 2 } },
-      duplication: 0,
-    });
-    expect(debt).toBe(
-      "\n許容値に入っていない生き残り 2 件（1 ファイル）:\n" +
-        "     2  a.ts\n" +
-        "  どの変異かは、そのファイルを差分に入れて full を回すと reports/mutation/mutation.json に出ます",
-    );
-  });
-
-  // 軸を混ぜると「記録に入っている数」が読み手に分からなくなる。
-  it("許容された借金と許容外は別の節に出る", () => {
-    const debt = mutationDebt(root, {
-      crap: 0,
-      mutation: { "a.ts": { survived: 3, measured: 617, timeout: 0, noCoverage: 74, unallowed: 2 } },
-      duplication: 0,
-    });
-    expect(debt).toContain("記録している mutation の生き残り 3 件（1 ファイル）");
-    expect(debt).toContain("許容値に入っていない生き残り 2 件（1 ファイル）");
-  });
-
-  // 旧記録（0.25 より前）は欄を持たない。0 と同じ扱いで、節ごと出さない。
-  it("欄を持たない記録では節を出さない", () => {
-    const debt = mutationDebt(root, {
-      crap: 0,
-      mutation: { "a.ts": { survived: 1, measured: 10, timeout: 0, noCoverage: 0, unallowed: null } },
-      duplication: 0,
-    });
-    expect(debt).not.toContain("許容値に入っていない");
-  });
-
-  // 0 件のファイルは「借金が無い」という記録。並べると読み手を惑わせる。
-  it("0 件のファイルは並べない", () => {
-    expect(mutationDebt(root, { crap: 0, mutation: { "a.ts": { survived: 0, measured: 5, timeout: 0, noCoverage: null, unallowed: null } }, duplication: 0 })).toBe("");
-  });
-
-  it("記録が無ければ何も出さない", () => {
-    expect(mutationDebt(root, null)).toBe("");
   });
 });
 
@@ -1593,7 +1077,7 @@ describe("crapViolations", () => {
   it("full ではリポジトリ全体のラチェットも当てる", () => {
     const root = mkdtempSync(join(tmpdir(), "gauntlet-crap-"));
     try {
-      saveBaseline(root, { crap: 0, mutation: {} });
+      saveBaseline(root, { crap: 0 });
       const scoped = { ...report, root };
       const messages = crapViolations(diskStore(root), "full", scoped, new Map()).map((v) => v.message);
       expect(messages).toEqual([
@@ -1707,9 +1191,9 @@ describe("duplicationViolations", () => {
   // 0.11.0 より前の baseline にはこの欄が無い。種を置いた回は通さない（crap と同じ）。
   it("欄が無ければ種を置いて落とす", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 5, mutation: {} });
+      saveBaseline(root, { crap: 5 });
       expect(duplicationViolations(diskStore(root), 1090, [])).toEqual([BASELINE_SEEDED]);
-      expect(loadBaseline(root)).toEqual({ crap: 5, mutation: {}, duplication: 1090 });
+      expect(loadBaseline(root)).toEqual({ crap: 5, duplication: 1090 });
     });
   });
 
@@ -1723,7 +1207,7 @@ describe("duplicationViolations", () => {
 
   it("増えていたら落とし、記録は変えない", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
+      saveBaseline(root, { crap: 0, duplication: 100 });
       expect(duplicationViolations(diskStore(root), 150, [])).toEqual([
         { message: "重複が 100 → 150 トークンに増えました" },
       ]);
@@ -1736,7 +1220,7 @@ describe("duplicationViolations", () => {
   // （読んでいる人は自分が何を書いたかを知っているので、並べれば見分けが付く）。
   it("増えていたら、いま出ている対をその場に添える", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 0, mutation: {}, duplication: 0 });
+      saveBaseline(root, { crap: 0, duplication: 0 });
       const clones = [
         { files: ["src/crawl.ts", "src/download.ts"] as const, tokens: 97 },
         { files: ["src/analyze.ts", "src/measureTextCoverage.ts"] as const, tokens: 124 },
@@ -1755,7 +1239,7 @@ describe("duplicationViolations", () => {
   // 全部並べると本当の原因が量に埋もれる。切った分は件数で言う（`withDetails`）。
   it("多すぎる対は切って、切った件数を言う", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 0, mutation: {}, duplication: 0 });
+      saveBaseline(root, { crap: 0, duplication: 0 });
       const clones = Array.from({ length: 12 }, (_unused, i) => ({ files: [`src/a${i}.ts`, `src/b${i}.ts`] as const, tokens: 60 + i }));
       const message = duplicationViolations(diskStore(root), 800, clones)[0]!.message;
       expect(message).toContain("    71  src/a11.ts ↔ src/b11.ts");
@@ -1767,7 +1251,7 @@ describe("duplicationViolations", () => {
   // 記録し損ねると許容値が緩いまま残り、後で同じだけコピペしても通る。
   it("減っていたら通し、記録を下げる", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
+      saveBaseline(root, { crap: 0, duplication: 100 });
       expect(duplicationViolations(diskStore(root), 60, [])).toEqual([]);
       expect(loadBaseline(root)?.duplication).toBe(60);
     });
@@ -1775,7 +1259,7 @@ describe("duplicationViolations", () => {
 
   it("同じなら通し、記録も変わらない", () => {
     withRoot((root) => {
-      saveBaseline(root, { crap: 0, mutation: {}, duplication: 100 });
+      saveBaseline(root, { crap: 0, duplication: 100 });
       expect(duplicationViolations(diskStore(root), 100, [])).toEqual([]);
       expect(loadBaseline(root)?.duplication).toBe(100);
     });
@@ -1786,7 +1270,7 @@ describe("duplicationViolations", () => {
   it("種を置くとき crap の欄は作らない", () => {
     withRoot((root) => {
       duplicationViolations(diskStore(root), 29482, []);
-      expect(loadBaseline(root)).toEqual({ duplication: 29482, mutation: {} });
+      expect(loadBaseline(root)).toEqual({ duplication: 29482 });
     });
   });
 });
@@ -1848,165 +1332,8 @@ describe("計測を中断したゲートと種置きの相互作用", () => {
       abortedCrap(root);
       duplicationViolations(diskStore(root), 29482, []);
       expect(applyRatchet(diskStore(root), report, new Map())).toEqual([BASELINE_SEEDED]);
-      expect(loadBaseline(root)).toEqual({ crap: 1, duplication: 29482, mutation: {} });
+      expect(loadBaseline(root)).toEqual({ crap: 1, duplication: 29482 });
     });
-  });
-});
-
-describe("coveredFiles", () => {
-  const entry = (fns: Record<string, number>, statements: Record<string, number> = { "0": 1 }) => ({
-    statementMap: {},
-    s: statements,
-    f: fns,
-  });
-
-  // vitest は coverage.include に合致する未ロードのファイルもゼロ行で載せる。
-  // キーの存在で判定すると、mutation の範囲が include の全ファイルに膨張する（実測）。
-  it("何も呼ばれていないファイルは触れられていない", () => {
-    expect(coveredFiles("/repo", { "/repo/src/main.ts": entry({ "0": 0, "1": 0 }, { "0": 0 }) })).toEqual([]);
-  });
-
-  // 部分的にしか走っていないのが普通（全部走ったファイルだけを対象にすると、
-  // 変異させたい弱いところがまるごと外れる）。
-  it("関数が呼ばれたファイルをリポジトリ相対で返す", () => {
-    expect(
-      coveredFiles("/repo", {
-        "/repo/src/run.ts": entry({ "0": 3, "1": 0 }, { "0": 1, "1": 0 }),
-        "/repo/src/dead.ts": entry({ "0": 0 }),
-      }),
-    ).toEqual(["src/run.ts"]);
-  });
-
-  // `--coverage.include` を渡すので、ロードされていないファイルも coverage に載る。
-  // duct ではその合成エントリの一部が「文は全部 0 なのに関数 hit 1」になり、
-  // 変異対象が 18 → 700 に増えた。実際に走ったなら文も走るので、この形は作り物。
-  it("文が 1 つも動いていなければ、関数 hit が付いていても触れられていない", () => {
-    expect(coveredFiles("/repo", { "/repo/src/never.ts": entry({ "0": 1 }, { "0": 0, "1": 0 }) })).toEqual([]);
-  });
-
-  // **import は top-level を走らせる。** バレルを 1 つ import しただけで、その先の
-  // 全ファイルに文の実行が付く（duct では変異対象が 1 → 18 ファイルに膨らみ、
-  // 触っていない 17 ファイルの生き残り 587 件が baseline に焼かれた）。
-  it("文だけ動いて関数が呼ばれていなければ触れられていない", () => {
-    expect(coveredFiles("/repo", { "/repo/src/b.ts": entry({ "0": 0 }, { "0": 1 }) })).toEqual([]);
-  });
-
-  // Windows の区切りが混ざったキーも POSIX に揃える。
-  it("バックスラッシュ区切りを直す", () => {
-    expect(coveredFiles("/repo", { "/repo/src\\win\\a.ts": entry({ "0": 1 }) })).toEqual(["src/win/a.ts"]);
-  });
-});
-
-describe("mutationScopeText", () => {
-  it("対象のファイル数を出す", () => {
-    expect(mutationScopeText(3, { static: 0, declared: 0 })).toBe("変異対象 3 ファイル");
-  });
-
-  // 測らなかった分を黙って落とすと、緑が「弱いテストが無い」ではなく
-  // 「そこは見ていない」を意味していることが伝わらない。
-  it("測らなかった件数があれば添える", () => {
-    expect(mutationScopeText(3, { static: 10, declared: 0 })).toBe("変異対象 3 ファイル（静的な変異 10 件は測っていません）");
-  });
-
-  // テストが触れないファイルは変異させても全部 NoCoverage（数えない）な上、
-  // Stryker が「No tests were executed」で落ちる。外すが、外した数は言う。
-  it("テストが触れないファイルを外した数を添える", () => {
-    expect(mutationScopeText(0, { static: 0, declared: 0 }, 1)).toBe(
-      "変異対象 0 ファイル（テストが触れない 1 ファイルは対象外 — 網羅率 0 は CRAP が見る）",
-    );
-  });
-
-  it("外した数と静的変異は並ぶ", () => {
-    expect(mutationScopeText(2, { static: 5, declared: 0 }, 1)).toBe(
-      "変異対象 2 ファイル（テストが触れない 1 ファイルは対象外 — 網羅率 0 は CRAP が見る）（静的な変異 5 件は測っていません）",
-    );
-  });
-
-  it("対象が無くても形は同じ", () => {
-    expect(mutationScopeText(0, { static: 0, declared: 0 })).toBe("変異対象 0 ファイル");
-  });
-
-  // #40 の知らせは括弧書きではなく段落なので、括弧の並びの**後ろ**に付ける。
-  it("余裕で通した分は括弧書きの後ろに付ける", () => {
-    const disables = { unexplained: [], ineffective: [] };
-    expect(mutationScopeText(2, { static: 5, declared: 0 }, 0, [], {}, disables, "\n許容値の外に 1 件")).toBe(
-      "変異対象 2 ファイル（静的な変異 5 件は測っていません）\n許容値の外に 1 件",
-    );
-  });
-
-  // #34: 打ち切りは測定に入り、突き合わせでは生き残りと同じ「殺せなかった数」になるのに、
-  // 件数がどこにも出ていなかった（判定を得られないまま払っている実行時間が見えない）。
-  // **「測っていません」の側に混ぜない** — 測ってはいる。
-  it("打ち切りがあれば件数と扱いを言う", () => {
-    const records = { "a.ts": { survived: 0, measured: 100, timeout: 24, noCoverage: 0, unallowed: null } };
-    expect(mutationScopeText(13, { static: 317, declared: 11 }, 1, [], records)).toBe(
-      "変異対象 13 ファイル（テストが触れない 1 ファイルは対象外 — 網羅率 0 は CRAP が見る）" +
-        "（打ち切り 24 件は殺せなかった数に入ります — テストでは減りません）" +
-        "（静的な変異 317 件・宣言して外した変異 11 件は測っていません）",
-    );
-  });
-
-  // #31: mutation の違反にならず CRAP も複雑度が低ければ通すので、件数を出さないと
-  // 存在に気づけない（報告では mutation.json を自分で読んで偶然見つかっている）。
-  it("どのテストも通っていない変異があれば件数と扱いを言う", () => {
-    const records = { "a.ts": { survived: 0, measured: 100, timeout: 0, noCoverage: 222, unallowed: null } };
-    expect(mutationScopeText(10, { static: 0, declared: 0 }, 0, [], records)).toBe(
-      "変異対象 10 ファイル（どのテストも通っていない変異 222 件 — 記録して増やさないよう見ます）",
-    );
-  });
-
-  // 打ち切りと未計測は別の話。両方あれば両方出す（片方に吸収されると総数が誰にも分からない）。
-  it("打ち切りと未計測は別の括弧で並ぶ", () => {
-    const records = { "a.ts": { survived: 0, measured: 100, timeout: 5, noCoverage: 7, unallowed: null } };
-    expect(mutationScopeText(2, { static: 0, declared: 0 }, 0, [], records)).toBe(
-      "変異対象 2 ファイル（打ち切り 5 件は殺せなかった数に入ります — テストでは減りません）" +
-        "（どのテストも通っていない変異 7 件 — 記録して増やさないよう見ます）",
-    );
-  });
-
-  it("どちらも無ければ黙る", () => {
-    const records = { "a.ts": { survived: 0, measured: 100, timeout: 0, noCoverage: 0, unallowed: null } };
-    expect(mutationScopeText(3, { static: 0, declared: 0 }, 0, [], records)).toBe("変異対象 3 ファイル");
-  });
-
-  // 旧記録（0.24 より前）は未計測の欄を持たない。0 として数える以外に手が無い。
-  it("欄を持たない記録は 0 として数える", () => {
-    const records = { "a.ts": { survived: 1, measured: 10, timeout: null, noCoverage: null, unallowed: null } };
-    expect(mutationScopeText(1, { static: 0, declared: 0 }, 0, [], records)).toBe("変異対象 1 ファイル");
-  });
-});
-
-describe("timeoutTotal", () => {
-  const record = (survived: number, measured: number | null, timeout: number | null, noCoverage: number | null = null) => ({ survived, measured, timeout, noCoverage, unallowed: null });
-
-  it("記録の打ち切りを合計する", () => {
-    expect(timeoutTotal({ "a.ts": record(0, 30, 11), "b.ts": record(2, 20, 8) })).toBe(19);
-  });
-
-  // 旧形式（0.23 より前）の記録は打ち切りを持たない。0 として数える以外に手が無い。
-  it("打ち切りを持たない記録は 0 として数える", () => {
-    expect(timeoutTotal({ "a.ts": record(3, 10, null) })).toBe(0);
-  });
-
-  it("記録が無ければ 0", () => {
-    expect(timeoutTotal({})).toBe(0);
-  });
-});
-
-describe("noCoverageTotal", () => {
-  const record = (noCoverage: number | null) => ({ survived: 0, measured: 50, timeout: 0, noCoverage, unallowed: null });
-
-  it("記録の未計測を合計する", () => {
-    expect(noCoverageTotal({ "a.ts": record(85), "b.ts": record(82) })).toBe(167);
-  });
-
-  // 旧記録（0.24 より前）は欄を持たない。0 として数える以外に手が無い。
-  it("欄を持たない記録は 0 として数える", () => {
-    expect(noCoverageTotal({ "a.ts": record(null) })).toBe(0);
-  });
-
-  it("記録が無ければ 0", () => {
-    expect(noCoverageTotal({})).toBe(0);
   });
 });
 

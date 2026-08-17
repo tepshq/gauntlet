@@ -8,7 +8,6 @@ import {
   installedVitestVersion,
   requireCoverageProvider,
   toOutcome,
-  lastReasons,
   vitestArgs,
 } from "./runner.ts";
 
@@ -82,7 +81,7 @@ describe("RunnerError", () => {
   });
 
   it("メッセージをそのまま持つ", () => {
-    expect(new RunnerError("Stryker が入っていません").message).toBe("Stryker が入っていません");
+    expect(new RunnerError("vitest が入っていません").message).toBe("vitest が入っていません");
   });
 
   it("Error として捕まえられる", () => {
@@ -92,46 +91,6 @@ describe("RunnerError", () => {
 
 // 呼び出しは必ず it の中で行う。describe の直下で値を作ると、
 // 変異が有効になる前に計算が終わっていて、テストが変異を検知できない。
-// 道具は理由を出したあとに長いスタックを吐く。そのまま末尾を取ると窓に入るのが
-// スタックだけになり、理由が消える（h3 で Stryker の失敗が 13 行すべて at になった）。
-describe("lastReasons", () => {
-  it("スタックの行を落としてから末尾を取る", () => {
-    const output = ["ERROR 置けませんでした", "    at a (x.js:1:1)", "    at b (y.js:2:2)"].join("\n");
-    expect(lastReasons(output, 2)).toBe("ERROR 置けませんでした");
-  });
-
-  // 落とすのは行頭のスタックだけ。理由の文中の " at " まで落とすと、理由が消える。
-  it("理由の中の at は落とさない", () => {
-    expect(lastReasons("Error: Test timed out at 5000ms\n    at task (x.js:1:1)", 2)).toBe(
-      "Error: Test timed out at 5000ms",
-    );
-  });
-
-  it("スタックが無ければ末尾をそのまま返す", () => {
-    expect(lastReasons("a\nb\nc", 2)).toBe("b\nc");
-  });
-
-  // WARN が大量の実行では末尾が警告で埋まり、致命傷が窓の外に出る（#27 で 920 件の
-  // 前処理警告が本当のエラーを隠した）。最後の ERROR から先を優先する。
-  it("ERROR 行があれば、そこから先を見せる", () => {
-    const flood = Array.from({ length: 20 }, (_, i) => `WARN Preprocessor file${i}.html`).join("\n");
-    const output = `ERROR Stryker Unexpected error occurred\n本当の理由\n${flood}`;
-    const shown = lastReasons(output, 5);
-    expect(shown.startsWith("ERROR Stryker Unexpected error occurred")).toBe(true);
-    expect(shown).toContain("本当の理由");
-  });
-
-  it("ERROR が複数なら最後のものから見せる", () => {
-    const output = "ERROR 一つ目\n途中\nERROR 二つ目\n結末";
-    expect(lastReasons(output, 5)).toBe("ERROR 二つ目\n結末");
-  });
-
-  // 末尾の空行やスタック除去の残りを落とす。落とさないと報告の下に空行がぶら下がる。
-  it("ERROR から先の末尾の空白を落とす", () => {
-    expect(lastReasons("WARN x\nERROR 本体\n続き\n  \n", 10)).toBe("ERROR 本体\n続き");
-  });
-});
-
 describe("vitestArgs", () => {
   // 引数は丸ごと固定する。部分一致で見ると、コマンド名や出力先が変わっても気づかない。
   it("宣言が無ければ全部走らせる", () => {
@@ -151,7 +110,7 @@ describe("vitestArgs", () => {
   // 測る範囲は gauntlet の宣言で決める。渡さないとリポジトリの coverage.include 次第で、
   // 範囲に入れたのに coverage に現れないファイルが出て、網羅率 0% と区別できなくなる。
   it("測る範囲を coverage.include に渡す", () => {
-    expect(vitestArgs(null, "/tmp/out", [], [], ["src/**/*.ts", "lib/**/*.ts"])).toEqual([
+    expect(vitestArgs(null, "/tmp/out", [], ["src/**/*.ts", "lib/**/*.ts"])).toEqual([
       "vitest",
       "run",
       "--coverage",
@@ -199,28 +158,6 @@ describe("vitestArgs", () => {
     ]);
   });
 
-  // 位置引数がフラグの前に来ると vitest が読み取れない。
-  // 選択が 0 件になる組み合わせ（全部宣言外の project 等）に特別なフラグは要らない —
-  // 呼び出し元（mutationScope）は coverage しか読まず、coverage は空に潰れる。
-  it("指定したテストファイルだけに絞る", () => {
-    expect(vitestArgs(null, "/tmp/out", [], ["a.test.ts", "b.test.ts"])).toEqual([
-      "vitest",
-      "run",
-      "--coverage",
-      "--coverage.provider=v8",
-      "--coverage.reporter=json",
-      "--coverage.reportsDirectory=/tmp/out/coverage",
-      "--reporter=json",
-      "--reporter=default",
-      "--outputFile=/tmp/out/result.json",
-      "a.test.ts",
-      "b.test.ts",
-    ]);
-  });
-
-  it("ファイル指定が無ければ位置引数を足さない", () => {
-    expect(vitestArgs(null, "/tmp/out", [])).toEqual(vitestArgs(null, "/tmp/out", [], []));
-  });
 });
 
 describe("toOutcome", () => {

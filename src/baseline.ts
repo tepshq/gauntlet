@@ -27,113 +27,18 @@ export interface Baseline {
    * 種を置いて落とす（「種を置いた回は通さない」は crap と同じ）。
    */
   duplication?: number;
-  /**
-   * ファイルごとに許容する「生き残った変異」。
-   *
-   * CRAP と違って単一の数にできない。mutation は差分に関係するファイルだけを
-   * 対象にするので、件数は差分の大きさで変わり、リポジトリ全体の 1 つの数と
-   * 比べても意味を持たない。今回の対象になったファイルだけを突き合わせる。
-   */
-  mutation: Record<string, MutationRecord>;
-}
-
-/**
- * ファイル 1 つ分の mutation の記録。
- *
- * **生き残りの数は単調ではない。** テストを足すと `--ignoreStatic` で外れていた変異が
- * 測定に入り、触っていないファイルの生き残りが**増える**（39 → 41 で実際に落ちた。
- * テストを足したのに赤くなる、というゲートの動機と逆の向き）。だから測った数も残し、
- * 突き合わせるときに**測定集合が広がった分だけ増加を許す**。assert を消す形の攻撃は
- * 測った数が変わらないので、余裕は生まれず今までどおり落ちる。
- */
-export interface MutationRecord {
-  /** 生き残った変異の数。 */
-  survived: number;
-  /** 測った変異の数（Ignored / NoCoverage を除く）。0.22 より前の記録には無い。 */
-  measured: number | null;
-  /**
-   * 打ち切られた変異の数。0.23 より前の記録には無い。
-   *
-   * **突き合わせは `survived + timeout` で行う。** 打ち切りの閾値は実行速度に比例する
-   * （`timeoutFactor × 通常実行時間`）ので、「遅くなるだけの変異」は速い機械では
-   * Timeout、遅い CI では Survived になる — 同じコミットで手元と CI の生き残りが
-   * 食い違い、**何度締めても CI が通らない**（+3 が常に残る実測がある）。
-   * 副作用も正しい向きで、「時計で殺した」変異は借金の返済に数えられなくなる。
-   *
-   * **ただし和が環境不変なのは 3 通りの入れ替わりのうち 1 つだけ**（#37 / #39 で実測）:
-   *
-   * | 入れ替わり | `survived + timeout` |
-   * | --- | --- |
-   * | Survived ↔ Timeout | 不変（#26 が想定したもの） |
-   * | Timeout ↔ Killed | 変わる（速いほど小さい） |
-   * | Survived ↔ Killed | 変わる（時計に依存するテストがあると起きる） |
-   *
-   * だから**この数は締める側でも守る** — 打ち切りを下げてよいのは、そのファイルの
-   * ソースが差分にある回だけ（`ratchetByFile` の `touched`）。打ち切りはテストでは
-   * 減らせないので、下がったのは「コードの形が変わったか、機械が速かったか」の
-   * どちらかしかない。
-   */
-  timeout: number | null;
-  /**
-   * どのテストも通っていない変異の数。0.24 より前の記録には無い。
-   *
-   * **`survived + timeout` とは別の軸**として突き合わせる（足し込むと既存リポジトリが
-   * 導入初日に赤で埋まる。gauntlet 自身にも 222 件あった）。直し方も違う —
-   * 生き残りは assert を強める話、これは**テストから呼べる形にする**話。
-   *
-   * **「無い」と 0 は違う。** 旧記録を 0 と読むと、初めて測れた回が「0 → 19 に増えました」で
-   * 落ちて、全リポジトリが上げた瞬間に赤になる（#28 と同じ形の逆向き）。null は
-   * 「まだ測っていない」で、最初に測れた回が種を置く。
-   */
-  noCoverage: number | null;
-  /**
-   * 許容値に入っていない生き残りの数。0.25 より前の記録には無い。
-   *
-   * **ゲートはこの欄を読まない。** 突き合わせは `survived + timeout` と `noCoverage` だけで、
-   * ここは「余裕で通したので記録を凍らせた」ことの覚え書き。許容値として読むと、
-   * 塞いだはずの #40 がそのまま戻る。
-   *
-   * 記録する理由は、凍らせると**存在がどこにも残らない**こと。名指しは `full` の
-   * 出力にしか出ないので、緑のログを読み飛ばすと次の `full` まで消える — #40 の核心
-   * （気づけたのは人が中身を見たからだった）に対して、人の作業が減っていない。
-   * 欄にしておけば `list` が読めて、「毎回出るが誰も直さない」かどうかも実データで分かる。
-   *
-   * 突き合わせに使わないので、衝突解決（`tighterRecord`）もこの欄を見ない。
-   * 選ばれた側の値がそのまま残り、次に測った回に実測で置き直される。
-   */
-  unallowed: number | null;
-}
-
-/** 数でなければ「その欄は無い」。**0 に丸めない** — 無いのと 0 は別物（#28 / #31）。 */
-function toCount(value: unknown): number | null {
-  return typeof value === "number" ? value : null;
-}
-
-/** 0.22 より前は生き残りの数だけを記録していた。読める形は全部受ける。 */
-function toRecord(value: unknown): MutationRecord | null {
-  if (typeof value === "number")
-    return { survived: value, measured: null, timeout: null, noCoverage: null, unallowed: null };
-  if (typeof value === "object" && value !== null && "survived" in value) {
-    const { survived, measured, timeout, noCoverage, unallowed } = value as Record<string, unknown>;
-    if (typeof survived !== "number") return null;
-    return {
-      survived,
-      measured: toCount(measured),
-      timeout: toCount(timeout),
-      noCoverage: toCount(noCoverage),
-      unallowed: toCount(unallowed),
-    };
-  }
-  return null;
 }
 
 /**
  * 読める形なら Baseline に、そうでなければ null。読み込みと衝突解決が共有する。
  *
- * **「無い」はゲートごとに読む。** 記録は 1 ファイルだが、そこに値を置くゲートは 3 つ
+ * **「無い」はゲートごとに読む。** 記録は 1 ファイルだが、そこに値を置くゲートは複数
  * あって、片方だけが完走する回がある（crap が計測を中断し、duplication は完走した —
  * #28 の形）。ファイルがあることと、そのゲートの値があることは別。混ぜて欠けた欄に
  * 0 を埋めると、測っていないゲートに最も厳しい基準が入る。
+ *
+ * 知らない欄は黙って落とす。0.27.0 より前の記録が持つ `mutation` の欄はここで消え、
+ * 次に記録を書く回にファイルからも消える（mutation ゲートは 0.27.0 で外した）。
  */
 export function parseBaseline(text: string): Baseline | null {
   try {
@@ -148,16 +53,10 @@ export function parseBaseline(text: string): Baseline | null {
 
 /** 読める欄だけを拾う。**読めない欄は落とし、0 で埋めない。** */
 function toBaseline(data: Partial<Baseline>): Baseline {
-  const mutation: Record<string, MutationRecord> = {};
-  for (const [file, value] of Object.entries(data.mutation ?? {})) {
-    const record = toRecord(value);
-    if (record !== null) mutation[file] = record;
-  }
   // 無いのと 0 は違う。無ければ欄ごと無し（種を置く判定に使う）。
   return {
     ...(typeof data.crap === "number" ? { crap: data.crap } : {}),
     ...(typeof data.duplication === "number" ? { duplication: data.duplication } : {}),
-    mutation,
   };
 }
 
@@ -177,15 +76,7 @@ export function loadBaseline(root: string): Baseline | null {
 }
 
 export function saveBaseline(root: string, baseline: Baseline): void {
-  // measured が無い（旧形式から読んだ）記録は survived だけで書く。null を書くと
-  // 「測って 0 だった」と区別できない。
-  const mutation = Object.fromEntries(
-    Object.entries(baseline.mutation).map(([file, record]) => [
-      file,
-      Object.fromEntries(Object.entries(record).filter(([, value]) => value !== null)),
-    ]),
-  );
-  writeFileSync(join(root, BASELINE_FILENAME), `${JSON.stringify({ ...baseline, mutation }, null, 2)}\n`);
+  writeFileSync(join(root, BASELINE_FILENAME), `${JSON.stringify(baseline, null, 2)}\n`);
 }
 
 /**
@@ -236,183 +127,6 @@ export function ratchetNumber(allowed: number, actual: number): RatchetOutcome {
   if (actual > allowed) return { kind: "regressed", allowed, actual };
   if (actual < allowed) return { kind: "improved", from: allowed, to: actual };
   return { kind: "ok" };
-}
-
-/**
- * 後退 1 件。**軸を持つ。**
- *
- * mutation は 1 ファイルに 2 つの借金を記録する（殺せなかった変異と、テストが届いて
- * いない変異）。どちらが増えたのかは直し方が違うので、混ぜて 1 種類の文にできない。
- */
-export type MutationRegression =
-  | {
-      kind: "undetected";
-      file: string;
-      /**
-       * **突き合わせた数そのもの**（殺せなかった変異 = 生き残り + 打ち切り。
-       * 旧記録で打ち切りを持たない回は生き残りだけ）。
-       *
-       * ここに生き残りの数を入れていたせいで、打ち切りだけが増えた回に
-       * **`0 → 0 に増えました`** という自己矛盾した文が出ていた（#39）。
-       * 判定に使った数と読み手に見せる数は同じでなければならない。
-       */
-      allowed: number;
-      actual: number;
-      /** 内訳。どれが動いたかで直し方が変わる（打ち切りはテストでは減らせない）。 */
-      survivedBefore: number;
-      survivedNow: number;
-      /** 旧記録（0.23 より前）は null。 */
-      timeoutBefore: number | null;
-      timeoutNow: number | null;
-      /** 旧記録（0.22 より前）は null。突き合わせの条件が読み手に見えるように残す。 */
-      measuredBefore: number | null;
-      measuredNow: number | null;
-    }
-  | { kind: "noCoverage"; file: string; allowed: number; actual: number };
-
-/**
- * 記録された許容値を超えているのに、測定集合が広がった余裕（slack）で通したファイル。
- *
- * **落とさないが、許容値にも入れない（#40）。** 未計測だった変異が測定に入って
- * 生き残ると、slack はその増加を必ず飲み込む（増分と生き残りが同じ原因から来るので、
- * 件数では出所を割り当てられない）。飲み込んだ回に記録を実測で置き直すと、
- * 誰も直していない生き残りが**そのまま許容値になる** — 記録は埋まり `full` は緑なので、
- * 緩んだことに気づく手掛かりが残らない。
- *
- * だから通しはするが記録は動かさず（`recordFor`）、**解消されるまで毎回名指しする**。
- * `noCoverage`（#31）と disable 点検（#32）が採っている「落とさずに言い続ける」と同じ形。
- */
-export interface SlackPass {
-  file: string;
-  /** 記録された許容値（殺せなかった数 = 生き残り + 打ち切り）。 */
-  allowed: number;
-  /** 今回の実測（同じ数え方）。`allowed` を超えている。 */
-  actual: number;
-  /**
-   * 許容値をどれだけ超えているか。**差はここで 1 回だけ出す。**
-   *
-   * 記録に書く数（`unallowed`）と読み手に見せる数が同じでなければならない。
-   * 引き算を 2 箇所に置くと、片方だけ間違っても型は通る。
-   */
-  over: number;
-  /** 通した余裕。測った変異が増えた分（#24）。 */
-  slack: number;
-}
-
-export interface FileRatchet {
-  regressed: MutationRegression[];
-  /** 余裕で通したが、許容値には入れなかったファイル（#40）。 */
-  onSlack: SlackPass[];
-  updated: Record<string, MutationRecord>;
-}
-
-/**
- * 突き合わせる「殺せなかった数」= survived + timeout。
- *
- * 打ち切りの閾値は実行速度に比例して動くので、Survived と Timeout の境目は環境で
- * 揺れる — 和は揺れない。旧記録（timeout 無し）は survived だけで比べる
- * （和に混ぜると片側だけ膨らむ）。
- */
-function undetectedCount(limit: MutationRecord, actual: MutationRecord): number {
-  return limit.timeout == null ? actual.survived : actual.survived + (actual.timeout ?? 0);
-}
-
-/** 記録された許容値。`undetectedCount` と同じ数え方でなければ比べられない。 */
-function allowedCount(limit: MutationRecord): number {
-  return limit.survived + (limit.timeout ?? 0);
-}
-
-/**
- * 測定集合が広がった分の余裕。**ソースが差分にあるファイルには作らない（#40）。**
- *
- * `measured` はテストを足しても増えるが、**本番コードを足しても増える**（新しい変異が
- * Killed になった分もここに入る）。触ったファイルに余裕を渡すと、その PR 自身が書いた
- * 弱い箇所の生き残りが自分で作った枠に収まって黙って通る。#24 が守りたかったのは
- * 「**触っていない**ファイルの生き残りが、他所のテスト追加で測定に入って増え、
- * 無関係な PR が落ちる」ことなので、言い訳を認める相手をそこに限る。
- *
- * 二重の歯止め: measured が 0 の記録にも余裕を作らない。0/0/0 の記録に measured の
- * 余裕を与えると ceiling = actual.measured になり、survived + timeout は measured の
- * 部分集合なので**必ず通る** — そのファイルのゲートが恒久的に無効になる（#27 で実測）。
- */
-function measuredSlack(limit: MutationRecord, actual: MutationRecord, touched: boolean): number {
-  if (touched || !limit.measured) return 0;
-  return Math.max(0, (actual.measured ?? 0) - limit.measured);
-}
-
-/**
- * ファイル 1 つ分の突き合わせ。超えていれば報告の材料を、収まっていれば null を返す。
- *
- * 旧記録（measured 無し）には余裕を作れないので、従来どおり厳格に比べる。
- */
-function undetectedRegression(
-  file: string,
-  limit: MutationRecord,
-  actual: MutationRecord,
-  slack: number,
-): MutationRegression | null {
-  const undetected = undetectedCount(limit, actual);
-  const allowed = allowedCount(limit);
-  if (undetected <= allowed + slack) return null;
-  return {
-    kind: "undetected",
-    file,
-    // **判定に使った数をそのまま渡す。** 見出しに生き残りを出すと、打ち切りだけが
-    // 増えた回に「0 → 0 に増えました」になる（#39）。余裕（slack）は足さない —
-    // 許容値は記録された数で、slack は測定集合が広がった回だけの一時的な緩和。
-    allowed,
-    actual: undetected,
-    survivedBefore: limit.survived,
-    survivedNow: actual.survived,
-    timeoutBefore: limit.timeout,
-    timeoutNow: actual.timeout,
-    measuredBefore: limit.measured,
-    measuredNow: actual.measured,
-  };
-}
-
-/**
- * テストが届いていない変異が増えたか。**測定集合の余裕は作らない。**
- *
- * `undetected` 側の slack（measured が増えた分は許す）は「テストを足したら測定に入った」
- * ための緩和だが、こちらにその形は無い — テストを足せば NoCoverage は**減る**方向にしか
- * 動かない。増えるのは未テストのコードが増えたときだけなので、厳密に比べる。
- *
- * 旧記録（欄なし = null）は突き合わせず種を置く。0 と読むと、上げた瞬間に
- * 全リポジトリが「0 → N に増えました」で赤になる（#28 と同じ形の逆向き）。
- */
-function noCoverageRegression(
-  file: string,
-  limit: MutationRecord,
-  actual: MutationRecord,
-): MutationRegression | null {
-  if (limit.noCoverage === null) return null;
-  const now = actual.noCoverage ?? 0;
-  if (now <= limit.noCoverage) return null;
-  return { kind: "noCoverage", file, allowed: limit.noCoverage, actual: now };
-}
-
-/** ファイル 1 つ分を全部の軸で突き合わせる。**両方増えたら両方言う** — 直し方が違う。 */
-function fileRegressions(
-  file: string,
-  limit: MutationRecord,
-  actual: MutationRecord,
-  slack: number,
-): MutationRegression[] {
-  return [undetectedRegression(file, limit, actual, slack), noCoverageRegression(file, limit, actual)].filter(
-    (entry): entry is MutationRegression => entry !== null,
-  );
-}
-
-/**
- * 許容値は超えているが、余裕で通したか。**後退していないことは呼び出し側が確かめてから呼ぶ。**
- *
- * 超えているのに後退になっていないなら、通したのは余裕しかない。
- */
-function slackPass(file: string, limit: MutationRecord, actual: MutationRecord, slack: number): SlackPass | null {
-  const undetected = undetectedCount(limit, actual);
-  const allowed = allowedCount(limit);
-  return undetected <= allowed ? null : { file, allowed, actual: undetected, over: undetected - allowed, slack };
 }
 
 /**
@@ -469,24 +183,6 @@ export function conflictSides(text: string): { ours: string; theirs: string } | 
 }
 
 /**
- * 2 つの記録の厳しい側。
- *
- * 突き合わせが見るのは「殺せなかった数」= survived + timeout なので、その和が
- * 小さい方が厳しい。和が同じなら measured が大きい方 — 測定集合が広がった分だけ
- * 増加を許す（slack）ので、measured が大きいほど将来の余裕が小さい。
- * measured 無し（旧形式）は slack を作れない = 一番厳しいので、和が同じなら勝つ。
- * 2 つの record の欄を混ぜて第 3 の record を合成することはしない —
- * どちらの実測でもない値を記録に書かない。
- */
-export function tighterRecord(a: MutationRecord, b: MutationRecord): MutationRecord {
-  const undetectedA = a.survived + (a.timeout ?? 0);
-  const undetectedB = b.survived + (b.timeout ?? 0);
-  if (undetectedA < undetectedB) return a;
-  if (undetectedB < undetectedA) return b;
-  return (a.measured ?? Infinity) >= (b.measured ?? Infinity) ? a : b;
-}
-
-/**
  * 無い方は「まだゲートが無い」なので、有る方が常に厳しい。両方有れば小さい方。
  *
  * crap と duplication が共有する。**`Math.min` で済ませてはいけない** — 片側に欄が
@@ -506,21 +202,13 @@ function tighterCount(a: number | undefined, b: number | undefined): number | un
  * 機械的に取ればエージェントに値を選ばせずに済む（gameable にならない）。
  * 厳しすぎる方向にずれたら、それはラチェットが普段から出す要求
  * （後からマージする側が差を埋める）と同じ形で現れる。
- * mutation はファイルの和集合 — 片側にしか無い記録を落とすと、その負債が消える。
  */
 export function mergeBaselines(ours: Baseline, theirs: Baseline): Baseline {
-  const mutation: Record<string, MutationRecord> = {};
-  for (const file of new Set([...Object.keys(ours.mutation), ...Object.keys(theirs.mutation)])) {
-    const a = ours.mutation[file];
-    const b = theirs.mutation[file];
-    mutation[file] = a === undefined ? b! : b === undefined ? a : tighterRecord(a, b);
-  }
   const crap = tighterCount(ours.crap, theirs.crap);
   const duplication = tighterCount(ours.duplication, theirs.duplication);
   return {
     ...(crap === undefined ? {} : { crap }),
     ...(duplication === undefined ? {} : { duplication }),
-    mutation,
   };
 }
 
@@ -539,82 +227,4 @@ export function resolveConflictedBaseline(text: string): Baseline | null {
   );
   if (parsed.length === 0) return null;
   return parsed.length === 1 ? parsed[0]! : mergeBaselines(parsed[0]!, parsed[1]!);
-}
-
-/**
- * 記録に書く値。**打ち切りは、そのファイルのソースを触った回だけ締める。**
- *
- * 打ち切りは実行ごとに揺れる（同じコード・同じマシンで 5 → 4 → 3 の実測がある）。
- * ラチェットは締まる方向にしか動かないので、揺らぐ量に当てると**記録が揺らぎの
- * 最小値へ収束し、その後は上振れするたびに落ちる**（#39）。しかもテストでは減らせない
- * ので、落ちても打つ手が無い。
- *
- * **軸を分けられるのは、打ち切りだけが「テストで動かせない」から。** 打ち切りが下がるのは
- * 「コードの形が変わったか、機械が速かったか」のどちらかしかないので、**ソースが差分に
- * ある回だけ締めれば揺らぎは記録に入らない**。生き残りにこの制限を当ててはいけない —
- * 生き残りを減らす標準的なやり方はテストを足すことで、**ソースを触らない改善が普通に
- * ある**（そこを締めないと、いちばん歓迎すべき改善が記録されなくなる。#39 の指摘）。
- *
- * 旧記録（欄なし）への初回の書き込みは「締め」ではないので、触っていなくても入れる。
- *
- * **余裕で通した回は、突き合わせの両辺（生き残りと母数）も凍らせる（#40）。** 実測で
- * 置き直すと、誰も直していない生き残りがそのまま許容値になり、次の回からは「超えている」
- * ことすら分からなくなる。両辺を一緒に凍らせるのは、片方だけ動かすと次の回の余裕が
- * 消えて**無関係な回が赤になる**ため — 同じコードで緑と赤が出るのが一番避けたい形。
- * `noCoverage` と打ち切りは凍らせない（余裕を持たない軸なので、締めて安全）。
- */
-function recordFor(
-  limit: MutationRecord,
-  actual: MutationRecord,
-  touched: boolean,
-  pass: SlackPass | null,
-): MutationRecord {
-  // 触っていないファイルの打ち切りは**動かさない**（下げない・上げない）。上振れを
-  // そのまま書くと記録が緩むので、「締めない」ではなく「凍らせる」が正しい。
-  const kept = touched || limit.timeout == null ? actual : { ...actual, timeout: limit.timeout };
-  if (pass === null) return kept;
-  return { ...kept, survived: limit.survived, measured: limit.measured, unallowed: pass.over };
-}
-
-/**
- * ファイルごとに件数を突き合わせる。mutation が使う。
- *
- * 記録が無いファイルは今の実測値を種にする。既存リポジトリは導入時点で
- * 大量に抱えているので、0 から始めると誰も入れられない。
- */
-export function ratchetByFile(
-  allowed: Record<string, MutationRecord>,
-  scanned: readonly string[],
-  counts: Record<string, MutationRecord>,
-  /** ソースが差分にあるファイル。打ち切りを締めてよいのはここだけ（#39）。 */
-  touched: ReadonlySet<string> = new Set(scanned),
-): FileRatchet {
-  const regressed: FileRatchet["regressed"] = [];
-  const onSlack: FileRatchet["onSlack"] = [];
-  const updated = { ...allowed };
-  for (const file of scanned) {
-    const actual = counts[file];
-    // 測定結果が無いファイルは、突き合わせも更新もしない。0/0/0 を「実測」として
-    // 書くと、負債の記録が消える（#27 では 17 件・19 件・2 件の負債が記録上 0 になり、
-    // measured の余裕と組み合わさってゲートが外れた）。候補に入っても測られない経路は
-    // 普通にある — 型定義だけのファイル、変異の作れないファイル。
-    if (actual === undefined) continue;
-    const limit = allowed[file];
-    if (limit === undefined) {
-      updated[file] = actual;
-      continue;
-    }
-    const slack = measuredSlack(limit, actual, touched.has(file));
-    // どれか 1 つの軸でも後退していれば記録は動かさない（片方だけ締めると、
-    // 後退した軸の許容値が「直った後の実測」で置き直せなくなる）。
-    const entries = fileRegressions(file, limit, actual, slack);
-    if (entries.length > 0) {
-      regressed.push(...entries);
-      continue;
-    }
-    const pass = slackPass(file, limit, actual, slack);
-    if (pass !== null) onSlack.push(pass);
-    updated[file] = recordFor(limit, actual, touched.has(file), pass);
-  }
-  return { regressed, onSlack, updated };
 }
