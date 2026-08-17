@@ -18,9 +18,9 @@ describe("TIER_CHECKS", () => {
     expect(TIER_CHECKS.quick).toEqual(["typecheck", "tests", "crap"]);
   });
 
-  // mutation は quick の予算に収まらないので full にのみ置く。
-  it("mutation は full にのみある", () => {
-    expect(TIER_CHECKS.full).toContain("mutation");
+  // mutation は 0.27.0 でスコープから外した。full は重複とラチェットを足すだけ。
+  it("mutation はどの tier にも無い", () => {
+    expect(TIER_CHECKS.full).not.toContain("mutation");
     expect(TIER_CHECKS.quick).not.toContain("mutation");
   });
 

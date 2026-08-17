@@ -9,8 +9,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { GUARD_MESSAGE, gatesCommit, hookAction, shouldBlock } from "./guard.ts";
 import { INIT_USAGE, formatInit, helpRequested, init, parseInitOptions } from "./init.ts";
-import { describeCrash, doctor, listViolators, run } from "./run.ts";
-import { SEED_USAGE, parseSeedPattern, seedMutation } from "./seed.ts";
+import { describeCrash, listViolators, run } from "./run.ts";
 import { EXIT_BLOCKED, EXIT_PASS, type TierName, exitCodeFor } from "./tier.ts";
 
 function guard(): number {
@@ -31,38 +30,9 @@ function initCommand(argv: readonly string[]): number {
   return EXIT_PASS;
 }
 
-/**
- * 記録の無いファイルに mutation の種を置く。**ゲートではないので判定しない。**
- *
- * 変異対象は差分から決まるので、clean な既定ブランチでは必ず 0 — 導入時に `full` を
- * 回しても `mutation` は空のままで、記録は「最初にそのファイルに触れた PR」が自分の
- * 新コードで作ることになる（#36）。範囲を渡して、main の状態を先に記録しておく。
- *
- * **範囲は必須。** 既定を「測る対象すべて」にすると、780 ファイルの実行が事故で始まる。
- */
-function seedCommand(argv: readonly string[]): number {
-  const pattern = parseSeedPattern(argv);
-  if (pattern === null) {
-    process.stderr.write(`gauntlet: seed には範囲が要ります\n\n${SEED_USAGE}`);
-    return EXIT_BLOCKED;
-  }
-  const notify = (line: string): void => void process.stderr.write(`gauntlet seed: ${line}\n`);
-  process.stderr.write(`${seedMutation(process.cwd(), pattern, notify)}\n`);
-  return EXIT_PASS;
-}
-
 /** 一覧はゲートではないので、違反があっても exit 0。落ちるのは走れなかったときだけ。 */
 function listCommand(): number {
   process.stderr.write(`${listViolators(process.cwd())}\n`);
-  return EXIT_PASS;
-}
-
-/** 導入時に一度も動かないゲート（mutation）を動かして確かめる。走れば exit 0。 */
-function doctorCommand(): number {
-  const excluded = doctor(process.cwd());
-  const dropped =
-    excluded.length === 0 ? "" : `\n  ${excluded.join("、")} の変異は Stryker が置けないので、以降も測りません`;
-  process.stderr.write(`gauntlet doctor: ok  Stryker が vitest を起動できました（変異は作らず初回実行のみ）${dropped}\n`);
   return EXIT_PASS;
 }
 
@@ -118,13 +88,8 @@ const USAGE = `gauntlet <command>
 
   quick   差分に閉じた検査。型チェック + 関連テスト + 触った関数の CRAP
           （PreToolUse フックが git commit の直前に呼ぶ。手動でもそのまま叩ける）
-  full    全量検査。上に加えて全テスト・重複・ラチェット・mutation（CI から）
-  list    baseline が許容している CRAP 違反と mutation の生き残りを全部並べる（ゲートではない）
-  doctor  Stryker が vitest を起動できるか確かめる（導入時に mutation は走らないため）
-  seed    宣言した範囲を測って mutation の記録を置く（ゲートではない）
-          npx gauntlet seed --mutation='lib/**/*.ts'
-          差分に依らないので、既定ブランチの clean なツリーで一度回すと
-          「main の状態」が許容値になる。記録の無いファイルだけを測るので分割して回せる
+  full    全量検査。上に加えて全テスト・重複・ラチェット（CI から）
+  list    baseline が許容している CRAP 違反と重複の在り処を全部並べる（ゲートではない）
   init    設定とフックを置く（範囲の決め方と CI は skill が案内する）
   hook       PreToolUse フックから。baseline の書き換えを止め、git commit なら quick を回す
              （guard / precommit は旧配線のための別名として残る）
@@ -159,6 +124,20 @@ function renamed(): number {
   return EXIT_BLOCKED;
 }
 
+/**
+ * mutation ゲートと一緒に 0.27.0 で外したコマンド。**黙って素通しはしない。**
+ *
+ * CI や手順書に残った `doctor` / `seed` の呼び出しが exit 0 で流れると、
+ * 走っていない確認が緑に見える。外したと言って止め、呼び出しを消してもらう。
+ */
+function removedWithMutation(argv: readonly string[]): number {
+  process.stderr.write(
+    `gauntlet: ${argv[0]} は 0.27.0 で外れました（mutation ゲートをスコープから外したため。DESIGN.md 参照）。` +
+      `この呼び出しを消してください\n\n${USAGE}`,
+  );
+  return EXIT_BLOCKED;
+}
+
 /** 知らない指定は素通しせずに止める。走らなかったゲートを緑にしない。 */
 function usageError(argv: readonly string[]): number {
   const given = argv.length === 0 ? "コマンドがありません" : `${argv[0]} は知らないコマンドです`;
@@ -171,9 +150,9 @@ const COMMANDS: Record<string, (argv: readonly string[]) => number> = {
   precommit,
   hook,
   init: initCommand,
-  doctor: doctorCommand,
+  doctor: removedWithMutation,
   list: listCommand,
-  seed: seedCommand,
+  seed: removedWithMutation,
   quick: tierCommand("quick"),
   full: tierCommand("full"),
   run: renamed,

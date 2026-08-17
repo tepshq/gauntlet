@@ -43,8 +43,6 @@ export function isTestFile(file: string): boolean {
 
 export function listSourceFiles(root: string, source: GauntletConfig["source"]): string[] {
   const owned = repoSourceSet(root);
-  // Stryker disable next-line all: 除外なしと空の除外は同じ振る舞いなので、
-  // ここの変異は区別できる結果を持たない（`exclude: undefined` も同じ）。
   const found = globSync(source.include, { cwd: root, exclude: source.exclude ?? [] });
   return found
     .map(toPosix)

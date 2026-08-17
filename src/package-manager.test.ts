@@ -78,8 +78,8 @@ describe("installDevCommand", () => {
   });
 
   it("複数パッケージを空白で並べる", () => {
-    expect(installDevCommand("pnpm", ["@stryker-mutator/core", "@stryker-mutator/vitest-runner"])).toBe(
-      "pnpm add -D @stryker-mutator/core @stryker-mutator/vitest-runner",
+    expect(installDevCommand("pnpm", ["@vitest/coverage-v8", "eslint"])).toBe(
+      "pnpm add -D @vitest/coverage-v8 eslint",
     );
   });
 });
