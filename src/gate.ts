@@ -127,11 +127,15 @@ export function requiredCoverage(cc: number): number | null {
  * 数字だけ出すと「テストを足す」に読まれるが、複雑度が閾値を超えていると
  * それでは永遠に通らない（h3 では違反 35 件のうち 25 件が網羅率 90〜100% だった）。
  * どちらなのかは複雑度から一意に決まるので、読み手に逆算させない。
+ *
+ * 「関数を割ってください」だけだと盲目分割（複雑さを小関数に配るだけ）に倒れる —
+ * 文脈ゼロのエージェント 3/3 がそうした。「分岐を表に落とすか」を先頭に置くと
+ * 6/6 が表駆動化か理由付きの分割を選んだ（DESIGN §3、2026-08-19 の実測）。
  */
 export function crapAdvice(cc: number): string {
   const required = requiredCoverage(cc);
   return required === null
-    ? `複雑度 ${CRAP_THRESHOLD + 1} 以上はテストでは通りません。関数を割ってください`
+    ? `複雑度 ${CRAP_THRESHOLD + 1} 以上はテストでは通りません。分岐を表に落とすか、まとまりごとに関数を割ってください`
     : `網羅率 ${required}% で通ります`;
 }
 
