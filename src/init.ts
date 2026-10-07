@@ -79,6 +79,45 @@ function existingConfig(root: string): GauntletConfig | null {
  * → 0.14 で `PreToolUse` に集約（DESIGN §2）。
  * 0.13 以前から入れているリポジトリは `.githooks/` と `core.hooksPath` を外してよい。
  */
+/**
+ * フックのコマンド。**どこで起動されても、セッションの作業の場所の gauntlet を呼ぶ。**
+ *
+ * `npx gauntlet hook` を直に書いていた（〜0.28）。Claude Code はフックを本体の checkout
+ * （プロジェクトの根）で起動することがあり、worktree のセッションでは:
+ * - 本体に `node_modules` が無いと npx が gauntlet を見つけられず **exit 1**。Claude Code は
+ *   2 以外を「止めないエラー」として素通しするので、検問が黙って消えていた
+ * - 本体に入っていても、本体の作業ツリーを検査して worktree の変更を見なかった
+ * （tepshq/amazon-business#10。試験の無い複雑な関数のコミットが通った）
+ *
+ * Claude Code の文書の示す形どおり、作業の場所は入力の `cwd` から取る
+ * （`$CLAUDE_PROJECT_DIR` は本体を指したまま動かない）。台本をファイルで置かず
+ * `node -e` に埋めるのは、`$CLAUDE_PROJECT_DIR/.claude/hooks/…` だと台本が本体の
+ * checkout から読まれ、本体が遅れていると古い台本が走るか、無くて exit 1 で素通しになるから。
+ * 頼るのは node だけ（npx が動くなら必ずある）。
+ *
+ * gauntlet 自身が起動できない（依存が入っていない・壊れている）ときは **exit 2 で止める**。
+ * ただし止めるのは gauntlet が見るはずだった呼び出し（コミットと記録の書き換え）だけ —
+ * 全部止めると、依存を入れる `npm ci` まで止まり、抜け道がゲートの無効化しか無くなる。
+ * 判定は字面の粗い一致で、広く止める側に倒す。
+ */
+export const HOOK_COMMAND =
+  "node -e '" +
+  [
+    'const raw = require("fs").readFileSync(0);',
+    "let input = {};",
+    "try { input = JSON.parse(raw); } catch {}",
+    "const cwd = input.cwd || process.cwd();",
+    'const run = require("child_process").spawnSync("npx", ["--no-install", "gauntlet", "hook"],' +
+      ' { cwd, input: raw, stdio: ["pipe", "inherit", "inherit"] });',
+    "if (run.status === 0 || run.status === 2) process.exit(run.status);",
+    'if (/commit|gauntlet\\.baseline\\.json/.test(JSON.stringify(input.tool_input || {}))) {',
+    'console.error("gauntlet: " + cwd + " で gauntlet を起動できないので止めました。' +
+      'そこで依存を入れてください（npm ci など）");',
+    "process.exit(2);",
+    "}",
+  ].join(" ") +
+  "'";
+
 const HOOKS = {
   PreToolUse: [
     {
@@ -87,7 +126,7 @@ const HOOKS = {
       // 「断続的に無視される」の両方が実測された（#22）。厳密に解釈される経路での失敗は
       // 「検問が黙って消える」側に倒れるので、全 Bash で走って自分で判定する。
       matcher: "Edit|Write|NotebookEdit|Bash",
-      hooks: [{ type: "command", command: "npx gauntlet hook" }],
+      hooks: [{ type: "command", command: HOOK_COMMAND }],
     },
   ],
 };
@@ -162,7 +201,13 @@ export function mergeSettings(existing: string | null): string {
   for (const [event, entries] of Object.entries(HOOKS)) {
     // 旧配線（guard / quick / precommit の個別フック）は撤去して 1 本に置き換える。
     // 残すと二重に走るか、`if` の解釈が揺れる環境で全 Bash に quick が走り続ける。
-    const obsolete = ['"npx gauntlet quick"', '"npx gauntlet precommit"', '"npx gauntlet guard"'];
+    // `npx gauntlet hook`（〜0.28）は worktree のセッションで黙って素通しになる（HOOK_COMMAND）。
+    const obsolete = [
+      '"npx gauntlet quick"',
+      '"npx gauntlet precommit"',
+      '"npx gauntlet guard"',
+      '"npx gauntlet hook"',
+    ];
     const current = (hooks[event] ?? []).filter(
       (entry) => !obsolete.some((command) => JSON.stringify(entry).includes(command)),
     );

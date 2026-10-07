@@ -1080,6 +1080,35 @@ clean なツリーの実測だけ（#23）なので、コミット前の計測�
   gauntlet 自身のセッションの guard に止められた）。設計どおりだが、複数リポジトリを
   同時に触るエージェントには効く
 
+### 0.29.0: フックを worktree のセッションで効かせる（2026-10-07、tepshq/amazon-business#10）
+
+**崩れた前提**: 「`.claude/settings.json` に `npx gauntlet hook` を書けば、そのセッションの
+作業ツリーが検査される」。amazon-business の worktree のセッションで、試験の無い複雑度 18 の
+関数の Write とコミットが**両方通った**（同じ状態で手の `quick` は赤、CRAP 342.0）。
+セッションの記録では PreToolUse のたびにフックが呼ばれ、毎回 `npm error could not determine
+executable to run`・exit 1（止めないエラー）。npm のログの cwd は本体の checkout だった。
+
+**実測で確かめたこと**:
+- 公式文書（worktrees の「Hook paths don't follow the worktree」）: `$CLAUDE_PROJECT_DIR` は
+  セッションを始めた本体に留まり、worktree の場所は入力の `cwd` でだけ渡る
+- gauntlet 自身の worktree のセッションでも、フックは本体の checkout で走っていた
+  （worktree では `npx gauntlet` が npx の壊れたキャッシュで解決できず exit 127 なのに、
+  フックの guard は効いた = 本体の 0.28.0 が本体の場所で走っていた）。つまり自分の
+  dogfooding も、worktree でのコミットは本体を検査していた
+- 依存の無い場所での `npx gauntlet hook` は exit 1 を再現。`--no-install` を付けないと
+  レジストリの同名の別パッケージ `gauntlet` を取りに行く
+- 起動台を本体の checkout から起動し、`cwd` に worktree を渡すと、worktree に置いた
+  複雑な関数（CRAP 132.0）のコミットが exit 2 で止まった
+- 起動台の上乗せ: 素通しの Bash 1 回が 0.36 秒（旧 `npx gauntlet hook` 0.37 秒）。差は測れない
+
+**入れたもの**（理由は DESIGN §2）: `init` が書くフックを `node -e` の起動台に替える（入力の
+`cwd` へ移って `npx --no-install gauntlet hook`。起動できなければコミットと記録の書き換えだけ
+exit 2）。`gauntlet hook` 自身も入力の `cwd` を検査の場所にする（`hookRoot`）。
+旧配線 `npx gauntlet hook` は `init` の再実行で撤去される。
+gauntlet 自身の設定は、同じ起動台で `node src/cli.ts hook` を呼ぶ形を手で置いた（DESIGN §2）。
+
+**使う側の手順**: 0.29.0 に上げ、`npx gauntlet init` を叩き直し、worktree で依存を入れる。
+
 ### crap-burndown skill: 「skill にはしない」判断を証拠が出たので覆す（2026-08-19）
 
 h3 パイロット時に「CRAP 返済の skill は作らない — 仕分けは違反 1 行ごとの助言で出ており、
