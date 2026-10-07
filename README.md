@@ -220,16 +220,33 @@ skill が範囲を決めたあと `gauntlet init --include=...` を叩き、**�
 
 ### Claude Code の挙動が変わります
 
-`init` が `.claude/settings.json` に `PreToolUse` フック（`npx gauntlet hook`）を 1 本足します。
+`init` が `.claude/settings.json` に `PreToolUse` フックを 1 本足します。
 検問は 2 つで、どちらに当たるかは gauntlet が自分で判定します。
 **配線の手作業はありません** — このファイルはコミットで伝播するので、clone した全員に効きます。
+
+フックのコマンドは `npx gauntlet hook` を直に書かず、`node -e '…'` の短い起動台にしてあります。
+Claude Code は worktree で動くセッションでも、フックを**本体の checkout** で起動することがあり、
+worktree の場所はフックの入力（標準入力の JSON）の `cwd` でだけ渡すためです。起動台は:
+
+- 入力の `cwd`（そのセッションの作業の場所）へ移り、**そこに入っている gauntlet** を呼ぶ。
+  検査されるのも、その場所の作業ツリーです
+- そこで gauntlet を起動できない（依存が入っていない）とき、コミットと記録の書き換えは
+  **exit 2 で止めて**理由を言います。それ以外（依存を入れる `npm ci` など）は通します
+
+worktree で作業するなら、**その worktree で依存を入れてください**（`npm ci` など）。
+本体の checkout の `node_modules` は使いません。
+
+> 0.28 以前の `npx gauntlet hook` 直書きは、worktree のセッションで黙って素通しになります
+> （本体に `node_modules` が無いと npx が exit 1 で終わり、Claude Code は 2 以外を止めない。
+> 入っていても本体を検査する）。0.29 に上げて `npx gauntlet init` を叩き直すと置き換わります。
+> フックを手で書く場合も、`npx` を直に書かず、入力の `cwd` に移ってから呼んでください。
 
 **1. コミットの検問** — エージェントが `git commit` しようとすると `gauntlet quick` が走り、
 赤なら**コミットそのものが実行されません**。「履歴に入った状態はすべて検査済み」が
 不変条件になります。違反の内容はエージェントに直接届くので、そのまま直しにいきます:
 
 ```
-PreToolUse:Bash hook error: [npx gauntlet hook]: gauntlet quick: fail
+PreToolUse:Bash hook error: [node -e '…']: gauntlet quick: fail
   ✗ crap  CRAP 42.0 (> 8)  複雑度 6 / 網羅率 0%  src/probe.ts:1 tangled
 ```
 

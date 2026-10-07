@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GUARD_MESSAGE, gatesCommit, hookAction, runsGitCommit, shouldBlock } from "./guard.ts";
+import { GUARD_MESSAGE, gatesCommit, hookAction, hookRoot, runsGitCommit, shouldBlock } from "./guard.ts";
 
 describe("shouldBlock", () => {
   // 塞がなければ「赤 → baseline を緩める → 緑」が最短経路になる。
@@ -289,5 +289,18 @@ describe("hookAction", () => {
   it("書き換えを含むコミットは block", () => {
     const command = "git checkout -- gauntlet.baseline.json && git commit -m x";
     expect(hookAction({ tool_name: "Bash", tool_input: { command } })).toBe("block");
+  });
+});
+
+// フックのプロセスは本体の checkout で起動されうる。worktree のセッションでは本体を検査して
+// 変更を見逃していた（tepshq/amazon-business#10）。入力の cwd が正。
+describe("hookRoot", () => {
+  it("入力の cwd（worktree）を、起動した場所より先に使う", () => {
+    const input = { tool_name: "Bash", cwd: "/repo/.claude/worktrees/w1", tool_input: { command: "git commit -m x" } };
+    expect(hookRoot(input, "/repo")).toBe("/repo/.claude/worktrees/w1");
+  });
+
+  it.each([{}, { cwd: "" }, { cwd: 42 }])("cwd が使えない入力 %j は起動した場所に戻る", (input) => {
+    expect(hookRoot(input as Parameters<typeof hookRoot>[0], "/repo")).toBe("/repo");
   });
 });

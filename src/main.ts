@@ -7,7 +7,7 @@
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { GUARD_MESSAGE, gatesCommit, hookAction, shouldBlock } from "./guard.ts";
+import { GUARD_MESSAGE, gatesCommit, hookAction, hookRoot, shouldBlock } from "./guard.ts";
 import { INIT_USAGE, formatInit, helpRequested, init, parseInitOptions } from "./init.ts";
 import { describeCrash, listViolators, run } from "./run.ts";
 import { EXIT_BLOCKED, EXIT_PASS, type TierName, exitCodeFor } from "./tier.ts";
@@ -53,32 +53,35 @@ function listCommand(): number {
  * うるさい側（全 Bash で走る）より危険。全 Bash で走って自分で判定する方を選ぶ。
  */
 function hook(): number {
-  const input: unknown = JSON.parse(readFileSync(0, "utf8"));
+  const input = JSON.parse(readFileSync(0, "utf8")) as Parameters<typeof hookAction>[0];
   const actions: Record<ReturnType<typeof hookAction>, () => number> = {
     block: () => {
       process.stderr.write(`${GUARD_MESSAGE}\n`);
       return EXIT_BLOCKED;
     },
-    quick: tierCommand("quick"),
+    quick: tierCommand("quick", hookRoot(input, process.cwd())),
     pass: () => EXIT_PASS,
   };
-  return actions[hookAction(input as Parameters<typeof hookAction>[0])]();
+  return actions[hookAction(input)]();
 }
 
 function precommit(): number {
-  const input: unknown = JSON.parse(readFileSync(0, "utf8"));
-  if (!gatesCommit(input as Parameters<typeof gatesCommit>[0])) return EXIT_PASS;
-  return tierCommand("quick")();
+  const input = JSON.parse(readFileSync(0, "utf8")) as Parameters<typeof gatesCommit>[0];
+  if (!gatesCommit(input)) return EXIT_PASS;
+  return tierCommand("quick", hookRoot(input, process.cwd()))();
 }
 
-/** tier はサブコマンド名で確定する。フックも CI も手動も同じ形で呼ぶ。 */
-function tierCommand(tier: TierName): () => number {
+/**
+ * tier はサブコマンド名で確定する。フックも CI も手動も同じ形で呼ぶ。
+ * 検査する場所はフックだけが入力の `cwd` で渡す（hookRoot）。ほかは起動した場所。
+ */
+function tierCommand(tier: TierName, root: string = process.cwd()): () => number {
   return () => {
     // 進捗を出すのは `full` だけ。`quick` は数秒で終わる上に、出力がフック経由で
     // エージェントの文脈に入るので、行を増やす価値が無い。
     const notify =
       tier === "full" ? (line: string): void => void process.stderr.write(`gauntlet full: ${line}\n`) : undefined;
-    const { output, result } = run(tier, process.cwd(), notify);
+    const { output, result } = run(tier, root, notify);
     process.stderr.write(`${output}\n`);
     return exitCodeFor(result);
   };

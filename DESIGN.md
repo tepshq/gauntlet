@@ -64,7 +64,44 @@ quick → それ以外は素通し）、stdin の JSON から自分で判定す�
 | 〜0.12 | `Stop` フック（毎ターン） | 遅いリポジトリで成立しない（duct の実差分 25〜30 秒）。加えて**8 回連続ブロックでキャップ**がかかり、赤いまま通る穴がある |
 | 0.13 | git の pre-commit | 配線（`core.hooksPath`）が clone ごとに要り、忘れた人には静かに効かない |
 | 0.14〜0.21 | `PreToolUse` + `if` | `if` を知らない版が全 Bash で quick を走らせ、同一マシンでも発火が断続（#22。上記） |
-| 0.22〜 | `PreToolUse` + `hook` 内判定 | — |
+| 0.22〜0.28 | `PreToolUse` + `npx gauntlet hook` | worktree のセッションで黙って素通し（下記。tepshq/amazon-business#10） |
+| 0.29〜 | `PreToolUse` + 入力の `cwd` へ移る `node -e` の起動台 | — |
+
+**フックは「どこで起動されたか」に頼らず、入力の `cwd` で場所を決める**（0.29）。
+Claude Code は `$CLAUDE_PROJECT_DIR` を**セッションを始めた本体の checkout** に留め、
+worktree の場所は入力の JSON の `cwd` でだけ渡す（公式文書 worktrees の
+「Hook paths don't follow the worktree」）。フックのプロセスも本体で起動されうる。
+`npx gauntlet hook` 直書きはここで 2 通りに壊れていた: 本体に `node_modules` が無いと
+npx が **exit 1**（Claude Code は 2 以外を素通しする）で検問が黙って消え、入っていても
+本体の作業ツリーを検査して worktree の変更を見なかった。エージェントは worktree で動くのが
+普通なので、試験の無い複雑度 18 の関数のコミットが通った。直し方は 2 層で、性質が違う:
+
+- **どの gauntlet を起動するか** — `init` が書くコマンド（`HOOK_COMMAND`）が `cwd` へ移って
+  `npx --no-install gauntlet hook` を呼ぶ。worktree の依存に入った版、つまりその枝が
+  宣言した版が走る。`--no-install` はレジストリの同名の別パッケージ（`gauntlet`）を
+  取りに行かせないため
+- **どの作業ツリーを検査するか** — `gauntlet hook` 自身も入力の `cwd` を正とする（`hookRoot`）。
+  起動台を通らない古い配線や手で組んだ呼び方でも、検査の場所はずれない
+
+**起動台は `node -e` に埋め、ファイルにしない。** 文書の例どおり
+`$CLAUDE_PROJECT_DIR/.claude/hooks/…` に台本を置くと、台本は**本体の checkout から**読まれる。
+本体は pull されないまま遅れていることが多く、台本が無ければ node が exit 1 で素通し、
+あれば古い台本が走る。`node -e` なら設定と中身が常に同じものになり、頼るのは
+npx が動くなら必ずある node だけ。代償は、ブロックの表示にコマンド全文が前置されること。
+
+**gauntlet が起動できないときは止める（fail closed）。ただし gauntlet が見るはずだった呼び出しだけ。**
+依存の入っていない worktree では npx が gauntlet を見つけられない。ここを素通しにすると
+「走らなかったゲートが緑」になる（§2「測れていないときは緑にしない」と同じ理由）。
+一方で全部止めると、依存を入れる `npm ci` まで止まり、抜け道がゲートの無効化しか無くなる
+（`if` の件で踏んだのと同じ形）。だから起動に失敗したときは、ツールの入力に `commit` か
+`baseline` の字面があれば exit 2、無ければ通す。字面の粗い一致なので広く止める側に倒れる。
+
+**gauntlet 自身のリポジトリだけは、起動台の呼ぶ先が `node src/cli.ts hook`**（その枝のソース）。
+自分を依存に持たないので `node_modules/.bin/gauntlet` が無く、npx は自分のパッケージを
+npx のキャッシュに入れて解決するが、`dist/` が無い時点で一度呼ばれるとキャッシュに bin の
+無い入り方をして、その場所では解決できなくなる（この worktree で実測）。ビルドの古さにも
+左右されないソースを直に呼ぶ。手で置いた形なので、ここで `init` を叩き直すと標準の 1 本が
+足される — そのときは標準の方を消す。
 
 **代償: 人間が直接ターミナルで打つコミットは検査されない。** gauntlet の前提は
 「コードを書くのはエージェント」（§1）なので受け入れる。git の pre-commit を併置すれば

@@ -10,6 +10,8 @@ import { BASELINE_FILENAME } from "./baseline.ts";
 
 interface HookInput {
   tool_name?: string;
+  /** そのセッションの作業の場所。worktree のセッションなら worktree を指す。 */
+  cwd?: string;
   tool_input?: { file_path?: string; command?: string };
 }
 
@@ -84,6 +86,17 @@ export function hookAction(input: HookInput): "block" | "quick" | "pass" {
   if (shouldBlock(input)) return "block";
   if (gatesCommit(input)) return "quick";
   return "pass";
+}
+
+/**
+ * 検査する作業ツリー。**フックの入力の `cwd` を正とし、プロセスの cwd は使わない。**
+ *
+ * Claude Code はフックを本体の checkout（プロジェクトの根）で起動することがあり、
+ * worktree で動くセッションの変更を見ずに本体を検査していた（tepshq/amazon-business#10。
+ * 試験の無い複雑な関数のコミットが通った）。入力に `cwd` が無い古い形だけ、起動した場所に戻る。
+ */
+export function hookRoot(input: HookInput, fallback: string): string {
+  return typeof input.cwd === "string" && input.cwd !== "" ? input.cwd : fallback;
 }
 
 /** precommit フックが quick を回すべき入力か。判断はここ、プロセスの入出力は main。 */

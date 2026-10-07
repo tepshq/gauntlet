@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx gauntlet hook"
+            "command": "node -e 'const raw = require(\"fs\").readFileSync(0); let input = {}; try { input = JSON.parse(raw); } catch {} const cwd = input.cwd || process.cwd(); const run = require(\"child_process\").spawnSync(process.execPath, [\"src/cli.ts\", \"hook\"], { cwd, input: raw, stdio: [\"pipe\", \"inherit\", \"inherit\"] }); if (run.status === 0 || run.status === 2) process.exit(run.status); if (/commit|gauntlet\\.baseline\\.json/.test(JSON.stringify(input.tool_input || {}))) { console.error(\"gauntlet: \" + cwd + \" で gauntlet を起動できないので止めました。そこで依存を入れてください（npm ci など）\"); process.exit(2); }'"
           }
         ]
       }

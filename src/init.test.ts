@@ -1,10 +1,31 @@
-import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ConfigError, parseConfig } from "./config.ts";
-import { INIT_DEFAULTS, INIT_USAGE, formatInit, helpRequested, init, mergeGitignore, parseInitOptions, mergeSettings } from "./init.ts";
+import {
+  HOOK_COMMAND,
+  INIT_DEFAULTS,
+  INIT_USAGE,
+  formatInit,
+  helpRequested,
+  init,
+  mergeGitignore,
+  mergeSettings,
+  parseInitOptions,
+} from "./init.ts";
 
 // 出力の体裁ごと固定する。部分一致で見ると、改行の数や区切りが崩れても気づかない。
 // 0.21 以前が置いた quick 直呼びのフックを残すと、`if` を知らない版の Claude Code で
@@ -16,11 +37,13 @@ describe("mergeSettings の移行", () => {
     ["quick 直呼び（〜0.21）", { type: "command", if: "Bash(git commit *)", command: "npx gauntlet quick" }],
     ["precommit + if（0.22.0）", { type: "command", if: "Bash(git commit *)", command: "npx gauntlet precommit" }],
     ["guard 単独", { type: "command", command: "npx gauntlet guard" }],
+    // worktree のセッションで黙って素通しになっていた（tepshq/amazon-business#10）。
+    ["npx gauntlet hook（〜0.28）", { type: "command", command: "npx gauntlet hook" }],
   ])("旧配線を撤去して hook 1 本に置き換える: %s", (_name, entry) => {
     const legacy = JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [entry] }] } });
     const merged = mergeSettings(legacy);
     expect(merged).not.toContain(JSON.stringify(entry.command));
-    expect(merged).toContain('"npx gauntlet hook"');
+    expect(merged).toContain(JSON.stringify(HOOK_COMMAND));
   });
 
   it("他人のフックは撤去しない", () => {
@@ -28,6 +51,70 @@ describe("mergeSettings の移行", () => {
       hooks: { PreToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: "npx their-tool quick" }] }] },
     });
     expect(mergeSettings(theirs)).toContain("npx their-tool quick");
+  });
+});
+
+/**
+ * フックのコマンドを**実際にシェルで走らせて**確かめる。
+ *
+ * Claude Code はフックを本体の checkout で起動しうる。起動した場所（`spawn` の cwd）と
+ * 入力の `cwd`（worktree）を別の場所にして、入力の側の gauntlet が呼ばれることを見る。
+ * gauntlet の代わりに、走った場所を書いて決めた exit code で終わる偽物を置く。
+ */
+describe("HOOK_COMMAND", () => {
+  let base: string;
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "gauntlet-hook-"));
+  });
+  afterEach(() => rmSync(base, { recursive: true, force: true }));
+
+  function fakeProject(name: string, exitCode: number): string {
+    const dir = join(base, name);
+    mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), "{}\n");
+    const bin = join(dir, "node_modules", ".bin", "gauntlet");
+    writeFileSync(bin, `#!/bin/sh\ncat > /dev/null\necho "ran in $(pwd)" >&2\nexit ${exitCode}\n`);
+    chmodSync(bin, 0o755);
+    return dir;
+  }
+
+  function runHook(launchedIn: string, input: object): { status: number | null; stderr: string } {
+    const result = spawnSync("sh", ["-c", HOOK_COMMAND], { cwd: launchedIn, input: JSON.stringify(input), encoding: "utf8" });
+    return { status: result.status, stderr: result.stderr };
+  }
+
+  const commit = { tool_name: "Bash", tool_input: { command: 'git commit -m "x"' } };
+
+  it("本体で起動されても、入力の cwd（worktree）の gauntlet を呼ぶ", () => {
+    const main = fakeProject("main", 0);
+    const worktree = fakeProject("worktree", 2);
+    const { status, stderr } = runHook(main, { ...commit, cwd: worktree });
+    expect(stderr).toContain(`ran in ${realpathSync(worktree)}`);
+    expect(status).toBe(2);
+  });
+
+  it("gauntlet の判定（0）をそのまま返す", () => {
+    const worktree = fakeProject("worktree", 0);
+    expect(runHook(base, { ...commit, cwd: worktree }).status).toBe(0);
+  });
+
+  // 依存の無い場所では npx が exit 1 で終わる。Claude Code は 1 を素通しするので、そのまま返すと
+  // 検問が黙って消える（tepshq/amazon-business#10 の実害）。
+  it.each([
+    ["コミット", commit],
+    ["記録の書き換え", { tool_name: "Edit", tool_input: { file_path: "/r/gauntlet.baseline.json" } }],
+  ])("起動できないとき、%s は exit 2 で止めて理由を言う", (_name, input) => {
+    const empty = mkdtempSync(join(base, "empty-"));
+    const { status, stderr } = runHook(base, { ...input, cwd: empty });
+    expect(status).toBe(2);
+    expect(stderr).toContain("gauntlet を起動できないので止めました");
+  });
+
+  // 全部止めると、依存を入れる `npm ci` まで止まって抜け出せなくなる。
+  it("起動できなくても、gauntlet が見ない呼び出しは通す", () => {
+    const empty = mkdtempSync(join(base, "empty-"));
+    const { status } = runHook(base, { tool_name: "Bash", tool_input: { command: "npm ci" }, cwd: empty });
+    expect(status).toBe(0);
   });
 });
 
@@ -332,7 +419,7 @@ describe("init", () => {
     expect(settings().hooks.PreToolUse).toEqual([
       {
         matcher: "Edit|Write|NotebookEdit|Bash",
-        hooks: [{ type: "command", command: "npx gauntlet hook" }],
+        hooks: [{ type: "command", command: HOOK_COMMAND }],
       },
     ]);
   });
